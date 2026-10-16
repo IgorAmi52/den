@@ -40,55 +40,6 @@ func (currentModel *model) editLaptopFile(tool string) tea.Cmd {
 	return currentModel.editFile(filepath.Base(laptopFile.Path)+" · every repo", laptopFile.Path, "# My rules for every repo\n\n", nil)
 }
 
-// askForLink links a markdown file as a folder's context, or with an empty answer, unlinks it.
-// A relative path is read from den's working directory.
-func (currentModel *model) askForLink(folder *store.Folder) tea.Cmd {
-	folderId := folder.Id
-	command := currentModel.askForText("Link a file as "+folder.Name+"'s context (empty unlinks)", folder.LinkedPath, func(currentModel *model, answer string) {
-		linkedFolder := currentModel.repository.FindFolder(folderId)
-		if linkedFolder == nil {
-			return
-		}
-		filePath := expandedPath(answer, currentModel.workingDirectory)
-		if filePath == "" {
-			unlinkedName := filepath.Base(linkedFolder.LinkedPath)
-			currentModel.repository.Unlink(folderId)
-			currentModel.saveRepository()
-			currentModel.refreshContextTokens()
-			currentModel.setStatus("unlinked " + unlinkedName + " · new sessions in " + linkedFolder.Name + " start without it")
-			return
-		}
-		if information, err := os.Stat(filePath); err != nil || information.IsDir() {
-			currentModel.setError("no file at " + displayPath(filePath))
-			return
-		}
-		linkedFolder.LinkedPath = filePath
-		currentModel.repository.ForgetFolderStarters(folderId)
-		currentModel.saveRepository()
-		currentModel.refreshContextTokens()
-		currentModel.setStatus("linked " + filepath.Base(filePath) + " · new sessions in " + linkedFolder.Name + " start with it")
-	})
-	currentModel.prompt.allowsEmpty = true
-	return command
-}
-
-// expandedPath turns ~/… and relative paths into absolute ones; an empty answer stays empty.
-func expandedPath(path string, workingDirectory string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	if rest, isHome := strings.CutPrefix(path, "~/"); isHome {
-		if homeDirectory, err := os.UserHomeDir(); err == nil {
-			path = filepath.Join(homeDirectory, rest)
-		}
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(workingDirectory, path)
-	}
-	return filepath.Clean(path)
-}
-
 // editDraft opens text that isn't saved anywhere yet, like a proposed context, and hands back what the user saved.
 func (currentModel *model) editDraft(title string, text string, onSaved func(currentModel *model, text string)) tea.Cmd {
 	dataDirectory, err := store.DataDirectory()

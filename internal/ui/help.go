@@ -34,7 +34,6 @@ func (currentModel model) helpGroups() []helpGroup {
 		}},
 		{title: "FOLDERS AND DEN", bindings: []key.Binding{
 			keys.newFolder, relabeled(keys.newSubfolder, "subfolder of the selected folder"), relabeled(keys.editContext, "edit context"),
-			relabeled(keys.link, "link a plan or spec as context"),
 			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview, relabeled(keys.review, "review proposals"),
 			relabeled(keys.chat, "ask den"), keys.quit,
 		}},

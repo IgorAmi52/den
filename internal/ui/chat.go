@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -22,10 +24,8 @@ type chatState struct {
 	about *store.Suggestion
 	// scrollOffset is how many lines the conversation is scrolled up from the newest message.
 	scrollOffset int
-}
-
-type chatReplyMessage struct {
-	reply brain.ChatMessage
+	// pendingAction is a change den offered for what the user asked; enter on an empty line makes it.
+	pendingAction *brain.ChatAction
 }
 
 func newChatState() chatState {
@@ -42,6 +42,7 @@ func (state *chatState) resize(width int) {
 
 func (state *chatState) addMessage(message brain.ChatMessage) {
 	state.messages = append(state.messages, message)
+	state.pendingAction = message.Action
 	state.scrollOffset = 0
 }
 
@@ -74,15 +75,19 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(keyPress, keys.send):
 			text := strings.TrimSpace(state.input.Value())
 			if text == "" {
+				if state.pendingAction != nil {
+					currentModel.applyChatAction(*state.pendingAction)
+				}
 				return currentModel, nil
 			}
 			state.input.SetValue("")
 			state.addMessage(brain.ChatMessage{Text: text})
-			conversation := append([]brain.ChatMessage{}, state.messages...)
-			about := state.about
-			return currentModel, func() tea.Msg {
-				return chatReplyMessage{reply: brain.Reply(conversation, about)}
-			}
+			state.addMessage(brain.Reply(state.messages, state.about, brain.ChatContext{
+				Repository:       &currentModel.repository,
+				Digests:          currentModel.digests,
+				WorkingDirectory: currentModel.workingDirectory,
+			}))
+			return currentModel, nil
 		case keyPress.String() == "pgup":
 			state.scrollOffset += 5
 			return currentModel, nil
@@ -94,6 +99,26 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	state.input, command = state.input.Update(message)
 	return currentModel, command
+}
+
+// applyChatAction makes a change the user asked for in the chat and confirmed with enter.
+func (currentModel *model) applyChatAction(action brain.ChatAction) {
+	folder := currentModel.repository.FindFolder(action.FolderId)
+	if folder == nil {
+		return
+	}
+	text := ""
+	if action.LinkedPath == "" {
+		text = fmt.Sprintf("Unlinked %s. New sessions in %s start without it.", filepath.Base(folder.LinkedPath), folder.Name)
+		currentModel.repository.Unlink(folder.Id)
+	} else {
+		folder.LinkedPath = action.LinkedPath
+		currentModel.repository.ForgetFolderStarters(folder.Id)
+		text = fmt.Sprintf("Linked %s. New sessions in %s start with it.", filepath.Base(action.LinkedPath), folder.Name)
+	}
+	currentModel.refreshContextTokens()
+	currentModel.saveRepository()
+	currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: text})
 }
 
 func (currentModel model) chatView() string {
@@ -115,7 +140,11 @@ func (currentModel model) chatView() string {
 		}
 	}
 	bottom := []string{theme.border.Render(strings.Repeat("─", width)), margin + state.input.View()}
-	bottom = append(bottom, margin+strings.Join(currentModel.hintLines([]key.Binding{currentModel.keys.send, currentModel.keys.scrollChat, currentModel.keys.back}, contentWidth, 1), ""))
+	send := currentModel.keys.send
+	if state.pendingAction != nil && state.input.Value() == "" {
+		send = relabeled(send, "yes")
+	}
+	bottom = append(bottom, margin+strings.Join(currentModel.hintLines([]key.Binding{send, currentModel.keys.scrollChat, currentModel.keys.back}, contentWidth, 1), ""))
 	conversationHeight := max(currentModel.height-len(top)-len(bottom)-1, 1)
 	conversation := currentModel.conversationLines(contentWidth)
 	end := max(len(conversation)-state.scrollOffset, 0)
@@ -139,7 +168,7 @@ func (currentModel model) conversationLines(width int) []string {
 			theme.dim.Render("den answers and proposes. It never touches your repo, never runs anything, and every change it proposes waits for your yes."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
-		examples := []string{"which sessions worked on the eval loader?", "what does Eval's context say about pagination?"}
+		examples := []string{"link docs/PLAN.md to Eval", "which sessions worked on the eval loader?", "what does Eval's context say about pagination?"}
 		if currentModel.chat.about != nil {
 			examples = []string{"put it in Agent API instead", "why do you think it belongs there?"}
 		}

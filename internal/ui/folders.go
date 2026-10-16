@@ -11,14 +11,13 @@ import (
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
-// textPrompt asks for one line of text and hands it to submit on enter; an empty answer cancels, unless allowsEmpty.
+// textPrompt asks for one line of text and hands it to submit on enter.
 // With inlineRow set, the input replaces that row in the tree, as a rename in place.
 type textPrompt struct {
-	question    string
-	input       textinput.Model
-	submit      func(currentModel *model, value string)
-	inlineRow   func(listRow) bool
-	allowsEmpty bool
+	question  string
+	input     textinput.Model
+	submit    func(currentModel *model, value string)
+	inlineRow func(listRow) bool
 }
 
 func (currentModel *model) askForText(question string, initialValue string, submit func(currentModel *model, value string)) tea.Cmd {
@@ -36,9 +35,9 @@ func (currentModel model) updatePrompt(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(keyPress, currentModel.keys.save):
 			value := strings.TrimSpace(currentModel.prompt.input.Value())
-			submit, allowsEmpty := currentModel.prompt.submit, currentModel.prompt.allowsEmpty
+			submit := currentModel.prompt.submit
 			currentModel.prompt = nil
-			if value != "" || allowsEmpty {
+			if value != "" {
 				submit(&currentModel, value)
 			}
 			return currentModel, nil

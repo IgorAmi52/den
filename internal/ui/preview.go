@@ -120,9 +120,9 @@ func (currentModel model) folderContextPreview(folder *store.Folder, width int) 
 	var lines []string
 	if strings.TrimSpace(notes) == "" && folder.LinkedPath == "" {
 		lines = append(lines, theme.bold.Render(folder.Name), "", theme.dim.Render("No context yet. Sessions here start with the context of "+strings.Join(inherits, " and ")+"."), "")
-		lines = append(lines, theme.key.Render("l")+theme.action.Render(" links a file you or an agent wrote, like a plan or a spec"))
+		lines = append(lines, theme.dim.Render("When an agent here writes a plan or a spec, den offers to link it. To link one now, tell den in the chat:"))
+		lines = append(lines, theme.text.Render("  link docs/PLAN.md to "+folder.Name), "")
 		lines = append(lines, theme.key.Render("e")+theme.action.Render(" writes den's notes for it instead"))
-		lines = append(lines, "", theme.faint.Render("When an agent here writes a plan, den offers to link it."))
 		return wrapAll(lines, width)
 	}
 	if folder.LinkedPath != "" {
@@ -133,7 +133,7 @@ func (currentModel model) folderContextPreview(folder *store.Folder, width int) 
 		lines = append(lines, currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · " + filepath.Base(folder.LinkedPath) + " · linked", style: theme.dim}},
 			[]segment{size}, width, false), "")
 		lines = append(lines, currentModel.markdownLines(linked)...)
-		lines = append(lines, "", currentModel.fileLink(folder.LinkedPath, width), theme.faint.Render("yours: den only proposes changes · l relinks"))
+		lines = append(lines, "", currentModel.fileLink(folder.LinkedPath, width), theme.faint.Render("yours: den only proposes changes · \"unlink "+folder.Name+"\" in the chat takes it off"))
 	}
 	if strings.TrimSpace(notes) != "" {
 		if len(lines) > 0 {

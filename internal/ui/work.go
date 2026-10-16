@@ -121,11 +121,6 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 			return currentModel, currentModel.editContextFile(selected.laptopTool)
 		}
 		return currentModel, currentModel.editContext(selected.folderId())
-	case key.Matches(keyPress, keys.link):
-		if selected.kind == folderRow {
-			return currentModel, currentModel.askForLink(selected.folder)
-		}
-		currentModel.setStatus("select a folder to link a file as its context")
 	case key.Matches(keyPress, keys.delete):
 		currentModel.askToDelete(selected)
 	}

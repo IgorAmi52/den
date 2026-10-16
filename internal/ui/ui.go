@@ -295,9 +295,6 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return currentModel.afterEditorClosed(typedMessage)
 	case pastSessionsMessage:
 		return currentModel.updateWelcomeScan(typedMessage)
-	case chatReplyMessage:
-		currentModel.chat.addMessage(typedMessage.reply)
-		return currentModel, nil
 	}
 	switch currentModel.currentScreen() {
 	case welcomeScreen:

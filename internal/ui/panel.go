@@ -406,7 +406,7 @@ func (currentModel model) rowHints() []key.Binding {
 		case newAgentRow:
 			bindings = append(bindings, relabeled(keys.open, "focus"), keys.move, relabeled(keys.delete, "close"))
 		case folderRow:
-			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.link, keys.rename, keys.newSubfolder, keys.delete)
+			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.rename, keys.newSubfolder, keys.delete)
 		case repositoryRow:
 			bindings = append(bindings, relabeled(keys.open, "show files"), relabeled(keys.editContext, "repo context"))
 		case contextFileRow:

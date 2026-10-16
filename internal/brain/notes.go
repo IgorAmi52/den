@@ -20,8 +20,9 @@ const (
 	draftAfterPrompts  = 3
 )
 
-// notNotesFiles are markdown files every repo has, which are never a folder's notes.
-var notNotesFiles = toSet("readme.md changelog.md claude.md agents.md license.md contributing.md")
+// notNotesFiles are markdown files every repo has, and the agents' own skill and memory files,
+// which are never a folder's notes.
+var notNotesFiles = toSet("readme.md changelog.md claude.md agents.md license.md contributing.md skill.md memory.md")
 
 // folderNotes offers a first context to each folder that has none: a file an agent wrote there,
 // a plan the user approved there, or a draft once the folder holds real work. Only one at a time per folder.
@@ -123,6 +124,10 @@ func draftNotes(observation Observation, folder store.Folder, sessions []store.S
 
 func isNotesFile(repository *store.Repository, filePath string) bool {
 	if !strings.EqualFold(filepath.Ext(filePath), ".md") || notNotesFiles[strings.ToLower(filepath.Base(filePath))] {
+		return false
+	}
+	// Claude keeps its memories as markdown files in a memory directory of each project.
+	if slices.Contains(strings.Split(filepath.Dir(filePath), string(filepath.Separator)), "memory") {
 		return false
 	}
 	if dataDirectory, err := store.DataDirectory(); err == nil && strings.HasPrefix(filePath, dataDirectory) {
