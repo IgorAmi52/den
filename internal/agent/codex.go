@@ -137,6 +137,37 @@ func (Codex) LaptopFilePath() (string, error) {
 	return filepath.Join(codexHome, "AGENTS.md"), err
 }
 
+func (Codex) Turns(sessionId string) ([]Turn, error) {
+	codexHome, err := homeDirectory("CODEX_HOME", ".codex")
+	if err != nil {
+		return nil, err
+	}
+	transcriptPaths, _ := filepath.Glob(filepath.Join(codexHome, "sessions", "*", "*", "*", "rollout-*-"+sessionId+".jsonl"))
+	if len(transcriptPaths) == 0 {
+		return nil, nil
+	}
+	var turns []Turn
+	agentText := ""
+	err = eachJsonLine(transcriptPaths[0], func(line json.RawMessage) bool {
+		var event codexEvent
+		if json.Unmarshal(line, &event) != nil || event.Payload.Type != "message" {
+			return true
+		}
+		for _, item := range event.Payload.Content {
+			if event.Payload.Role == "assistant" && strings.TrimSpace(item.Text) != "" {
+				agentText = item.Text
+			}
+			if event.Payload.Role == "user" && isTypedPrompt(item.Text) {
+				turns = append(turns, Turn{Agent: endOf(agentText, turnTextLength), User: startOf(item.Text, turnTextLength)})
+				agentText = ""
+				break
+			}
+		}
+		return true
+	})
+	return turns, err
+}
+
 // codexThreadNameCache keeps the names from Codex's session index while the index stays unchanged.
 var (
 	codexThreadNameCache        map[string]string

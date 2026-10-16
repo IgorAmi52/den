@@ -14,8 +14,10 @@ import (
 
 const (
 	maximumProposedFolders = 6
-	// minimumFolderSessions is how many sessions a topic needs before den proposes a folder for it.
-	minimumFolderSessions = 3
+	// minimumFolderSessions is how many sessions a topic needs before den proposes a folder for it from words alone;
+	// the model, which sees what the sessions are about, needs only minimumModelFolderSessions.
+	minimumFolderSessions      = 3
+	minimumModelFolderSessions = 2
 	// recentSession is how new an unfiled past session must be to land in the Inbox; older ones are archived.
 	recentSession = 14 * 24 * time.Hour
 )
@@ -40,12 +42,18 @@ type Welcome struct {
 	// Unfiled are the past sessions no proposed folder takes.
 	Unfiled []agent.Digest
 	Noticed []string
+	// Titles are names den's model gave the past sessions, by session id.
+	Titles map[string]string
+	// ByModel is set when den's model grouped the sessions rather than the local word rules.
+	ByModel bool
 }
 
 type ProposedFolder struct {
-	Name     string
-	Keywords []string
-	Sessions []agent.Digest
+	Name string
+	// Description says what the folder covers, when den's model proposed it; otherwise Keywords do.
+	Description string
+	Keywords    []string
+	Sessions    []agent.Digest
 	// Context is a draft context.md built from where these sessions worked.
 	Context string
 }
@@ -110,6 +118,50 @@ func FirstRun(digests []agent.Digest, commitSubjects []string, repositoryPath st
 	return welcome
 }
 
+// FirstRunFromModel builds the welcome from what den's model proposed for the digests, sent in order as s1, s2 and so on.
+// Sessions named twice go to the first folder, unknown ids are dropped, and folders left with fewer than
+// minimumModelFolderSessions sessions are left out. The noticed patterns come from the local rules.
+func FirstRunFromModel(answer FirstRunAnswer, digests []agent.Digest, commitSubjects []string, repositoryPath string) Welcome {
+	welcome := Welcome{PastSessionCount: len(digests), Titles: map[string]string{}, ByModel: true}
+	digestOf := func(handle string) (agent.Digest, bool) {
+		var number int
+		if _, err := fmt.Sscanf(strings.TrimSpace(handle), "s%d", &number); err != nil || number < 1 || number > len(digests) {
+			return agent.Digest{}, false
+		}
+		return digests[number-1], true
+	}
+	assigned := map[string]bool{}
+	for _, proposed := range answer.Folders {
+		folder := ProposedFolder{Name: strings.TrimSpace(proposed.Name), Description: strings.TrimSpace(proposed.Description)}
+		for _, handle := range proposed.Sessions {
+			if digest, found := digestOf(handle); found && !assigned[digest.SessionId] {
+				assigned[digest.SessionId] = true
+				folder.Sessions = append(folder.Sessions, digest)
+			}
+		}
+		if folder.Name == "" || len(folder.Sessions) < minimumModelFolderSessions || len(welcome.Folders) == maximumProposedFolders {
+			for _, digest := range folder.Sessions {
+				delete(assigned, digest.SessionId)
+			}
+			continue
+		}
+		folder.Context = draftContext(folder, repositoryPath)
+		welcome.Folders = append(welcome.Folders, folder)
+	}
+	for _, digest := range digests {
+		if !assigned[digest.SessionId] {
+			welcome.Unfiled = append(welcome.Unfiled, digest)
+		}
+	}
+	for _, named := range answer.Titles {
+		if digest, found := digestOf(named.Session); found && strings.TrimSpace(named.Title) != "" {
+			welcome.Titles[digest.SessionId] = strings.TrimSpace(named.Title)
+		}
+	}
+	welcome.Noticed = noticedPatterns(digests, commitSubjects)
+	return welcome
+}
+
 // topicWords are the distinct words of a session that could name its topic.
 func topicWords(digest agent.Digest, repositoryPath string) []string {
 	var sources []string
@@ -163,7 +215,9 @@ func companionWords(word string, sessionIndexes []int, topicWordsBySession [][]s
 func draftContext(folder ProposedFolder, repositoryPath string) string {
 	var draft strings.Builder
 	fmt.Fprintf(&draft, "# %s\n", folder.Name)
-	if len(folder.Keywords) > 0 {
+	if folder.Description != "" {
+		fmt.Fprintf(&draft, "\n%s\n", folder.Description)
+	} else if len(folder.Keywords) > 0 {
 		fmt.Fprintf(&draft, "\nCovers %s.\n", strings.Join(folder.Keywords, ", "))
 	}
 	writeCodeSections(&draft, folder.Sessions, repositoryPath)

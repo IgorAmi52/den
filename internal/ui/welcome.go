@@ -56,6 +56,8 @@ type pastSessionsMessage struct {
 	proposal         brain.Welcome
 	optionKeyProfile string
 	optionKeyEnabled bool
+	// modelError says why den's model couldn't group the sessions, so the local rules did.
+	modelError string
 }
 
 func newWelcomeState() *welcomeState {
@@ -67,6 +69,7 @@ func newWelcomeState() *welcomeState {
 func (currentModel model) scanPastSessions() tea.Cmd {
 	repositoryPath := currentModel.repository.RepositoryPath
 	installedAgents := currentModel.installedAgents
+	helperCaller := currentModel.helperCaller
 	tracked := map[string]bool{}
 	for _, session := range currentModel.repository.Sessions {
 		tracked[session.SessionId] = true
@@ -84,6 +87,14 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 		}
 		commitSubjects := git.RecentCommitSubjects(repositoryPath, recentCommitsCount)
 		scanned := pastSessionsMessage{proposal: brain.FirstRun(digests, commitSubjects, repositoryPath)}
+		if helperCaller != nil && len(digests) > 0 {
+			var answer brain.FirstRunAnswer
+			if _, err := helperCaller.Call(brain.FirstRunRequest(digests, repositoryPath), &answer); err != nil {
+				scanned.modelError = err.Error()
+			} else {
+				scanned.proposal = brain.FirstRunFromModel(answer, digests, commitSubjects, repositoryPath)
+			}
+		}
 		if isAppleTerminal() {
 			scanned.optionKeyProfile, scanned.optionKeyEnabled, _ = terminal.OptionKey()
 		}
@@ -108,6 +119,9 @@ func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Mo
 	}
 	state.proposal = scanned.proposal
 	state.optionKeyProfile, state.optionKeyEnabled = scanned.optionKeyProfile, scanned.optionKeyEnabled
+	if scanned.modelError != "" {
+		currentModel.setError("den's model couldn't group them (" + scanned.modelError + "), so these come from local rules")
+	}
 	state.step = foldersStep
 	for _, folder := range scanned.proposal.Folders {
 		state.folderAccepted = append(state.folderAccepted, true)
@@ -291,7 +305,10 @@ func (currentModel *model) applyWelcome() {
 			continue
 		}
 		folderId, isFiled := filedIn[digest.SessionId]
-		title := digest.AgentTitle
+		title := state.proposal.Titles[digest.SessionId]
+		if title == "" {
+			title = digest.AgentTitle
+		}
 		if title == "" {
 			title = truncate(digest.FirstPrompt, 120)
 		}
@@ -303,6 +320,7 @@ func (currentModel *model) applyWelcome() {
 			Branch:           digest.Branch,
 			Title:            title,
 			TitledAtPrompt:   digest.PromptCount,
+			ReviewedAtPrompt: digest.PromptCount,
 			Archived:         !isFiled && !brain.IsRecent(digest, now),
 			ArchivedAt:       archivedAt(!isFiled && !brain.IsRecent(digest, now), now),
 			CreatedAt:        digest.StartedAt,
@@ -343,7 +361,7 @@ func (currentModel model) welcomeView() string {
 			"",
 			state.spinner.View() + theme.dim.Render(" reading your past sessions in "+currentModel.repositoryName()+"…"),
 			"",
-			theme.faint.Render("Only branch names, edited files and first prompts, read on this Mac."),
+			theme.faint.Render(currentModel.scanningNote()),
 		}
 	case foldersStep:
 		body = currentModel.welcomeFoldersBody(innerWidth)
@@ -396,8 +414,12 @@ func (currentModel model) welcomeFoldersBody(width int) []string {
 		lines = append(lines, "", strings.Join(currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "continue"), relabeled(currentModel.keys.back, "skip setup")}, width, 1), ""))
 		return lines
 	}
-	lines = append(lines, wrapAll([]string{theme.text.Render(fmt.Sprintf("I read %s in this repo: their branches, the files they edited and their first prompts. No model call, nothing left this Mac.",
-		countedSessions(proposal.PastSessionCount)))}, width)...)
+	readWith := "No model call, nothing left this Mac."
+	if proposal.ByModel {
+		readWith = "A small model grouped and named them, from those details only."
+	}
+	lines = append(lines, wrapAll([]string{theme.text.Render(fmt.Sprintf("I read %s in this repo: their branches, the files they edited and their first prompts. %s",
+		countedSessions(proposal.PastSessionCount), readWith))}, width)...)
 	lines = append(lines, "", theme.columnHeader.Render("PROPOSED FOLDERS"))
 	if len(proposal.Folders) == 0 {
 		lines = append(lines, theme.dim.Render("No clear topics yet; everything goes to the Inbox, and den files as it learns."))
@@ -411,8 +433,12 @@ func (currentModel model) welcomeFoldersBody(width int) []string {
 		if !state.folderAccepted[index] {
 			checkbox = segment{text: "[ ] ", style: theme.faint}
 		}
+		covers := folder.Description
+		if covers == "" {
+			covers = strings.Join(folder.Keywords, ", ")
+		}
 		left := []segment{checkbox, {text: padRight(truncate(state.folderNames[index], 18), 19), style: theme.bold},
-			{text: fmt.Sprintf("%4d  ", len(folder.Sessions)), style: theme.dim}, {text: strings.Join(folder.Keywords, ", "), style: theme.dim}}
+			{text: fmt.Sprintf("%4d  ", len(folder.Sessions)), style: theme.dim}, {text: covers, style: theme.dim}}
 		lines = append(lines, currentModel.layoutRow(left, nil, width, index == state.cursor))
 	}
 	if leftovers > 0 {
@@ -436,6 +462,14 @@ func (currentModel model) welcomeFoldersBody(width int) []string {
 	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "create"), currentModel.keys.toggle,
 		relabeled(currentModel.keys.edit, "rename"), relabeled(currentModel.keys.no, "none of them")}, width, 2)...)
 	return lines
+}
+
+// scanningNote says what the first run reads, and whether a model groups it.
+func (currentModel model) scanningNote() string {
+	if currentModel.helperCaller == nil {
+		return "Only branch names, edited files and first prompts, read on this Mac."
+	}
+	return "Branch names, edited files and first prompts; " + currentModel.helperCaller.Tool + "'s small model groups and names them."
 }
 
 // leftoverSessions are the past sessions no accepted folder takes.

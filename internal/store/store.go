@@ -35,6 +35,10 @@ type Session struct {
 	TitlePinned bool `json:"titlePinned,omitempty"`
 	// TitledAtPrompt is the prompt count when den last looked at the title, so it looks again a few prompts later.
 	TitledAtPrompt int `json:"titledAtPrompt,omitempty"`
+	// ReviewedAtPrompt is the prompt count when den's model last reviewed the session.
+	ReviewedAtPrompt int `json:"reviewedAtPrompt,omitempty"`
+	// FiledByHand is set when the user put the session in a folder, so den never proposes another folder for it.
+	FiledByHand bool `json:"filedByHand,omitempty"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
 	WithoutContext bool      `json:"withoutContext,omitempty"`
 	Archived       bool      `json:"archived,omitempty"`

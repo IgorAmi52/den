@@ -52,12 +52,12 @@ func Suggest(observation Observation) []store.Suggestion {
 }
 
 // fileByBranch files an Inbox session into the folder that already holds other sessions of its branch,
-// or into a folder whose name appears in its branch or title.
+// or into a folder whose name appears in its branch or title. Sessions that only asked questions are left for the cleanup.
 func fileByBranch(observation Observation) []store.Suggestion {
 	repository := observation.Repository
 	var suggestions []store.Suggestion
 	for _, session := range repository.Sessions {
-		if session.FolderId != "" || session.Archived {
+		if session.FolderId != "" || session.Archived || OnlyAskedQuestions(observation.Digests, session.SessionId) {
 			continue
 		}
 		branch := branchOf(session, observation.Digests)

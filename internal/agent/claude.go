@@ -200,12 +200,43 @@ func readClaudeDigest(transcriptPath string) Digest {
 	return digest
 }
 
+func (Claude) Turns(sessionId string) ([]Turn, error) {
+	transcriptPath, found, err := claudeTranscriptPath(sessionId)
+	if err != nil || !found {
+		return nil, err
+	}
+	var turns []Turn
+	agentText := ""
+	err = eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
+		var event claudeEvent
+		if json.Unmarshal(line, &event) != nil || event.IsSidechain {
+			return true
+		}
+		switch event.Type {
+		case "assistant":
+			for _, block := range claudeBlocks(event.Message.Content) {
+				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+					agentText = block.Text
+				}
+			}
+		case "user":
+			if prompt := firstTypedText(event.Message.Content); prompt != "" && !event.IsMeta {
+				turns = append(turns, Turn{Agent: endOf(agentText, turnTextLength), User: startOf(prompt, turnTextLength)})
+				agentText = ""
+			}
+		}
+		return true
+	})
+	return turns, err
+}
+
 type claudeBlock struct {
 	Type      string `json:"type"`
 	Id        string `json:"id"`
 	Name      string `json:"name"`
 	ToolUseId string `json:"tool_use_id"`
 	IsError   bool   `json:"is_error"`
+	Text      string `json:"text"`
 	Input     struct {
 		FilePath string `json:"file_path"`
 		Plan     string `json:"plan"`

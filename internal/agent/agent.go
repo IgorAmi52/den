@@ -27,7 +27,19 @@ type Adapter interface {
 	PastSessions(directories []string) ([]Digest, error)
 	// LaptopFilePath is the tool's own file of the user's rules, which it loads into every session in every repo.
 	LaptopFilePath() (string, error)
+	// Turns reads the user's prompts in order, each with the agent's last message before it.
+	Turns(sessionId string) ([]Turn, error)
 }
+
+// Turn is one prompt the user typed, with what the agent said just before, since "nono, not like that"
+// means nothing without it.
+type Turn struct {
+	Agent string
+	User  string
+}
+
+// turnTextLength keeps each side of a turn short; the end of the agent's message is what the user answered.
+const turnTextLength = 700
 
 // Launch is what den adds to an agent's command line.
 type Launch struct {
@@ -239,6 +251,24 @@ func (digest *Digest) settleIssueKey(promptIssueKey string) {
 	if digest.IssueKey == "" {
 		digest.IssueKey = promptIssueKey
 	}
+}
+
+// endOf keeps the last characters of a text, where the agent's question or result usually is.
+func endOf(text string, length int) string {
+	runes := []rune(oneLine(text))
+	if len(runes) <= length {
+		return string(runes)
+	}
+	return "…" + string(runes[len(runes)-length:])
+}
+
+// startOf keeps the first characters of a text.
+func startOf(text string, length int) string {
+	runes := []rune(oneLine(text))
+	if len(runes) <= length {
+		return string(runes)
+	}
+	return string(runes[:length]) + "…"
 }
 
 func appendOnce(values []string, value string) []string {

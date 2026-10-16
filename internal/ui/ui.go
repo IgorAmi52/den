@@ -15,6 +15,7 @@ import (
 	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/git"
+	"github.com/IgorAmi52/den/internal/helper"
 	"github.com/IgorAmi52/den/internal/layout"
 	"github.com/IgorAmi52/den/internal/store"
 	"github.com/IgorAmi52/den/internal/tmux"
@@ -163,6 +164,16 @@ type model struct {
 	// retitles animates the sessions den just renamed, by session id.
 	retitles  map[string]retitleAnimation
 	animating bool
+
+	// helperCaller makes den's model calls, or is nil when no agent CLI can, and den uses its local rules only.
+	helperCaller   *helper.Caller
+	jobQueue       []job
+	runningJob     *job
+	helperFailures int
+	// helperUsage and helperCalls add up what this run's model calls cost.
+	helperUsage         helper.Usage
+	helperCalls         int
+	lastAutomaticChange *automaticChange
 }
 
 func Run() error {
@@ -209,6 +220,10 @@ func Run() error {
 		}
 	}
 	colorProfile := colorprofile.Detect(os.Stdout, os.Environ())
+	var helperCaller *helper.Caller
+	if caller, found := helper.Find(); found {
+		helperCaller = &caller
+	}
 	initialModel := model{
 		panelPaneId:      panelPaneId,
 		windowId:         windowId,
@@ -226,6 +241,7 @@ func Run() error {
 		mergedBranches:   map[string]bool{},
 		contextTokens:    map[string]int{},
 		retitles:         map[string]retitleAnimation{},
+		helperCaller:     helperCaller,
 		filter:           newFilterInput(),
 		review:           newReviewState(),
 		chat:             newChatState(),
@@ -280,7 +296,8 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			currentModel.reportError(currentModel.trackNewSessions())
 		})
 		currentModel.refreshContextTokens()
-		commands := []tea.Cmd{tick()}
+		currentModel.queueDrafts()
+		commands := []tea.Cmd{tick(), currentModel.startNextJob()}
 		if time.Since(currentModel.lastObserved) > observeEvery {
 			currentModel.lastObserved = time.Now()
 			commands = append(commands, currentModel.observe())
@@ -291,6 +308,8 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return currentModel, currentModel.animateRetitles()
 	case animationTickMessage:
 		return currentModel, currentModel.stepRetitles()
+	case jobDoneMessage:
+		return currentModel, currentModel.finishJob(typedMessage)
 	case editorClosedMessage:
 		return currentModel.afterEditorClosed(typedMessage)
 	case pastSessionsMessage:
@@ -617,7 +636,9 @@ func (currentModel *model) applyObservation(observed observedMessage) {
 		if digest.LastActivityAt.After(session.LastActivityAt) {
 			session.LastActivityAt, changed = digest.LastActivityAt, true
 		}
-		if title, due := brain.Retitle(*session, digest); due {
+		if currentModel.helperCaller != nil {
+			changed = currentModel.queueReviewIfDue(session, digest) || changed
+		} else if title, due := brain.Retitle(*session, digest); due {
 			session.TitledAtPrompt, changed = digest.PromptCount, true
 			if title != "" {
 				currentModel.retitle(session, title)

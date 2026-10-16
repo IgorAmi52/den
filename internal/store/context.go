@@ -43,7 +43,7 @@ func (repository Repository) WriteContext(folderId string, text string) error {
 	if err != nil {
 		return err
 	}
-	return writeText(filePath, text)
+	return WriteText(filePath, text)
 }
 
 // ContextFilePaths are the files a folder's context comes from: the linked file first, then den's notes.
@@ -149,7 +149,32 @@ func AppendRule(filePath string, rule string) (bool, error) {
 		}
 		text = trimmedText + separator
 	}
-	return true, writeText(filePath, text+"- "+rule)
+	return true, WriteText(filePath, text+"- "+rule)
+}
+
+// AddToSection adds a bullet under a "## section" heading, at the end of that section,
+// and adds the heading at the end of the text when it's missing.
+func AddToSection(text string, section string, line string) string {
+	heading, bullet := "## "+section, "- "+line
+	trimmedText := strings.TrimRight(text, "\n")
+	if strings.TrimSpace(trimmedText) == "" {
+		return heading + "\n" + bullet + "\n"
+	}
+	lines := strings.Split(trimmedText, "\n")
+	headingIndex := slices.IndexFunc(lines, func(candidate string) bool {
+		return strings.EqualFold(strings.TrimSpace(candidate), heading)
+	})
+	if headingIndex < 0 {
+		return trimmedText + "\n\n" + heading + "\n" + bullet + "\n"
+	}
+	sectionEnd := headingIndex + 1
+	for sectionEnd < len(lines) && !strings.HasPrefix(lines[sectionEnd], "#") {
+		sectionEnd++
+	}
+	for sectionEnd > headingIndex+1 && strings.TrimSpace(lines[sectionEnd-1]) == "" {
+		sectionEnd--
+	}
+	return strings.Join(slices.Insert(lines, sectionEnd, bullet), "\n") + "\n"
 }
 
 // HasRule tells whether text already says rule, ignoring case and spacing.
@@ -180,7 +205,8 @@ func ReadText(filePath string) string {
 	return string(content)
 }
 
-func writeText(filePath string, text string) error {
+// WriteText writes a file through a temporary one, so a crash never leaves it half written.
+func WriteText(filePath string, text string) error {
 	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return err
 	}

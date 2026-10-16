@@ -2,7 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"path/filepath"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
+	"github.com/IgorAmi52/den/internal/tmux"
 )
 
 const chatLabelWidth = 6
@@ -26,8 +27,10 @@ type chatState struct {
 	subject chatSubject
 	// scrollOffset is how many lines the conversation is scrolled up from the newest message.
 	scrollOffset int
-	// pendingAction is a change den offered for what the user asked; enter on an empty line makes it.
-	pendingAction *brain.ChatAction
+	// pendingActions are changes den offered for what the user asked; enter on an empty line makes them.
+	pendingActions []brain.ChatAction
+	// thinking is set while den's model works on a reply.
+	thinking bool
 }
 
 func newChatState() chatState {
@@ -44,7 +47,7 @@ func (state *chatState) resize(width int) {
 
 func (state *chatState) addMessage(message brain.ChatMessage) {
 	state.messages = append(state.messages, message)
-	state.pendingAction = message.Action
+	state.pendingActions = message.Actions
 	state.scrollOffset = 0
 }
 
@@ -77,7 +80,7 @@ func (currentModel *model) startChat(about *store.Suggestion, subject chatSubjec
 	state := &currentModel.chat
 	isSameSuggestion := (about == nil && state.about == nil) || (about != nil && state.about != nil && about.Id == state.about.Id)
 	if !isSameSuggestion || subject != state.subject {
-		state.messages, state.pendingAction = nil, nil
+		state.messages, state.pendingActions = nil, nil
 	}
 	state.subject = subject
 	state.about = nil
@@ -102,13 +105,21 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(keyPress, keys.send):
 			text := strings.TrimSpace(state.input.Value())
 			if text == "" {
-				if state.pendingAction != nil {
-					currentModel.applyChatAction(*state.pendingAction)
+				if len(state.pendingActions) > 0 {
+					currentModel.applyChatActions(state.pendingActions)
 				}
+				return currentModel, nil
+			}
+			if state.thinking {
 				return currentModel, nil
 			}
 			state.input.SetValue("")
 			state.addMessage(brain.ChatMessage{Text: text})
+			if currentModel.helperCaller != nil {
+				state.thinking = true
+				currentModel.queueJob(job{kind: chatJob})
+				return currentModel, currentModel.startNextJob()
+			}
 			state.addMessage(brain.Reply(state.messages, state.about, brain.ChatContext{
 				Repository:       &currentModel.repository,
 				Digests:          currentModel.digests,
@@ -129,24 +140,134 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 	return currentModel, command
 }
 
-// applyChatAction makes a change the user asked for in the chat and confirmed with enter.
-func (currentModel *model) applyChatAction(action brain.ChatAction) {
-	folder := currentModel.repository.FindFolder(action.FolderId)
-	if folder == nil {
-		return
+// chatInput is what den's model gets for a chat reply: the conversation, what it's about, and the repo.
+func (currentModel model) chatInput() brain.ChatInput {
+	state := currentModel.chat
+	input := brain.ChatInput{
+		Conversation:    state.messages,
+		Repository:      &currentModel.repository,
+		Digests:         currentModel.digests,
+		SubjectFolder:   state.subject.folderId,
+		SubjectSession:  state.subject.sessionId,
+		RepositoryNotes: currentModel.repository.ReadContext(""),
 	}
-	text := ""
-	if action.LinkedPath == "" {
-		text = fmt.Sprintf("Unlinked %s. New sessions in %s start without it.", filepath.Base(folder.LinkedPath), folder.Name)
-		currentModel.repository.Unlink(folder.Id)
-	} else {
-		folder.LinkedPath = action.LinkedPath
-		currentModel.repository.ForgetFolderStarters(folder.Id)
-		text = fmt.Sprintf("Linked %s. New sessions in %s start with it.", filepath.Base(action.LinkedPath), folder.Name)
+	if state.about != nil {
+		label, summary := currentModel.suggestionSummary(*state.about)
+		input.About = label + ": " + summary + ". " + state.about.Reason
 	}
+	if state.subject.folderId != "" {
+		input.SubjectNotes = currentModel.folderNotesText(state.subject.folderId)
+	}
+	return input
+}
+
+// applyChatAnswer shows the model's reply, with the changes it proposes listed under it, waiting for enter.
+func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.ChatInput) {
+	state := &currentModel.chat
+	state.thinking = false
+	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
+	text := strings.TrimSpace(answer.Reply)
+	if len(actions) > 0 {
+		var listed []string
+		for _, action := range actions {
+			listed = append(listed, "· "+action.Description)
+		}
+		text += "\n\n" + strings.Join(listed, "\n") + "\n↵ does it"
+	}
+	if len(answer.Actions) > len(actions) {
+		text += fmt.Sprintf("\n(%d change I thought of didn't match your folders, sessions or files, so I left it out.)", len(answer.Actions)-len(actions))
+	}
+	state.addMessage(brain.ChatMessage{FromDen: true, Text: text, Actions: actions})
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "chat", Action: "reply", Detail: fmt.Sprintf("%d actions", len(actions)), Outcome: "proposed"}))
+}
+
+// applyChatActions makes the changes the user asked for in the chat and confirmed with enter.
+func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
+	repository := &currentModel.repository
+	var done []string
+	slices.SortStableFunc(actions, func(first brain.ChatAction, second brain.ChatAction) int {
+		return boolOrder(second.Kind == "createFolder") - boolOrder(first.Kind == "createFolder")
+	})
+	for _, action := range actions {
+		folder, session := repository.FindFolder(action.FolderId), repository.FindSession(action.SessionId)
+		switch action.Kind {
+		case "link":
+			if folder != nil {
+				folder.LinkedPath = action.LinkedPath
+				repository.ForgetFolderStarters(folder.Id)
+			}
+		case "unlink":
+			if folder != nil {
+				repository.Unlink(folder.Id)
+			}
+		case "move":
+			if session != nil {
+				folderId := action.FolderId
+				if action.Name != "" {
+					folderId = currentModel.folderNamed(action.Name)
+				}
+				fromFolderId := session.FolderId
+				repository.MoveByHand(session.SessionId, folderId)
+				repository.RememberMovedOut(session.SessionId, fromFolderId)
+			}
+		case "renameSession":
+			if session != nil {
+				session.Title, session.TitlePinned = action.Name, true
+				delete(currentModel.retitles, session.SessionId)
+				if open := currentModel.openAgentFor(session.SessionId); open != nil {
+					currentModel.reportError(tmux.SetPaneOption(open.paneId, paneTitleOption, action.Name))
+				}
+			}
+		case "renameFolder":
+			if folder != nil {
+				folder.Name = action.Name
+				currentModel.updatePaneFolderNames(folder.Id, action.Name)
+			}
+		case "createFolder":
+			repository.AddFolder(action.Name, action.FolderId)
+		case "archive":
+			if session != nil {
+				repository.SetArchived(session.SessionId, true)
+			}
+		case "addRule":
+			currentModel.addRuleNow(action)
+		}
+		done = append(done, action.Description)
+		currentModel.reportError(repository.LogDecision(store.Decision{Job: "chat", SessionId: action.SessionId, FolderId: action.FolderId, Action: action.Kind, Detail: action.Description, Outcome: "applied"}))
+	}
+	currentModel.updatePaneFolders()
 	currentModel.refreshContextTokens()
 	currentModel.saveRepository()
-	currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: text})
+	currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: "Done: " + strings.Join(done, "; ") + "."})
+}
+
+func boolOrder(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// addRuleNow writes a rule the user asked for: to a folder's notes, the repo's context, or the laptop files that lack it.
+func (currentModel *model) addRuleNow(action brain.ChatAction) {
+	switch action.Target {
+	case "laptop":
+		for _, laptopFile := range currentModel.laptopFiles {
+			if laptopFile.Exists || laptopFile.Installed {
+				_, err := store.AppendRule(laptopFile.Path, action.Rule)
+				currentModel.reportError(err)
+			}
+		}
+	default:
+		current := currentModel.repository.ReadContext(action.FolderId)
+		if store.HasRule(current, action.Rule) {
+			return
+		}
+		if strings.TrimSpace(current) == "" {
+			current = "# " + currentModel.contextHeading(action.FolderId) + "\n"
+		}
+		currentModel.reportError(currentModel.repository.WriteContext(action.FolderId, store.AddToSection(current, "Rules", action.Rule)))
+	}
 }
 
 func (currentModel model) chatView() string {
@@ -177,7 +298,7 @@ func (currentModel model) chatView() string {
 	}
 	bottom := []string{theme.border.Render(strings.Repeat("─", width)), margin + state.input.View()}
 	send := currentModel.keys.send
-	if state.pendingAction != nil && state.input.Value() == "" {
+	if len(state.pendingActions) > 0 && state.input.Value() == "" {
 		send = relabeled(send, "yes")
 	}
 	bottom = append(bottom, margin+strings.Join(currentModel.hintLines([]key.Binding{send, currentModel.keys.scrollChat, currentModel.keys.back}, contentWidth, 1), ""))
@@ -233,6 +354,9 @@ func (currentModel model) conversationLines(width int) []string {
 			}
 			lines = append(lines, label+theme.text.Render(line))
 		}
+	}
+	if currentModel.chat.thinking {
+		lines = append(lines, "", theme.denLabel.Render(padRight("den", chatLabelWidth))+theme.faint.Render("thinking…"))
 	}
 	return lines
 }

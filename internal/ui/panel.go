@@ -119,6 +119,7 @@ func (currentModel model) footerMargin() string {
 // panelHeader reads "den · repo" with the waiting-suggestions badge, or the active filter, on the right.
 func (currentModel model) panelHeader(width int) string {
 	left := []segment{{text: "den", style: currentModel.theme.accentBold}, {text: " · " + currentModel.repositoryName(), style: currentModel.theme.dim}}
+	left = append(left, currentModel.thinkingSegments()...)
 	return currentModel.layoutRow(left, currentModel.headerBadge(), width, false)
 }
 
@@ -136,6 +137,7 @@ func (currentModel model) headerBadge() []segment {
 func (currentModel model) wideTopBar(width int) string {
 	theme := currentModel.theme
 	left := []segment{{text: " den", style: theme.accentBold}, {text: " · " + currentModel.repositoryName(), style: theme.dim}}
+	left = append(left, currentModel.thinkingSegments()...)
 	if badge := currentModel.headerBadge(); len(badge) > 0 {
 		left = append(append(left, segment{text: "   ", style: theme.text}), badge...)
 	}
@@ -149,6 +151,14 @@ func (currentModel model) wideTopBar(width int) string {
 		right = append(right, segment{text: "z", style: theme.key}, segment{text: " back to agents ", style: theme.action})
 	}
 	return currentModel.layoutRow(left, right, width, false)
+}
+
+// thinkingSegments say den is making a model call, and about what.
+func (currentModel model) thinkingSegments() []segment {
+	if currentModel.runningJob == nil {
+		return nil
+	}
+	return []segment{{text: " · " + currentModel.runningJob.kind.String() + "…", style: currentModel.theme.faint}}
 }
 
 func (currentModel model) waitingAgents() []openAgent {
@@ -388,6 +398,9 @@ func (currentModel model) footer(width int) []string {
 func (currentModel model) rowHints() []key.Binding {
 	keys := currentModel.keys
 	var bindings []key.Binding
+	if currentModel.lastAutomaticChange != nil {
+		bindings = append(bindings, keys.undo)
+	}
 	selected, exists := currentModel.selectedRow()
 	if exists {
 		switch selected.kind {

@@ -94,6 +94,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		currentModel.filter.SetWidth(currentModel.panelWidth() - 4)
 		focusCommand := currentModel.filter.Focus()
 		return currentModel, focusCommand
+	case key.Matches(keyPress, keys.undo):
+		currentModel.undoAutomaticChange()
 	case key.Matches(keyPress, keys.newFolder):
 		return currentModel, currentModel.askForNewFolder("")
 	case key.Matches(keyPress, keys.newSubfolder):

@@ -22,18 +22,25 @@ var (
 type ChatMessage struct {
 	FromDen bool
 	Text    string
-	// Action is what den will do once the user presses enter, for a change they asked for.
-	Action *ChatAction
+	// Actions are what den will do once the user presses enter, for changes they asked for.
+	Actions []ChatAction
 	// Asks is set when den asked what's missing from a request to "link" or "unlink",
 	// so the user's next message continues it.
 	Asks string
 }
 
-// ChatAction is a change the user asked for in the chat; it waits for their enter.
+// ChatAction is a change the user asked for in the chat, checked against what exists; it waits for their enter.
 type ChatAction struct {
-	FolderId string
-	// LinkedPath is the file to link as the folder's context, or empty to unlink the folder's file.
+	Kind       string
+	FolderId   string
+	SessionId  string
 	LinkedPath string
+	// Name is the new name, or for a move into a folder the same answer creates, that folder's name.
+	Name string
+	// Target is folder, repo or laptop, for a rule.
+	Target      string
+	Rule        string
+	Description string
 }
 
 // ChatContext is what den reads to answer without a model.
@@ -99,8 +106,8 @@ func linkReply(conversation []ChatMessage, chatContext ChatContext) (ChatMessage
 	if folder == nil {
 		folder = repository.FindFolder(chatContext.FolderId)
 	}
-	reply := func(text string, action *ChatAction) (ChatMessage, bool) {
-		return ChatMessage{FromDen: true, Text: text, Action: action}, true
+	reply := func(text string, action ChatAction) (ChatMessage, bool) {
+		return ChatMessage{FromDen: true, Text: text, Actions: []ChatAction{action}}, true
 	}
 	ask := func(text string, request string) (ChatMessage, bool) {
 		return ChatMessage{FromDen: true, Text: text, Asks: request}, true
@@ -110,10 +117,10 @@ func linkReply(conversation []ChatMessage, chatContext ChatContext) (ChatMessage
 			return ask("Which folder should I unlink? Name it, like: unlink Eval.", "unlink")
 		}
 		if folder.LinkedPath == "" {
-			return reply(folder.Name+" has no linked file.", nil)
+			return ChatMessage{FromDen: true, Text: folder.Name + " has no linked file."}, true
 		}
 		return reply(fmt.Sprintf("Unlink %s from %s? New sessions there start without it; the file itself stays. ↵ unlinks it.",
-			filepath.Base(folder.LinkedPath), folder.Name), &ChatAction{FolderId: folder.Id})
+			filepath.Base(folder.LinkedPath), folder.Name), ChatAction{Kind: "unlink", FolderId: folder.Id})
 	}
 	if filePath == "" && folder == nil {
 		return ask("Tell me the file and the folder, like: link docs/PLAN.md to Eval.", "link")
@@ -129,7 +136,104 @@ func linkReply(conversation []ChatMessage, chatContext ChatContext) (ChatMessage
 		return ask(fmt.Sprintf("Which folder should %s be the context of? Name it, like: to Eval.", filepath.Base(filePath)), "link")
 	}
 	return reply(fmt.Sprintf("Link %s as %s's context? Every new session there starts with it, and den never writes it. ↵ links it.",
-		relativeTo(repository.RepositoryPath, filePath), folder.Name), &ChatAction{FolderId: folder.Id, LinkedPath: filePath})
+		relativeTo(repository.RepositoryPath, filePath), folder.Name), ChatAction{Kind: "link", FolderId: folder.Id, LinkedPath: filePath})
+}
+
+// ResolveChatActions checks what the model asked to do against what exists: folders by name, sessions by their id
+// in the prompt, files on disk. What doesn't check out is dropped. Each kept action says in words what it does.
+func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory string) []ChatAction {
+	repository := input.Repository
+	sessionIds := ChatSessionIds(input)
+	findSession := func(handle string) *store.Session {
+		var number int
+		if _, err := fmt.Sscanf(strings.TrimSpace(handle), "s%d", &number); err != nil || number < 1 || number > len(sessionIds) {
+			return nil
+		}
+		return repository.FindSession(sessionIds[number-1])
+	}
+	findFolder := func(name string) *store.Folder {
+		name = strings.TrimSpace(name)
+		if slash := strings.LastIndex(name, " / "); slash >= 0 {
+			name = name[slash+3:]
+		}
+		for index := range repository.Folders {
+			if strings.EqualFold(repository.Folders[index].Name, name) {
+				return &repository.Folders[index]
+			}
+		}
+		return nil
+	}
+	createdNames := map[string]bool{}
+	for _, proposed := range answer.Actions {
+		if proposed.Type == "createFolder" {
+			createdNames[strings.ToLower(strings.TrimSpace(proposed.Name))] = true
+		}
+	}
+	var actions []ChatAction
+	for _, proposed := range answer.Actions {
+		folder, session := findFolder(proposed.Folder), findSession(proposed.Session)
+		name := strings.TrimSpace(proposed.Name)
+		switch proposed.Type {
+		case "link":
+			files := agent.MarkdownFilesIn(proposed.File, workingDirectory, repository.RepositoryPath)
+			if folder != nil && len(files) > 0 {
+				actions = append(actions, ChatAction{Kind: "link", FolderId: folder.Id, LinkedPath: files[0],
+					Description: "link " + relativeTo(repository.RepositoryPath, files[0]) + " as " + folder.Name + "'s context"})
+			}
+		case "unlink":
+			if folder != nil && folder.LinkedPath != "" {
+				actions = append(actions, ChatAction{Kind: "unlink", FolderId: folder.Id, Description: "unlink " + filepath.Base(folder.LinkedPath) + " from " + folder.Name})
+			}
+		case "move":
+			isInbox := strings.EqualFold(strings.TrimSpace(proposed.Folder), "Inbox")
+			isNewFolder := createdNames[strings.ToLower(strings.TrimSpace(proposed.Folder))]
+			if session != nil && (folder != nil || isInbox || isNewFolder) {
+				action := ChatAction{Kind: "move", SessionId: session.SessionId, Description: "move \"" + session.Title + "\" to Inbox"}
+				switch {
+				case folder != nil:
+					action.FolderId, action.Description = folder.Id, "move \""+session.Title+"\" to "+folder.Name
+				case isNewFolder:
+					action.Name, action.Description = strings.TrimSpace(proposed.Folder), "move \""+session.Title+"\" to "+strings.TrimSpace(proposed.Folder)
+				}
+				actions = append(actions, action)
+			}
+		case "renameSession":
+			if session != nil && name != "" {
+				actions = append(actions, ChatAction{Kind: "renameSession", SessionId: session.SessionId, Name: name, Description: "rename \"" + session.Title + "\" to \"" + name + "\""})
+			}
+		case "renameFolder":
+			if folder != nil && name != "" {
+				actions = append(actions, ChatAction{Kind: "renameFolder", FolderId: folder.Id, Name: name, Description: "rename " + folder.Name + " to " + name})
+			}
+		case "createFolder":
+			if name != "" && findFolder(name) == nil {
+				action := ChatAction{Kind: "createFolder", Name: name, Description: "make a folder " + name}
+				if folder != nil {
+					action.FolderId, action.Description = folder.Id, "make a folder "+name+" in "+folder.Name
+				}
+				actions = append(actions, action)
+			}
+		case "archive":
+			if session != nil && !session.Archived {
+				actions = append(actions, ChatAction{Kind: "archive", SessionId: session.SessionId, Description: "archive \"" + session.Title + "\""})
+			}
+		case "addRule":
+			rule := strings.TrimSpace(proposed.Rule)
+			if folder == nil {
+				folder = repository.FindFolder(input.SubjectFolder)
+			}
+			switch {
+			case rule == "":
+			case proposed.Target == "laptop":
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "laptop", Rule: rule, Description: "add to your laptop files: " + rule})
+			case proposed.Target == "folder" && folder != nil:
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "folder", FolderId: folder.Id, Rule: rule, Description: "add to " + folder.Name + "'s notes: " + rule})
+			default:
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "repo", Rule: rule, Description: "add to " + filepath.Base(repository.RepositoryPath) + "'s context: " + rule})
+			}
+		}
+	}
+	return actions
 }
 
 // mentionedFolder finds the folder whose whole name the text says, the longest name first, so "Agent API" beats "Agent".

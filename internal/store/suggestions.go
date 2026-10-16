@@ -53,6 +53,8 @@ type Suggestion struct {
 	// Rule is the line a laptop rule or a question's yes adds; FilePaths are the laptop files that don't have it yet.
 	Rule      string   `json:"rule,omitempty"`
 	FilePaths []string `json:"filePaths,omitempty"`
+	// ByModel is set once den's model wrote the proposed text, so it isn't asked again.
+	ByModel bool `json:"byModel,omitempty"`
 	// Habit names the habit a suggestion comes from, so the answer counts for or against it.
 	Habit     string    `json:"habit,omitempty"`
 	Question  string    `json:"question,omitempty"`
@@ -413,6 +415,7 @@ func (repository *Repository) ForgetSessionSuggestions(sessionId string) {
 func (repository *Repository) MoveByHand(sessionId string, folderId string) {
 	if session := repository.FindSession(sessionId); session != nil {
 		session.FolderId, session.Archived, session.ArchivedAt = folderId, false, time.Time{}
+		session.FiledByHand = folderId != ""
 		repository.ForgetSessionSuggestions(sessionId)
 	}
 }

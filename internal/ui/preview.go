@@ -102,6 +102,16 @@ func (currentModel model) repositoryPreview(width int) []string {
 			lines = append(lines, theme.text.Render(description), theme.dim.Render("  "+string(habit.State)+" · "+counts))
 		}
 	}
+	lines = append(lines, "", theme.columnHeader.Render("MODEL"))
+	if currentModel.helperCaller == nil {
+		lines = append(lines, theme.dim.Render("No agent CLI can make model calls, so den uses its local rules only."))
+	} else {
+		usage := fmt.Sprintf("%s's small model · %d calls this run", currentModel.helperCaller.Tool, currentModel.helperCalls)
+		if currentModel.helperUsage.CostDollars > 0 {
+			usage += fmt.Sprintf(" · $%.3f", currentModel.helperUsage.CostDollars)
+		}
+		lines = append(lines, theme.dim.Render(usage))
+	}
 	return append(lines, "", theme.dim.Render("↵ shows the files in the tree, where ↵ on one opens it in $EDITOR."))
 }
 
