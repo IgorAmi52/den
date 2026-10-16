@@ -68,6 +68,11 @@ func SplitFullHeightLeft(sessionName string, width int, workingDirectory string,
 	return err
 }
 
+func KillPane(paneId string) error {
+	_, err := run("kill-pane", "-t", paneId)
+	return err
+}
+
 func KillWindow(windowId string) error {
 	_, err := run("kill-window", "-t", windowId)
 	return err

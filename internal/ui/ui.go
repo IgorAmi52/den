@@ -29,7 +29,11 @@ const (
 	paneToolOption       = "@den-tool"
 	paneSessionOption    = "@den-session-id"
 	paneLaunchedAtOption = "@den-launched-at"
+	paneTitleOption      = "@den-title"
 )
+
+// paneLabel shows "tool · session title" once a session has a title, and the running command before that.
+const paneLabel = "#{?#{@den-title},#{@den-tool} · #{=60:@den-title},#{pane_current_command}}"
 
 var (
 	titleStyle    = lipgloss.NewStyle().Bold(true)
@@ -44,7 +48,7 @@ var windowOptions = map[string]string{
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
-	"pane-border-format":       "#{?pane_active,#[bg=colour75 fg=colour231 bold] #{pane_current_command} #[default], #{pane_current_command} }",
+	"pane-border-format":       "#{?pane_active,#[bg=colour75 fg=colour231 bold] " + paneLabel + " #[default], " + paneLabel + " }",
 	windowMarkerOption:         "1",
 }
 
@@ -53,6 +57,12 @@ type openAgent struct {
 	tool       string
 	sessionId  string
 	launchedAt time.Time
+}
+
+// listRow is one line of the panel list: a saved session, a just-opened agent without a first prompt yet, or both.
+type listRow struct {
+	session *store.Session
+	open    *openAgent
 }
 
 type tickMessage struct{}
@@ -64,10 +74,11 @@ type model struct {
 	installedAgents  []agent.Adapter
 	openAgents       []openAgent
 	repository       store.Repository
-	sessionCursor    int
+	listCursor       int
 	picking          bool
 	pickerCursor     int
 	confirmingQuit   bool
+	deleting         *listRow
 	statusMessage    string
 }
 
@@ -143,6 +154,9 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if currentModel.confirmingQuit {
 			return currentModel.updateQuitConfirmation(typedMessage.String())
 		}
+		if currentModel.deleting != nil {
+			return currentModel.updateDeleteConfirmation(typedMessage.String())
+		}
 		if currentModel.picking {
 			return currentModel.updatePicker(typedMessage.String())
 		}
@@ -166,19 +180,43 @@ func (currentModel model) updateMain(key string) (tea.Model, tea.Cmd) {
 			currentModel.pickerCursor = 0
 		}
 	case "up", "k":
-		currentModel.sessionCursor = max(currentModel.sessionCursor-1, 0)
+		currentModel.listCursor = max(currentModel.listCursor-1, 0)
 	case "down", "j":
-		currentModel.sessionCursor = max(min(currentModel.sessionCursor+1, len(currentModel.repository.Sessions)-1), 0)
+		currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
 	case "enter":
-		if currentModel.sessionCursor < len(currentModel.repository.Sessions) {
-			currentModel.resumeSession(currentModel.repository.Sessions[currentModel.sessionCursor].SessionId)
+		if selected, exists := currentModel.selectedRow(); exists {
+			if selected.open != nil {
+				currentModel.reportError(tmux.SelectPane(selected.open.paneId))
+			} else {
+				currentModel.resumeSession(selected.session.SessionId)
+			}
 		}
-	case "1", "2", "3", "4":
-		agentIndex := int(key[0] - '1')
-		if agentIndex < len(currentModel.openAgents) {
-			currentModel.reportError(tmux.SelectPane(currentModel.openAgents[agentIndex].paneId))
+	case "d":
+		if selected, exists := currentModel.selectedRow(); exists {
+			currentModel.deleting = &selected
 		}
 	}
+	return currentModel, nil
+}
+
+// updateDeleteConfirmation forgets the session in den and closes its pane; the agent keeps its own history.
+func (currentModel model) updateDeleteConfirmation(key string) (tea.Model, tea.Cmd) {
+	deleting := currentModel.deleting
+	currentModel.deleting = nil
+	if key != "y" {
+		return currentModel, nil
+	}
+	if deleting.open != nil {
+		currentModel.reportError(tmux.KillPane(deleting.open.paneId))
+	}
+	if deleting.session != nil {
+		currentModel.repository.Sessions = slices.DeleteFunc(currentModel.repository.Sessions, func(saved store.Session) bool {
+			return saved.SessionId == deleting.session.SessionId
+		})
+		currentModel.saveSessions()
+	}
+	currentModel.reportError(currentModel.refreshAgents())
+	currentModel.listCursor = max(min(currentModel.listCursor, len(currentModel.rows())-1), 0)
 	return currentModel, nil
 }
 
@@ -211,7 +249,8 @@ func (currentModel model) updatePicker(key string) (tea.Model, tea.Cmd) {
 
 func (currentModel *model) openAgent(adapter agent.Adapter) {
 	command, sessionId := adapter.NewSessionCommand()
-	currentModel.launchInPane(adapter.Name(), sessionId, command)
+	currentModel.launchInPane(adapter.Name(), sessionId, "", command)
+	currentModel.listCursor = 0
 }
 
 func (currentModel *model) resumeSession(sessionId string) {
@@ -231,16 +270,16 @@ func (currentModel *model) resumeSession(sessionId string) {
 		currentModel.statusMessage = "unknown tool " + session.Tool
 		return
 	}
-	currentModel.launchInPane(session.Tool, sessionId, adapter.ResumeCommand(sessionId))
+	currentModel.launchInPane(session.Tool, sessionId, session.Title, adapter.ResumeCommand(sessionId))
 	session.LastActivityAt = time.Now()
 	currentModel.saveSessions()
-	currentModel.sessionCursor = slices.IndexFunc(currentModel.repository.Sessions, func(saved store.Session) bool {
-		return saved.SessionId == sessionId
+	currentModel.listCursor = slices.IndexFunc(currentModel.rows(), func(row listRow) bool {
+		return row.session != nil && row.session.SessionId == sessionId
 	})
 }
 
 // launchInPane splits the last pane so the new agent comes last in pane order, then lets the layout place it.
-func (currentModel *model) launchInPane(tool string, sessionId string, command []string) {
+func (currentModel *model) launchInPane(tool string, sessionId string, title string, command []string) {
 	targetPaneId := currentModel.panelPaneId
 	if len(currentModel.openAgents) > 0 {
 		targetPaneId = currentModel.openAgents[len(currentModel.openAgents)-1].paneId
@@ -255,6 +294,9 @@ func (currentModel *model) launchInPane(tool string, sessionId string, command [
 	currentModel.reportError(tmux.SetPaneOption(paneId, paneLaunchedAtOption, strconv.FormatInt(launchedAt.UnixMilli(), 10)))
 	if sessionId != "" {
 		currentModel.reportError(tmux.SetPaneOption(paneId, paneSessionOption, sessionId))
+	}
+	if title != "" {
+		currentModel.reportError(tmux.SetPaneOption(paneId, paneTitleOption, title))
 	}
 	currentModel.reportError(currentModel.refreshAgents())
 	currentModel.reportError(layout.Apply(currentModel.windowId, PanelMarkerOption, PanelWidth))
@@ -303,14 +345,18 @@ func (currentModel *model) trackNewSessions() error {
 			currentModel.openAgents[agentIndex].sessionId = foundSession.SessionId
 		}
 		now := time.Now()
+		title := strings.Join(strings.Fields(foundSession.FirstPrompt), " ")
 		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
 			Tool:           open.tool,
 			SessionId:      foundSession.SessionId,
-			Title:          strings.Join(strings.Fields(foundSession.FirstPrompt), " "),
+			Title:          title,
 			CreatedAt:      now,
 			LastActivityAt: now,
 		})
 		currentModel.saveSessions()
+		if err := tmux.SetPaneOption(open.paneId, paneTitleOption, title); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -323,10 +369,37 @@ func (currentModel *model) saveSessions() {
 	currentModel.reportError(currentModel.repository.Save())
 }
 
-func (currentModel model) openAgentFor(sessionId string) bool {
-	return slices.ContainsFunc(currentModel.openAgents, func(open openAgent) bool {
-		return open.sessionId == sessionId
-	})
+// rows lists just-opened agents without a first prompt first, then saved sessions, newest first.
+func (currentModel model) rows() []listRow {
+	var rows []listRow
+	for agentIndex := range currentModel.openAgents {
+		open := &currentModel.openAgents[agentIndex]
+		if open.sessionId == "" || currentModel.repository.FindSession(open.sessionId) == nil {
+			rows = append(rows, listRow{open: open})
+		}
+	}
+	for sessionIndex := range currentModel.repository.Sessions {
+		session := &currentModel.repository.Sessions[sessionIndex]
+		rows = append(rows, listRow{session: session, open: currentModel.openAgentFor(session.SessionId)})
+	}
+	return rows
+}
+
+func (currentModel model) selectedRow() (listRow, bool) {
+	rows := currentModel.rows()
+	if currentModel.listCursor >= len(rows) {
+		return listRow{}, false
+	}
+	return rows[currentModel.listCursor], true
+}
+
+func (currentModel model) openAgentFor(sessionId string) *openAgent {
+	for agentIndex := range currentModel.openAgents {
+		if currentModel.openAgents[agentIndex].sessionId == sessionId {
+			return &currentModel.openAgents[agentIndex]
+		}
+	}
+	return nil
 }
 
 func (currentModel *model) reportError(err error) {
@@ -350,11 +423,11 @@ func (currentModel model) View() tea.View {
 			}
 		}
 		content.WriteString("\n" + hintStyle.Render("enter start · esc cancel") + "\n")
+	} else if currentModel.deleting != nil {
+		currentModel.writeDeleteConfirmation(&content)
 	} else {
-		currentModel.writeOpenAgents(&content)
-		content.WriteString("\n" + titleStyle.Render("sessions") + "\n")
-		currentModel.writeSessions(&content)
-		content.WriteString("\n" + hintStyle.Render("n new · enter resume · q quit\nclick focus · drag title swap") + "\n")
+		currentModel.writeList(&content)
+		content.WriteString("\n" + hintStyle.Render(currentModel.footer()) + "\n")
 	}
 	if currentModel.statusMessage != "" {
 		content.WriteString("\n" + currentModel.statusMessage + "\n")
@@ -362,36 +435,58 @@ func (currentModel model) View() tea.View {
 	return tea.NewView(content.String())
 }
 
-func (currentModel model) writeOpenAgents(content *strings.Builder) {
-	if len(currentModel.openAgents) == 0 {
-		content.WriteString(hintStyle.Render("no agents open") + "\n")
+func (currentModel model) writeList(content *strings.Builder) {
+	rows := currentModel.rows()
+	if len(rows) == 0 {
+		content.WriteString(hintStyle.Render("no sessions yet") + "\n")
 	}
-	for agentIndex, open := range currentModel.openAgents {
-		label := hintStyle.Render("new")
-		if session := currentModel.repository.FindSession(open.sessionId); session != nil {
-			label = truncate(session.Title, PanelWidth-10)
-		}
-		content.WriteString(fmt.Sprintf("%d %-7s %s\n", agentIndex+1, open.tool, label))
-	}
-}
-
-func (currentModel model) writeSessions(content *strings.Builder) {
-	if len(currentModel.repository.Sessions) == 0 {
-		content.WriteString(hintStyle.Render("none yet") + "\n")
-	}
-	for sessionIndex, session := range currentModel.repository.Sessions {
+	titleWidth := PanelWidth - 8
+	for rowIndex, row := range rows {
 		openMarker := " "
-		if currentModel.openAgentFor(session.SessionId) {
+		if row.open != nil {
 			openMarker = "●"
 		}
-		age := relativeAge(session.LastActivityAt)
-		line := fmt.Sprintf("%s %-*s %s", openMarker, PanelWidth-8, truncate(session.Title, PanelWidth-8), age)
-		if sessionIndex == currentModel.sessionCursor {
+		var line string
+		if row.session == nil {
+			line = fmt.Sprintf("%s %s", openMarker, hintStyle.Render("new "+row.open.tool))
+		} else {
+			line = fmt.Sprintf("%s %-*s %s", openMarker, titleWidth, truncate(row.session.Title, titleWidth), relativeAge(row.session.LastActivityAt))
+		}
+		if rowIndex == currentModel.listCursor {
 			content.WriteString(selectedStyle.Render(">"+line) + "\n")
 		} else {
 			content.WriteString(" " + line + "\n")
 		}
 	}
+}
+
+// footer only offers the keys that do something for the selected row.
+func (currentModel model) footer() string {
+	selected, exists := currentModel.selectedRow()
+	if !exists {
+		return "n new · q quit\nclick focus · drag title swap"
+	}
+	enterAction := "resume"
+	if selected.open != nil {
+		enterAction = "focus"
+	}
+	return "enter " + enterAction + " · d delete\nn new · q quit\nclick focus · drag title swap"
+}
+
+func (currentModel model) writeDeleteConfirmation(content *strings.Builder) {
+	deleting := currentModel.deleting
+	content.WriteString("Delete this session?\n")
+	if deleting.session != nil {
+		content.WriteString(selectedStyle.Render(truncate(deleting.session.Title, PanelWidth)) + "\n")
+	}
+	content.WriteString("\n")
+	if deleting.open != nil {
+		content.WriteString("Its pane will close.\n")
+	}
+	if deleting.session != nil {
+		content.WriteString(hintStyle.Render("It stays in "+deleting.session.Tool+"'s history.") + "\n")
+	}
+	content.WriteString("\n" + hintStyle.Render("y yes · any other key no") + "\n")
 }
 
 func truncate(text string, maximumLength int) string {
