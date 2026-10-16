@@ -5,42 +5,78 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 )
 
+// claudeEditingTools are the tools whose file_path input means the agent changed that file.
+var claudeEditingTools = map[string]bool{"Edit": true, "MultiEdit": true, "Write": true, "NotebookEdit": true}
+
+// claudeProjectNameCharacters are replaced with "-" when Claude names a project directory after a working directory.
+var claudeProjectNameCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
+
 type Claude struct{}
+
+type claudeEvent struct {
+	Type        string    `json:"type"`
+	IsMeta      bool      `json:"isMeta"`
+	IsSidechain bool      `json:"isSidechain"`
+	Cwd         string    `json:"cwd"`
+	GitBranch   string    `json:"gitBranch"`
+	Timestamp   time.Time `json:"timestamp"`
+	Message     struct {
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+}
 
 func (Claude) Name() string {
 	return "claude"
 }
 
-func (Claude) NewSessionCommand() ([]string, string) {
+func (Claude) NewSessionCommand(launch Launch) ([]string, string) {
 	sessionId := newUuid()
-	return []string{"claude", "--session-id", sessionId}, sessionId
+	return append([]string{"claude", "--session-id", sessionId}, claudeLaunchArguments(launch)...), sessionId
 }
 
-func (Claude) ResumeCommand(sessionId string) []string {
-	return []string{"claude", "--resume", sessionId}
+func (Claude) ResumeCommand(sessionId string, launch Launch) []string {
+	return append([]string{"claude", "--resume", sessionId}, claudeLaunchArguments(launch)...)
+}
+
+// claudeLaunchArguments add the context and the status hooks through flags,
+// so den never edits the user's Claude settings.
+func claudeLaunchArguments(launch Launch) []string {
+	var arguments []string
+	if launch.Context != "" {
+		arguments = append(arguments, "--append-system-prompt", launch.Context)
+		for _, directory := range launch.WritableDirectories {
+			arguments = append(arguments, "--add-dir", directory)
+		}
+	}
+	if len(launch.StatusCommand) > 0 {
+		statusHook := func(state string) []map[string]any {
+			command := shellJoin(launch.StatusCommand) + " " + state
+			return []map[string]any{{"hooks": []map[string]string{{"type": "command", "command": command}}}}
+		}
+		settings, _ := json.Marshal(map[string]any{"hooks": map[string]any{
+			"UserPromptSubmit": statusHook("running"),
+			"PostToolUse":      statusHook("running"),
+			"Notification":     statusHook("waiting"),
+			"Stop":             statusHook("waiting"),
+		}})
+		arguments = append(arguments, "--settings", string(settings))
+	}
+	return arguments
 }
 
 func (Claude) FindSession(sessionId string, _ string, _ time.Time) (FoundSession, bool, error) {
-	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
-	if err != nil {
-		return FoundSession{}, false, err
-	}
-	transcriptPaths, err := filepath.Glob(filepath.Join(configurationDirectory, "projects", "*", sessionId+".jsonl"))
-	if err != nil || len(transcriptPaths) == 0 {
+	transcriptPath, found, err := claudeTranscriptPath(sessionId)
+	if err != nil || !found {
 		return FoundSession{}, false, err
 	}
 	firstPrompt := ""
-	err = eachJsonLine(transcriptPaths[0], func(line json.RawMessage) bool {
-		var event struct {
-			Type    string `json:"type"`
-			IsMeta  bool   `json:"isMeta"`
-			Message struct {
-				Content json.RawMessage `json:"content"`
-			} `json:"message"`
-		}
+	err = eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
+		var event claudeEvent
 		if json.Unmarshal(line, &event) != nil || event.Type != "user" || event.IsMeta {
 			return true
 		}
@@ -48,6 +84,104 @@ func (Claude) FindSession(sessionId string, _ string, _ time.Time) (FoundSession
 		return firstPrompt == ""
 	})
 	return FoundSession{SessionId: sessionId, FirstPrompt: firstPrompt}, firstPrompt != "", err
+}
+
+func (Claude) Digest(sessionId string) (Digest, bool, error) {
+	transcriptPath, found, err := claudeTranscriptPath(sessionId)
+	if err != nil || !found {
+		return Digest{}, false, err
+	}
+	digest, err := cachedDigestOf(transcriptPath, readClaudeDigest)
+	return digest, err == nil, err
+}
+
+func (Claude) PastSessions(directories []string) ([]Digest, error) {
+	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
+	if err != nil {
+		return nil, err
+	}
+	var digests []Digest
+	for _, directory := range directories {
+		projectDirectory := filepath.Join(configurationDirectory, "projects", claudeProjectNameCharacters.ReplaceAllString(directory, "-"))
+		transcriptPaths, _ := filepath.Glob(filepath.Join(projectDirectory, "*.jsonl"))
+		for _, transcriptPath := range transcriptPaths {
+			digest, err := cachedDigestOf(transcriptPath, readClaudeDigest)
+			if err == nil && digest.FirstPrompt != "" {
+				digests = append(digests, digest)
+			}
+		}
+	}
+	return digests, nil
+}
+
+func claudeTranscriptPath(sessionId string) (string, bool, error) {
+	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
+	if err != nil {
+		return "", false, err
+	}
+	transcriptPaths, err := filepath.Glob(filepath.Join(configurationDirectory, "projects", "*", sessionId+".jsonl"))
+	if err != nil || len(transcriptPaths) == 0 {
+		return "", false, err
+	}
+	return transcriptPaths[0], true, nil
+}
+
+func readClaudeDigest(transcriptPath string) Digest {
+	digest := Digest{Tool: "claude", SessionId: strings.TrimSuffix(filepath.Base(transcriptPath), ".jsonl")}
+	eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
+		var event claudeEvent
+		if json.Unmarshal(line, &event) != nil || event.IsSidechain {
+			return true
+		}
+		if event.Cwd != "" {
+			digest.WorkingDirectory = event.Cwd
+		}
+		if event.GitBranch != "" && event.GitBranch != "HEAD" {
+			digest.Branch = event.GitBranch
+		}
+		if !event.Timestamp.IsZero() {
+			if digest.StartedAt.IsZero() {
+				digest.StartedAt = event.Timestamp
+			}
+			digest.LastActivityAt = event.Timestamp
+		}
+		switch event.Type {
+		case "user":
+			if prompt := firstTypedText(event.Message.Content); prompt != "" && !event.IsMeta {
+				if digest.FirstPrompt == "" {
+					digest.FirstPrompt = oneLine(prompt)
+				}
+				digest.LastPrompt = oneLine(prompt)
+				digest.PromptCount++
+			}
+		case "assistant":
+			for _, filePath := range claudeEditedFiles(event.Message.Content) {
+				digest.TouchedFiles = appendOnce(digest.TouchedFiles, filePath)
+			}
+		}
+		return true
+	})
+	return digest
+}
+
+func claudeEditedFiles(content json.RawMessage) []string {
+	var blocks []struct {
+		Type  string `json:"type"`
+		Name  string `json:"name"`
+		Input struct {
+			FilePath string `json:"file_path"`
+		} `json:"input"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return nil
+	}
+	var filePaths []string
+	for _, block := range blocks {
+		if block.Type == "tool_use" && claudeEditingTools[block.Name] && block.Input.FilePath != "" {
+			filePaths = append(filePaths, block.Input.FilePath)
+		}
+	}
+	return filePaths
 }
 
 // firstTypedText reads a message content that is either plain text or a list of content blocks.
@@ -70,6 +204,15 @@ func firstTypedText(content json.RawMessage) string {
 		}
 	}
 	return ""
+}
+
+// shellJoin quotes each argument for sh, since Claude runs hook commands through a shell.
+func shellJoin(arguments []string) string {
+	var quoted []string
+	for _, argument := range arguments {
+		quoted = append(quoted, "'"+strings.ReplaceAll(argument, "'", `'\''`)+"'")
+	}
+	return strings.Join(quoted, " ")
 }
 
 func newUuid() string {

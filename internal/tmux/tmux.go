@@ -146,6 +146,59 @@ func BindTitleDragToSwapPanes(windowMarkerOption string, fixedPaneOption string)
 	return nil
 }
 
+func UnsetPaneOption(paneId string, option string) error {
+	_, err := run("set-option", "-p", "-u", "-t", paneId, option)
+	return err
+}
+
+// SetPaneStatus records an agent's state on its pane and colors a waiting pane's border amber.
+func SetPaneStatus(paneId string, state string) error {
+	if err := SetPaneOption(paneId, "@den-status", state); err != nil {
+		return err
+	}
+	for _, option := range []string{"pane-border-style", "pane-active-border-style"} {
+		var err error
+		if state == "waiting" {
+			err = SetPaneOption(paneId, option, "fg=colour214")
+		} else {
+			err = UnsetPaneOption(paneId, option)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func IsZoomed(windowId string) bool {
+	output, err := run("display-message", "-p", "-t", windowId, "#{window_zoomed_flag}")
+	return err == nil && output == "1"
+}
+
+// ToggleZoom makes the pane fill its window, or puts the window back as it was.
+func ToggleZoom(paneId string) error {
+	_, err := run("resize-pane", "-Z", "-t", paneId)
+	return err
+}
+
+// DisplayPopup runs a command in a rounded popup over the window and returns once the command exits.
+func DisplayPopup(title string, workingDirectory string, command []string) error {
+	var quoted []string
+	for _, argument := range command {
+		quoted = append(quoted, "'"+strings.ReplaceAll(argument, "'", `'\''`)+"'")
+	}
+	_, err := run("display-popup", "-E", "-b", "rounded", "-S", "fg=colour75", "-T", " "+title+" ",
+		"-w", "80%", "-h", "80%", "-d", workingDirectory, strings.Join(quoted, " "))
+	return err
+}
+
+// BindPanelHotkey makes prefix+Space select the panel, the top-left pane, in den windows.
+// Elsewhere it keeps tmux's default, next-layout.
+func BindPanelHotkey(windowMarkerOption string) error {
+	_, err := run("bind-key", "Space", "if-shell", "-F", "#{"+windowMarkerOption+"}", "select-pane -t '{top-left}'", "next-layout")
+	return err
+}
+
 func SelectPane(paneId string) error {
 	_, err := run("select-pane", "-t", paneId)
 	return err

@@ -15,8 +15,11 @@ type area struct {
 
 // Apply arranges the window as the panel on the left plus agents in a grid,
 // filled row by row in pane order. It does nothing when every pane already sits in its cell,
-// so running it from tmux's layout hooks cannot loop.
+// so running it from tmux's layout hooks cannot loop. A zoomed window is left alone, or the zoom would end at once.
 func Apply(windowId string, panelMarkerOption string, panelWidth int) error {
+	if tmux.IsZoomed(windowId) {
+		return nil
+	}
 	panelPaneIds, err := tmux.WindowPanesWithOption(windowId, panelMarkerOption)
 	if err != nil || len(panelPaneIds) == 0 {
 		return err

@@ -17,24 +17,42 @@ type Folder struct {
 	Name      string `json:"name"`
 	ParentId  string `json:"parentId,omitempty"`
 	Collapsed bool   `json:"collapsed,omitempty"`
+	// Branch is set on subfolders that group the sessions of one branch or worktree.
+	Branch string `json:"branch,omitempty"`
 }
 
 type Session struct {
-	Tool           string    `json:"tool"`
-	SessionId      string    `json:"sessionId"`
-	FolderId       string    `json:"folderId,omitempty"`
-	Title          string    `json:"title"`
+	Tool             string `json:"tool"`
+	SessionId        string `json:"sessionId"`
+	FolderId         string `json:"folderId,omitempty"`
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+	Branch           string `json:"branch,omitempty"`
+	Title            string `json:"title"`
+	// TitlePinned is set by a manual rename, so automatic titles stop changing it.
+	TitlePinned bool `json:"titlePinned,omitempty"`
+	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
+	WithoutContext bool      `json:"withoutContext,omitempty"`
+	Archived       bool      `json:"archived,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
 }
 
 type Repository struct {
-	RepositoryPath string    `json:"repoPath"`
-	Folders        []Folder  `json:"folders"`
-	Sessions       []Session `json:"sessions"`
+	RepositoryPath string `json:"repoPath"`
+	// Welcomed is set once the first-run review is done, so it shows only once per repo.
+	Welcomed    bool         `json:"welcomed,omitempty"`
+	Folders     []Folder     `json:"folders"`
+	Sessions    []Session    `json:"sessions"`
+	Suggestions []Suggestion `json:"suggestions,omitempty"`
+	// RejectedKeys remembers rejected suggestions, so the same one is never offered again.
+	RejectedKeys []string `json:"rejectedKeys,omitempty"`
 }
 
+// DataDirectory is ~/.den, or DEN_HOME when set.
 func DataDirectory() (string, error) {
+	if override := os.Getenv("DEN_HOME"); override != "" {
+		return override, nil
+	}
 	homeDirectory, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -79,6 +97,15 @@ func (repository Repository) Save() error {
 	return os.Rename(temporaryFilePath, filePath)
 }
 
+// Directory holds everything den keeps for this repo outside the repo itself.
+func (repository Repository) Directory() (string, error) {
+	filePath, err := repositoryFilePath(repository.RepositoryPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(filePath), nil
+}
+
 func (repository *Repository) FindSession(sessionId string) *Session {
 	for index := range repository.Sessions {
 		if repository.Sessions[index].SessionId == sessionId {
@@ -98,9 +125,7 @@ func (repository *Repository) FindFolder(folderId string) *Folder {
 }
 
 func (repository *Repository) AddFolder(name string, parentId string) Folder {
-	var randomBytes [4]byte
-	rand.Read(randomBytes[:])
-	folder := Folder{Id: hex.EncodeToString(randomBytes[:]), Name: name, ParentId: parentId}
+	folder := Folder{Id: newId(), Name: name, ParentId: parentId}
 	repository.Folders = append(repository.Folders, folder)
 	return folder
 }
@@ -125,22 +150,52 @@ func (repository *Repository) DeleteFolder(folderId string) {
 	repository.Folders = slices.DeleteFunc(repository.Folders, func(candidate Folder) bool {
 		return candidate.Id == folderId
 	})
+	repository.Suggestions = slices.DeleteFunc(repository.Suggestions, func(suggestion Suggestion) bool {
+		return suggestion.FolderId == folderId || suggestion.ParentFolderId == folderId
+	})
 }
 
-// SessionCount counts the sessions in a folder and all its subfolders.
+// SessionCount counts the sessions in a folder and all its subfolders, leaving archived ones out.
 func (repository *Repository) SessionCount(folderId string) int {
 	count := 0
 	for _, session := range repository.Sessions {
-		if session.FolderId == folderId {
+		if session.FolderId == folderId && !session.Archived {
 			count++
 		}
 	}
 	for _, folder := range repository.Folders {
-		if folder.ParentId == folderId {
+		if folder.ParentId == folderId && folderId != "" {
 			count += repository.SessionCount(folder.Id)
 		}
 	}
 	return count
+}
+
+func (repository *Repository) ArchivedCount() int {
+	count := 0
+	for _, session := range repository.Sessions {
+		if session.Archived {
+			count++
+		}
+	}
+	return count
+}
+
+// FolderPath lists a folder and its ancestors from the top level down.
+func (repository *Repository) FolderPath(folderId string) []Folder {
+	var path []Folder
+	for folder := repository.FindFolder(folderId); folder != nil; folder = repository.FindFolder(folder.ParentId) {
+		path = append([]Folder{*folder}, path...)
+	}
+	return path
+}
+
+// FolderName names a folder for display; the top level is the Inbox.
+func (repository *Repository) FolderName(folderId string) string {
+	if folder := repository.FindFolder(folderId); folder != nil {
+		return folder.Name
+	}
+	return "Inbox"
 }
 
 func repositoryFilePath(repositoryPath string) (string, error) {
@@ -150,4 +205,10 @@ func repositoryFilePath(repositoryPath string) (string, error) {
 	}
 	repositoryId := strings.NewReplacer("/", "-", ".", "-").Replace(repositoryPath)
 	return filepath.Join(dataDirectory, "repos", repositoryId, "den.json"), nil
+}
+
+func newId() string {
+	var randomBytes [4]byte
+	rand.Read(randomBytes[:])
+	return hex.EncodeToString(randomBytes[:])
 }

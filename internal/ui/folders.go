@@ -4,17 +4,20 @@ import (
 	"slices"
 	"strings"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
-// textPrompt asks for one line of text in the panel and hands it to submit on enter.
+// textPrompt asks for one line of text and hands it to submit on enter.
+// With inlineRow set, the input replaces that row in the tree, as a rename in place.
 type textPrompt struct {
-	question string
-	input    textinput.Model
-	submit   func(currentModel *model, value string)
+	question  string
+	input     textinput.Model
+	submit    func(currentModel *model, value string)
+	inlineRow func(listRow) bool
 }
 
 func (currentModel *model) askForText(question string, initialValue string, submit func(currentModel *model, value string)) tea.Cmd {
@@ -29,8 +32,8 @@ func (currentModel *model) askForText(question string, initialValue string, subm
 
 func (currentModel model) updatePrompt(message tea.Msg) (tea.Model, tea.Cmd) {
 	if keyPress, isKeyPress := message.(tea.KeyPressMsg); isKeyPress {
-		switch keyPress.String() {
-		case "enter":
+		switch {
+		case key.Matches(keyPress, currentModel.keys.save):
 			value := strings.TrimSpace(currentModel.prompt.input.Value())
 			submit := currentModel.prompt.submit
 			currentModel.prompt = nil
@@ -38,7 +41,7 @@ func (currentModel model) updatePrompt(message tea.Msg) (tea.Model, tea.Cmd) {
 				submit(&currentModel, value)
 			}
 			return currentModel, nil
-		case "esc":
+		case key.Matches(keyPress, currentModel.keys.back):
 			currentModel.prompt = nil
 			return currentModel, nil
 		}
@@ -48,41 +51,61 @@ func (currentModel model) updatePrompt(message tea.Msg) (tea.Model, tea.Cmd) {
 	return currentModel, command
 }
 
-func (currentModel *model) askForNewFolder() tea.Cmd {
-	parentId := currentModel.folderForNewItems()
-	return currentModel.askForText("New folder name", "", func(currentModel *model, name string) {
+func (currentModel *model) askForNewFolder(parentId string) tea.Cmd {
+	question := "New folder"
+	if parentId != "" {
+		question = "New folder in " + currentModel.repository.FolderName(parentId)
+	}
+	return currentModel.askForText(question, "", func(currentModel *model, name string) {
 		folder := currentModel.repository.AddFolder(name, parentId)
 		currentModel.expandFolder(parentId)
 		currentModel.saveRepository()
-		currentModel.cursorTo(sameItemAs(listRow{folder: &folder}))
+		folderId := folder.Id
+		currentModel.cursorTo(func(row listRow) bool { return row.kind == folderRow && row.folder.Id == folderId })
+		currentModel.selectOrganizeFolder(folderId)
+		currentModel.setStatus("made " + name + " · e to give it context")
 	})
 }
 
-func (currentModel *model) askForRename() tea.Cmd {
-	selected, exists := currentModel.selectedRow()
-	if !exists {
-		return nil
-	}
-	if selected.folder != nil {
-		folderId := selected.folder.Id
-		return currentModel.askForText("Rename folder", selected.folder.Name, func(currentModel *model, name string) {
+// askForRename renames a folder or session; a manual rename pins a session's title so it stops updating by itself.
+func (currentModel *model) askForRename(row listRow, inline bool) tea.Cmd {
+	var command tea.Cmd
+	switch row.kind {
+	case folderRow:
+		folderId := row.folder.Id
+		command = currentModel.askForText("Rename folder", row.folder.Name, func(currentModel *model, name string) {
 			currentModel.repository.FindFolder(folderId).Name = name
 			currentModel.saveRepository()
-			currentModel.cursorTo(sameItemAs(selected))
+			currentModel.updatePaneFolderNames(folderId, name)
 		})
-	}
-	if selected.session == nil {
-		currentModel.statusMessage = "send a first prompt before renaming"
+	case sessionRow:
+		sessionId := row.session.SessionId
+		command = currentModel.askForText("Rename session", row.session.Title, func(currentModel *model, title string) {
+			session := currentModel.repository.FindSession(sessionId)
+			session.Title, session.TitlePinned = title, true
+			if open := currentModel.openAgentFor(sessionId); open != nil {
+				currentModel.reportError(tmux.SetPaneOption(open.paneId, paneTitleOption, title))
+			}
+			currentModel.saveRepository()
+		})
+	case newAgentRow:
+		currentModel.setStatus("send a first prompt before renaming")
+		return nil
+	default:
 		return nil
 	}
-	sessionId := selected.session.SessionId
-	return currentModel.askForText("Rename session", selected.session.Title, func(currentModel *model, title string) {
-		currentModel.repository.FindSession(sessionId).Title = title
-		if open := currentModel.openAgentFor(sessionId); open != nil {
-			currentModel.reportError(tmux.SetPaneOption(open.paneId, paneTitleOption, title))
+	if inline {
+		currentModel.prompt.inlineRow = sameItemAs(row)
+	}
+	return command
+}
+
+func (currentModel *model) updatePaneFolderNames(folderId string, name string) {
+	for _, open := range currentModel.openAgents {
+		if open.folderId == folderId {
+			currentModel.reportError(tmux.SetPaneOption(open.paneId, paneFolderNameOption, name))
 		}
-		currentModel.saveRepository()
-	})
+	}
 }
 
 func (currentModel *model) toggleFolder(folderId string) {
@@ -91,8 +114,12 @@ func (currentModel *model) toggleFolder(folderId string) {
 	currentModel.saveRepository()
 }
 
+// expandFolder opens the folder and its parents, so whatever just went into it is visible.
 func (currentModel *model) expandFolder(folderId string) {
-	if folder := currentModel.repository.FindFolder(folderId); folder != nil {
+	if folderId == "" {
+		currentModel.inboxCollapsed = false
+	}
+	for folder := currentModel.repository.FindFolder(folderId); folder != nil; folder = currentModel.repository.FindFolder(folder.ParentId) {
 		folder.Collapsed = false
 	}
 }
@@ -100,7 +127,7 @@ func (currentModel *model) expandFolder(folderId string) {
 // moveSelected moves the selected session into the next or previous folder on screen.
 func (currentModel *model) moveSelected(direction int) {
 	selected, exists := currentModel.selectedRow()
-	if !exists || selected.folder != nil {
+	if !exists || !selected.isMovable() {
 		return
 	}
 	targets := currentModel.moveTargets()
@@ -114,63 +141,100 @@ func (currentModel *model) moveSelected(direction int) {
 
 // moveRowToFolder puts a session, or a new agent without a first prompt yet, into a folder and keeps it selected.
 func (currentModel *model) moveRowToFolder(row listRow, folderId string) {
-	if row.folder != nil || row.folderId() == folderId {
+	if !row.isMovable() || (row.folderId() == folderId && !(row.session != nil && row.session.Archived)) {
 		return
 	}
 	currentModel.expandFolder(folderId)
 	if row.session != nil {
-		row.session.FolderId = folderId
+		currentModel.repository.MoveByHand(row.session.SessionId, folderId)
 	} else {
 		currentModel.reportError(tmux.SetPaneOption(row.open.paneId, paneFolderOption, folderId))
 		row.open.folderId = folderId
 	}
 	matchesRow := sameItemAs(row)
 	currentModel.saveRepository()
+	currentModel.updatePaneFolders()
 	currentModel.cursorTo(matchesRow)
+}
+
+// moveSessionsToFolder files several sessions at once, as the organize view's move does.
+func (currentModel *model) moveSessionsToFolder(sessionIds []string, folderId string) {
+	for _, sessionId := range sessionIds {
+		fromFolderId := currentModel.repository.FindSession(sessionId).FolderId
+		currentModel.repository.MoveByHand(sessionId, folderId)
+		currentModel.repository.RememberMovedOut(sessionId, fromFolderId)
+	}
+	currentModel.expandFolder(folderId)
+	currentModel.saveRepository()
+	currentModel.updatePaneFolders()
+	currentModel.setStatus("moved " + countedSessions(len(sessionIds)) + " to " + currentModel.repository.FolderName(folderId))
 }
 
 // startGrab picks up the selected session, so plain arrows carry it through the folders until it is dropped.
 func (currentModel *model) startGrab() {
 	selected, exists := currentModel.selectedRow()
-	if !exists || selected.folder != nil {
+	if !exists || !selected.isMovable() {
 		return
 	}
 	currentModel.grabbed = sameItemAs(selected)
 	currentModel.grabbedFromFolderId = selected.folderId()
+	currentModel.grabbedWasArchived = selected.kind == sessionRow && selected.session.Archived
 }
 
-func (currentModel model) updateGrab(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "up", "k", "shift+up", "K":
+func (currentModel model) updateGrab(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	keys := currentModel.keys
+	switch {
+	case key.Matches(keyPress, keys.up), keyPress.String() == "shift+up" || keyPress.String() == "K":
 		currentModel.moveSelected(-1)
-	case "down", "j", "shift+down", "J":
+	case key.Matches(keyPress, keys.down), keyPress.String() == "shift+down" || keyPress.String() == "J":
 		currentModel.moveSelected(1)
-	case "esc":
+	case key.Matches(keyPress, keys.back):
 		if selected, exists := currentModel.selectedRow(); exists {
+			// Moving sorts the sessions, so the id is read before the row's pointer goes stale.
+			carriedSessionId := ""
+			if selected.kind == sessionRow {
+				carriedSessionId = selected.session.SessionId
+			}
 			currentModel.moveRowToFolder(selected, currentModel.grabbedFromFolderId)
+			if currentModel.grabbedWasArchived && carriedSessionId != "" {
+				currentModel.setArchived([]string{carriedSessionId}, true)
+				currentModel.clearStatus()
+			}
 		}
 		currentModel.grabbed = nil
-	case "enter", "space", "m":
+	case key.Matches(keyPress, keys.open), key.Matches(keyPress, keys.move):
+		if selected, exists := currentModel.selectedRow(); exists && selected.kind == sessionRow {
+			currentModel.repository.RememberMovedOut(selected.session.SessionId, currentModel.grabbedFromFolderId)
+			currentModel.saveRepository()
+		}
 		currentModel.grabbed = nil
 	}
 	return currentModel, nil
 }
 
 // updateMouse selects the clicked row and moves a session dragged onto another row into that row's folder.
+// A click on the ✦ badge opens the review queue.
 func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := message.Mouse()
-	rows := currentModel.rows()
-	rowIndex := mouse.Y - listTopLine
 	if mouse.Button != tea.MouseLeft || currentModel.grabbed != nil {
 		return currentModel, nil
 	}
-	isOverRow := rowIndex >= 0 && rowIndex < len(rows)
+	if _, isClick := message.(tea.MouseClickMsg); isClick && mouse.Y == 0 && mouse.X >= currentModel.panelWidth()-4 {
+		currentModel.openReview()
+		return currentModel, nil
+	}
+	rows := currentModel.rows()
+	rowIndex := mouse.Y - listTopLine + currentModel.listOffset
+	isOverRow := mouse.Y >= listTopLine && rowIndex < len(rows) && mouse.Y < listTopLine+currentModel.listHeight()
 	switch message.(type) {
 	case tea.MouseClickMsg:
 		currentModel.dragging = nil
 		if isOverRow {
+			if currentModel.listCursor == rowIndex && !rows[rowIndex].isMovable() {
+				currentModel.openRow(rows[rowIndex])
+			}
 			currentModel.listCursor = rowIndex
-			if rows[rowIndex].folder == nil {
+			if rows[rowIndex].isMovable() {
 				currentModel.dragging = sameItemAs(rows[rowIndex])
 			}
 		}
@@ -182,28 +246,23 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 	case tea.MouseReleaseMsg:
 		dragging := currentModel.dragging
 		currentModel.dragging, currentModel.dropTargetRow = nil, -1
-		if dragging == nil || !isOverRow {
+		if dragging == nil || !isOverRow || rows[rowIndex].kind == archiveRow {
 			return currentModel, nil
 		}
 		if sourceIndex := slices.IndexFunc(rows, dragging); sourceIndex >= 0 && sourceIndex != rowIndex {
-			currentModel.moveRowToFolder(rows[sourceIndex], rows[rowIndex].folderId())
+			source := rows[sourceIndex]
+			fromFolderId := source.folderId()
+			// Saving sorts the sessions, so the row's pointer can't be trusted after the move.
+			movedSessionId := ""
+			if source.kind == sessionRow {
+				movedSessionId = source.session.SessionId
+			}
+			currentModel.moveRowToFolder(source, rows[rowIndex].folderId())
+			if movedSessionId != "" {
+				currentModel.repository.RememberMovedOut(movedSessionId, fromFolderId)
+				currentModel.saveRepository()
+			}
 		}
 	}
 	return currentModel, nil
-}
-
-// sameItemAs matches the row showing the same folder, session or pane, even after the list was rebuilt.
-func sameItemAs(row listRow) func(listRow) bool {
-	if row.folder != nil {
-		folderId := row.folder.Id
-		return func(candidate listRow) bool { return candidate.folder != nil && candidate.folder.Id == folderId }
-	}
-	if row.session != nil {
-		sessionId := row.session.SessionId
-		return func(candidate listRow) bool {
-			return candidate.session != nil && candidate.session.SessionId == sessionId
-		}
-	}
-	paneId := row.open.paneId
-	return func(candidate listRow) bool { return candidate.open != nil && candidate.open.paneId == paneId }
 }

@@ -3,14 +3,17 @@ package ui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/IgorAmi52/den/internal/agent"
+	"github.com/IgorAmi52/den/internal/brain"
+	"github.com/IgorAmi52/den/internal/git"
 	"github.com/IgorAmi52/den/internal/layout"
 	"github.com/IgorAmi52/den/internal/store"
 	"github.com/IgorAmi52/den/internal/tmux"
@@ -21,19 +24,30 @@ const (
 	PanelWidth         = 30
 	PanelMarkerOption  = "@den-panel"
 	windowMarkerOption = "@den"
+	// organizeMinimumWidth is the panel width from which the panel shows the organize view instead of the tree.
+	organizeMinimumWidth = 80
+	// observeEvery is how often den rereads transcripts and git to look for new suggestions.
+	observeEvery = 20 * time.Second
 )
 
-// Each agent pane remembers what runs in it, so a restarted panel can pick the sessions up again.
+// Each agent pane remembers what runs in it, so a restarted panel can pick the sessions up again,
+// and the pane border can show it.
 const (
 	paneToolOption       = "@den-tool"
 	paneSessionOption    = "@den-session-id"
 	paneLaunchedAtOption = "@den-launched-at"
 	paneTitleOption      = "@den-title"
 	paneFolderOption     = "@den-folder-id"
+	paneFolderNameOption = "@den-folder"
+	paneNumberOption     = "@den-number"
+	paneStatusOption     = "@den-status"
+	// paneContextOption is "none" for a session started without context, "empty" when its folders have no notes yet,
+	// and "notes" when it started with notes.
+	paneContextOption = "@den-context"
 )
 
-// paneLabel shows "tool · session title" once a session has a title, and the running command before that.
-const paneLabel = "#{?#{@den-title},#{@den-tool} · #{=60:@den-title},#{pane_current_command}}"
+// paneLabel reads "claude · ◆ Eval · session title"; before the agent is known, it shows the running command.
+const paneLabel = "#{?#{@den-tool},#{@den-tool}#{?#{@den-folder}, · #{?#{==:#{@den-context},notes},◆ ,}#{@den-folder},}#{?#{@den-title}, · #{=50:@den-title},},#{pane_current_command}}"
 
 var windowOptions = map[string]string{
 	"window-style":             "fg=colour247",
@@ -42,42 +56,101 @@ var windowOptions = map[string]string{
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
-	"pane-border-format":       "#{?pane_active,#[bg=colour75 fg=colour231 bold] " + paneLabel + " #[default], " + paneLabel + " }",
-	windowMarkerOption:         "1",
+	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[default], den },#{?#{==:#{@den-status},waiting}," +
+		"#[fg=colour214 bold] ! #{@den-number} needs you · " + paneLabel + " #[default]," +
+		"#{?pane_active,#[bg=colour75 fg=colour231 bold] #{@den-number} " + paneLabel + " #[default], #{@den-number} " + paneLabel + " }}}",
+	windowMarkerOption: "1",
 }
+
+type screen int
+
+const (
+	workScreen screen = iota
+	welcomeScreen
+	reviewScreen
+	chatScreen
+	helpScreen
+)
 
 type openAgent struct {
 	paneId     string
 	tool       string
 	sessionId  string
 	folderId   string
+	status     string
+	context    string
+	number     int
 	launchedAt time.Time
 }
 
 type tickMessage struct{}
 
+// observedMessage carries what den read from transcripts and git in the background.
+type observedMessage struct {
+	digests        map[string]agent.Digest
+	mergedBranches map[string]bool
+}
+
+// confirmation is a yes/no question shown in the footer while the list stays visible;
+// detail says what saying yes does.
+type confirmation struct {
+	question string
+	detail   string
+	accept   func(currentModel *model) tea.Cmd
+}
+
 type model struct {
 	panelPaneId      string
 	windowId         string
 	workingDirectory string
+	executable       string
 	installedAgents  []agent.Adapter
 	openAgents       []openAgent
 	repository       store.Repository
-	listCursor       int
+	theme            theme
+	isDark           bool
+	colorProfile     colorprofile.Profile
+	keys             keyMap
+	width            int
+	height           int
+
+	// screens is the stack of full-window screens over the work view; the work view shows when it is empty.
+	screens []screen
+	// zoomedForScreen is set when den zoomed the panel to show a screen, so closing the last one zooms back out.
+	zoomedForScreen bool
+
+	listCursor int
+	listOffset int
+	// inboxCollapsed and archiveExpanded fold the two built-in sections of the tree.
+	inboxCollapsed  bool
+	archiveExpanded bool
 	// newSessionFolderId is the folder the next new session goes into, chosen when n was pressed.
-	newSessionFolderId string
-	picking            bool
-	pickerCursor       int
-	confirmingQuit     bool
-	deleting           *listRow
-	prompt             *textPrompt
-	statusMessage      string
+	newSessionFolderId       string
+	newSessionWithoutContext bool
+	picking                  bool
+	pickerCursor             int
+	confirming               *confirmation
+	prompt                   *textPrompt
+	statusMessage            string
+	statusIsError            bool
 	// grabbed matches the session being carried with the arrows; grabbedFromFolderId restores it on esc.
 	grabbed             func(listRow) bool
 	grabbedFromFolderId string
+	grabbedWasArchived  bool
 	// dragging matches the session held with the mouse, dropTargetRow the row under the mouse, or -1.
 	dragging      func(listRow) bool
 	dropTargetRow int
+
+	organize organizeState
+	review   reviewState
+	welcome  *welcomeState
+	chat     chatState
+
+	digests        map[string]agent.Digest
+	mergedBranches map[string]bool
+	// contextTokens holds the size of each folder's context.md, the top level's under "", with no entry when empty.
+	contextTokens map[string]int
+	lastObserved  time.Time
 }
 
 func Run() error {
@@ -107,25 +180,45 @@ func Run() error {
 	if err := tmux.BindTitleDragToSwapPanes(windowMarkerOption, PanelMarkerOption); err != nil {
 		return err
 	}
+	if err := tmux.BindPanelHotkey(windowMarkerOption); err != nil {
+		return err
+	}
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	repository, err := store.Load(workingDirectory)
+	repository, err := store.Load(git.RepositoryRoot(workingDirectory))
 	if err != nil {
 		return err
 	}
+	colorProfile := colorprofile.Detect(os.Stdout, os.Environ())
 	initialModel := model{
 		panelPaneId:      panelPaneId,
 		windowId:         windowId,
 		workingDirectory: workingDirectory,
+		executable:       executable,
 		installedAgents:  agent.Installed(),
 		repository:       repository,
+		theme:            newTheme(true, colorProfile),
+		isDark:           true,
+		colorProfile:     colorProfile,
+		keys:             newKeyMap(),
 		dropTargetRow:    -1,
+		digests:          map[string]agent.Digest{},
+		mergedBranches:   map[string]bool{},
+		contextTokens:    map[string]int{},
+		organize:         newOrganizeState(),
+		review:           newReviewState(),
+		chat:             newChatState(),
 	}
 	if err := initialModel.refreshAgents(); err != nil {
 		return err
 	}
+	if !repository.Welcomed {
+		initialModel.welcome = newWelcomeState()
+		initialModel.openScreen(welcomeScreen)
+	}
+	initialModel.refreshContextTokens()
 	if err := layout.Apply(windowId, PanelMarkerOption, PanelWidth); err != nil {
 		return err
 	}
@@ -140,198 +233,237 @@ func tick() tea.Cmd {
 }
 
 func (currentModel model) Init() tea.Cmd {
-	return tick()
+	commands := []tea.Cmd{tick(), tea.RequestBackgroundColor, currentModel.observe()}
+	if currentModel.welcome != nil {
+		commands = append(commands, currentModel.welcome.spinner.Tick, currentModel.scanPastSessions())
+	}
+	return tea.Batch(commands...)
 }
 
 func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typedMessage := message.(type) {
+	case tea.WindowSizeMsg:
+		currentModel.width, currentModel.height = typedMessage.Width, typedMessage.Height
+		currentModel.chat.resize(currentModel.width)
+		currentModel.scrollToCursor()
+		return currentModel, nil
+	case tea.BackgroundColorMsg:
+		currentModel.isDark = typedMessage.IsDark()
+		currentModel.theme = newTheme(currentModel.isDark, currentModel.colorProfile)
+		return currentModel, nil
+	case tea.ColorProfileMsg:
+		currentModel.colorProfile = typedMessage.Profile
+		currentModel.theme = newTheme(currentModel.isDark, currentModel.colorProfile)
+		return currentModel, nil
 	case tickMessage:
-		currentModel.reportError(currentModel.refreshAgents())
-		currentModel.reportError(currentModel.trackNewSessions())
-		return currentModel, tick()
-	case tea.KeyPressMsg:
-		if currentModel.prompt != nil {
-			return currentModel.updatePrompt(typedMessage)
-		}
-		if currentModel.confirmingQuit {
-			return currentModel.updateQuitConfirmation(typedMessage.String())
-		}
-		if currentModel.deleting != nil {
-			return currentModel.updateDeleteConfirmation(typedMessage.String())
-		}
-		if currentModel.picking {
-			return currentModel.updatePicker(typedMessage.String())
-		}
-		if currentModel.grabbed != nil {
-			return currentModel.updateGrab(typedMessage.String())
-		}
-		return currentModel.updateMain(typedMessage.String())
-	case tea.MouseMsg:
-		if currentModel.prompt == nil && currentModel.deleting == nil && !currentModel.picking && !currentModel.confirmingQuit {
-			return currentModel.updateMouse(typedMessage)
-		}
-	}
-	if currentModel.prompt != nil {
-		return currentModel.updatePrompt(message)
-	}
-	return currentModel, nil
-}
-
-func (currentModel model) updateMain(key string) (tea.Model, tea.Cmd) {
-	currentModel.statusMessage = ""
-	switch key {
-	case "q", "ctrl+c":
-		currentModel.confirmingQuit = true
-	case "n":
-		currentModel.newSessionFolderId = currentModel.folderForNewItems()
-		if len(currentModel.openAgents) >= maximumAgents {
-			currentModel.statusMessage = fmt.Sprintf("max %d agents", maximumAgents)
-		} else if len(currentModel.installedAgents) == 1 {
-			currentModel.openAgent(currentModel.installedAgents[0])
-		} else {
-			currentModel.picking = true
-			currentModel.pickerCursor = 0
-		}
-	case "up", "k":
-		currentModel.listCursor = max(currentModel.listCursor-1, 0)
-	case "down", "j":
-		currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
-	case "enter":
-		if selected, exists := currentModel.selectedRow(); exists {
-			if selected.folder != nil {
-				currentModel.toggleFolder(selected.folder.Id)
-			} else if selected.open != nil {
-				currentModel.reportError(tmux.SelectPane(selected.open.paneId))
-			} else {
-				currentModel.resumeSession(selected.session.SessionId)
-			}
-		}
-	case "space", "m":
-		currentModel.startGrab()
-	// Shortcuts for terminals that send Shift+arrows; Terminal.app sends them as plain arrows, so grab mode is the main way.
-	case "shift+down", "J":
-		currentModel.moveSelected(1)
-	case "shift+up", "K":
-		currentModel.moveSelected(-1)
-	case "f":
-		return currentModel, currentModel.askForNewFolder()
-	case "r":
-		return currentModel, currentModel.askForRename()
-	case "d":
-		if selected, exists := currentModel.selectedRow(); exists {
-			currentModel.deleting = &selected
-		}
-	}
-	return currentModel, nil
-}
-
-// updateDeleteConfirmation forgets the session in den and closes its pane; the agent keeps its own history.
-func (currentModel model) updateDeleteConfirmation(key string) (tea.Model, tea.Cmd) {
-	deleting := currentModel.deleting
-	currentModel.deleting = nil
-	if key != "y" {
-		return currentModel, nil
-	}
-	if deleting.folder != nil {
-		currentModel.repository.DeleteFolder(deleting.folder.Id)
-		currentModel.saveRepository()
-	}
-	if deleting.open != nil {
-		currentModel.reportError(tmux.KillPane(deleting.open.paneId))
-	}
-	if deleting.session != nil {
-		currentModel.repository.Sessions = slices.DeleteFunc(currentModel.repository.Sessions, func(saved store.Session) bool {
-			return saved.SessionId == deleting.session.SessionId
+		currentModel.keepingSelection(func() {
+			currentModel.reportError(currentModel.refreshAgents())
+			currentModel.reportError(currentModel.trackNewSessions())
 		})
-		currentModel.saveRepository()
-	}
-	currentModel.reportError(currentModel.refreshAgents())
-	currentModel.listCursor = max(min(currentModel.listCursor, len(currentModel.rows())-1), 0)
-	return currentModel, nil
-}
-
-func (currentModel model) updateQuitConfirmation(key string) (tea.Model, tea.Cmd) {
-	currentModel.confirmingQuit = false
-	if key != "y" {
+		currentModel.refreshContextTokens()
+		commands := []tea.Cmd{tick()}
+		if time.Since(currentModel.lastObserved) > observeEvery {
+			currentModel.lastObserved = time.Now()
+			commands = append(commands, currentModel.observe())
+		}
+		return currentModel, tea.Batch(commands...)
+	case observedMessage:
+		currentModel.keepingSelection(func() { currentModel.applyObservation(typedMessage) })
+		return currentModel, nil
+	case editorClosedMessage:
+		return currentModel.afterEditorClosed(typedMessage)
+	case pastSessionsMessage:
+		return currentModel.updateWelcomeScan(typedMessage)
+	case chatReplyMessage:
+		currentModel.chat.addMessage(typedMessage.reply)
 		return currentModel, nil
 	}
-	if err := tmux.KillWindow(currentModel.windowId); err != nil {
-		currentModel.reportError(err)
-		return currentModel, nil
+	switch currentModel.currentScreen() {
+	case welcomeScreen:
+		return currentModel.updateWelcome(message)
+	case reviewScreen:
+		return currentModel.updateReview(message)
+	case chatScreen:
+		return currentModel.updateChat(message)
+	case helpScreen:
+		return currentModel.updateHelp(message)
 	}
-	return currentModel, tea.Quit
+	if currentModel.isOrganizeLayout() {
+		return currentModel.updateOrganize(message)
+	}
+	return currentModel.updateWork(message)
 }
 
-func (currentModel model) updatePicker(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "up", "k":
-		currentModel.pickerCursor = max(currentModel.pickerCursor-1, 0)
-	case "down", "j":
-		currentModel.pickerCursor = min(currentModel.pickerCursor+1, len(currentModel.installedAgents)-1)
-	case "enter":
-		currentModel.picking = false
-		currentModel.openAgent(currentModel.installedAgents[currentModel.pickerCursor])
-	case "esc", "q":
-		currentModel.picking = false
+// keepingSelection runs a background change that can add, drop or reorder sessions,
+// and keeps the same row selected in the panel and the same session in organize.
+func (currentModel *model) keepingSelection(change func()) {
+	var matchesRow func(listRow) bool
+	if selected, exists := currentModel.selectedRow(); exists {
+		matchesRow = sameItemAs(selected)
 	}
-	return currentModel, nil
+	selectedSessionId := ""
+	if item, exists := currentModel.selectedItem(); exists && item.kind == sessionItem {
+		selectedSessionId = item.session.SessionId
+	}
+	change()
+	if matchesRow != nil {
+		currentModel.cursorTo(matchesRow)
+	}
+	for index, item := range currentModel.organizeItems() {
+		if selectedSessionId != "" && item.kind == sessionItem && item.session.SessionId == selectedSessionId {
+			currentModel.organize.itemCursor = index
+		}
+	}
+}
+
+func (currentModel model) currentScreen() screen {
+	if len(currentModel.screens) == 0 {
+		return workScreen
+	}
+	return currentModel.screens[len(currentModel.screens)-1]
+}
+
+// isOrganizeLayout is true when the panel is wide: zoomed, or alone in the window because no agent is open.
+func (currentModel model) isOrganizeLayout() bool {
+	return currentModel.width >= organizeMinimumWidth
+}
+
+// openScreen shows a full-window screen, zooming the panel first when it is the narrow column.
+func (currentModel *model) openScreen(next screen) {
+	if !currentModel.isOrganizeLayout() && len(currentModel.openAgents) > 0 && !tmux.IsZoomed(currentModel.windowId) {
+		if currentModel.reportError(tmux.ToggleZoom(currentModel.panelPaneId)) {
+			return
+		}
+		currentModel.zoomedForScreen = true
+	}
+	currentModel.screens = append(currentModel.screens, next)
+}
+
+func (currentModel *model) closeScreen() {
+	if len(currentModel.screens) > 0 {
+		currentModel.screens = currentModel.screens[:len(currentModel.screens)-1]
+	}
+	if len(currentModel.screens) == 0 && currentModel.zoomedForScreen {
+		currentModel.zoomedForScreen = false
+		if tmux.IsZoomed(currentModel.windowId) {
+			currentModel.reportError(tmux.ToggleZoom(currentModel.panelPaneId))
+		}
+	}
+}
+
+// toggleOrganize zooms the panel to the full window, or back to the narrow column beside the agents.
+// Whatever was selected stays selected across the switch.
+func (currentModel *model) toggleOrganize() {
+	if len(currentModel.openAgents) == 0 {
+		currentModel.setStatus("no agents open, so the panel already fills the window")
+		return
+	}
+	if currentModel.isOrganizeLayout() {
+		currentModel.selectInPanelFromOrganize()
+	} else {
+		currentModel.selectInOrganizeFromPanel()
+	}
+	currentModel.zoomedForScreen = false
+	currentModel.reportError(tmux.ToggleZoom(currentModel.panelPaneId))
+}
+
+// jumpToAgent focuses an agent pane; tmux ends the zoom when another pane is selected.
+func (currentModel *model) jumpToAgent(key string) {
+	agentIndex := int(key[0] - '1')
+	if agentIndex >= len(currentModel.openAgents) {
+		currentModel.setStatus(fmt.Sprintf("no agent %d open", agentIndex+1))
+		return
+	}
+	currentModel.zoomedForScreen = false
+	currentModel.reportError(tmux.SelectPane(currentModel.openAgents[agentIndex].paneId))
 }
 
 func (currentModel *model) openAgent(adapter agent.Adapter) {
-	command, sessionId := adapter.NewSessionCommand()
-	paneId := currentModel.launchInPane(adapter.Name(), sessionId, "", currentModel.newSessionFolderId, command)
+	folderId := currentModel.newSessionFolderId
+	launch, contextState := currentModel.launchFor(folderId, !currentModel.newSessionWithoutContext)
+	command, sessionId := adapter.NewSessionCommand(launch)
+	paneId := currentModel.launchInPane(adapter.Name(), sessionId, "", folderId, contextState, currentModel.workingDirectory, command)
+	if contextState == "none" {
+		currentModel.setStatus("started without context")
+	}
 	currentModel.cursorTo(func(row listRow) bool {
 		return row.open != nil && row.open.paneId == paneId
 	})
 }
 
+// launchFor builds what den adds to an agent's command line: the merged context, unless left out, and the status hook.
+func (currentModel *model) launchFor(folderId string, withContext bool) (agent.Launch, string) {
+	launch := agent.Launch{StatusCommand: []string{currentModel.executable, "hook", "status"}}
+	if !withContext {
+		return launch, "none"
+	}
+	text, writableDirectories, hasNotes := currentModel.repository.MergedContext(folderId)
+	launch.Context, launch.WritableDirectories = text, writableDirectories
+	if hasNotes {
+		return launch, "notes"
+	}
+	return launch, "empty"
+}
+
 func (currentModel *model) resumeSession(sessionId string) {
-	for _, open := range currentModel.openAgents {
-		if open.sessionId == sessionId {
-			currentModel.reportError(tmux.SelectPane(open.paneId))
-			return
-		}
+	if open := currentModel.openAgentFor(sessionId); open != nil {
+		currentModel.focusPane(open.paneId)
+		return
 	}
 	if len(currentModel.openAgents) >= maximumAgents {
-		currentModel.statusMessage = fmt.Sprintf("max %d agents, close one first", maximumAgents)
+		currentModel.setError(fmt.Sprintf("%d agents open, close one first", maximumAgents))
 		return
 	}
 	session := currentModel.repository.FindSession(sessionId)
 	adapter, known := agent.ByName(session.Tool)
 	if !known {
-		currentModel.statusMessage = "unknown tool " + session.Tool
+		currentModel.setError("unknown tool " + session.Tool)
 		return
 	}
-	currentModel.launchInPane(session.Tool, sessionId, session.Title, session.FolderId, adapter.ResumeCommand(sessionId))
+	workingDirectory := session.WorkingDirectory
+	if information, err := os.Stat(workingDirectory); err != nil || !information.IsDir() {
+		workingDirectory = currentModel.workingDirectory
+	}
+	launch, contextState := currentModel.launchFor(session.FolderId, !session.WithoutContext)
+	currentModel.launchInPane(session.Tool, sessionId, session.Title, session.FolderId, contextState, workingDirectory, adapter.ResumeCommand(sessionId, launch))
 	session.LastActivityAt = time.Now()
+	session.Archived = false
 	currentModel.saveRepository()
 	currentModel.cursorTo(func(row listRow) bool {
 		return row.session != nil && row.session.SessionId == sessionId
 	})
 }
 
+// focusPane selects an agent pane, leaving the zoomed panel first.
+func (currentModel *model) focusPane(paneId string) {
+	currentModel.zoomedForScreen = false
+	currentModel.reportError(tmux.SelectPane(paneId))
+}
+
 // launchInPane splits the last pane so the new agent comes last in pane order, then lets the layout place it.
-func (currentModel *model) launchInPane(tool string, sessionId string, title string, folderId string, command []string) string {
+func (currentModel *model) launchInPane(tool string, sessionId string, title string, folderId string, contextState string, workingDirectory string, command []string) string {
 	targetPaneId := currentModel.panelPaneId
 	if len(currentModel.openAgents) > 0 {
 		targetPaneId = currentModel.openAgents[len(currentModel.openAgents)-1].paneId
 	}
 	launchedAt := time.Now()
-	paneId, err := tmux.SplitPane(targetPaneId, true, currentModel.workingDirectory, command)
-	if err != nil {
-		currentModel.reportError(err)
+	paneId, err := tmux.SplitPane(targetPaneId, true, workingDirectory, command)
+	if currentModel.reportError(err) {
 		return ""
 	}
-	currentModel.reportError(tmux.SetPaneOption(paneId, paneToolOption, tool))
-	currentModel.reportError(tmux.SetPaneOption(paneId, paneLaunchedAtOption, strconv.FormatInt(launchedAt.UnixMilli(), 10)))
-	if sessionId != "" {
-		currentModel.reportError(tmux.SetPaneOption(paneId, paneSessionOption, sessionId))
+	paneOptions := map[string]string{
+		paneToolOption:       tool,
+		paneLaunchedAtOption: strconv.FormatInt(launchedAt.UnixMilli(), 10),
+		paneSessionOption:    sessionId,
+		paneTitleOption:      title,
+		paneFolderOption:     folderId,
+		paneFolderNameOption: currentModel.repository.FolderName(folderId),
+		paneContextOption:    contextState,
 	}
-	if title != "" {
-		currentModel.reportError(tmux.SetPaneOption(paneId, paneTitleOption, title))
-	}
-	if folderId != "" {
-		currentModel.reportError(tmux.SetPaneOption(paneId, paneFolderOption, folderId))
+	for option, value := range paneOptions {
+		if value != "" {
+			currentModel.reportError(tmux.SetPaneOption(paneId, option, value))
+		}
 	}
 	currentModel.reportError(currentModel.refreshAgents())
 	currentModel.reportError(layout.Apply(currentModel.windowId, PanelMarkerOption, PanelWidth))
@@ -340,7 +472,8 @@ func (currentModel *model) launchInPane(tool string, sessionId string, title str
 
 // refreshAgents reads the agents from tmux in pane order, so numbering follows the screen after swaps.
 func (currentModel *model) refreshAgents() error {
-	windowPanes, err := tmux.ListPanes(currentModel.windowId, paneToolOption, paneSessionOption, paneLaunchedAtOption, paneFolderOption)
+	windowPanes, err := tmux.ListPanes(currentModel.windowId, paneToolOption, paneSessionOption, paneLaunchedAtOption,
+		paneFolderOption, paneStatusOption, paneContextOption, paneNumberOption)
 	if err != nil {
 		return err
 	}
@@ -349,12 +482,21 @@ func (currentModel *model) refreshAgents() error {
 		if pane.Id == currentModel.panelPaneId {
 			continue
 		}
+		number := len(currentModel.openAgents) + 1
+		if pane.Options[paneNumberOption] != strconv.Itoa(number) {
+			if err := tmux.SetPaneOption(pane.Id, paneNumberOption, strconv.Itoa(number)); err != nil {
+				return err
+			}
+		}
 		launchedAtMilliseconds, _ := strconv.ParseInt(pane.Options[paneLaunchedAtOption], 10, 64)
 		currentModel.openAgents = append(currentModel.openAgents, openAgent{
 			paneId:     pane.Id,
 			tool:       pane.Options[paneToolOption],
 			sessionId:  pane.Options[paneSessionOption],
 			folderId:   pane.Options[paneFolderOption],
+			status:     pane.Options[paneStatusOption],
+			context:    pane.Options[paneContextOption],
+			number:     number,
 			launchedAt: time.UnixMilli(launchedAtMilliseconds),
 		})
 	}
@@ -372,8 +514,13 @@ func (currentModel *model) trackNewSessions() error {
 		if err != nil {
 			return err
 		}
-		if !found {
+		// Two Codex panes started close together can match the same transcript; only the first gets it.
+		if !found || (open.sessionId == "" && currentModel.repository.FindSession(foundSession.SessionId) != nil) {
 			continue
+		}
+		folderId := open.folderId
+		if currentModel.repository.FindFolder(folderId) == nil {
+			folderId = ""
 		}
 		if open.sessionId == "" {
 			if err := tmux.SetPaneOption(open.paneId, paneSessionOption, foundSession.SessionId); err != nil {
@@ -382,14 +529,17 @@ func (currentModel *model) trackNewSessions() error {
 			currentModel.openAgents[agentIndex].sessionId = foundSession.SessionId
 		}
 		now := time.Now()
-		title := strings.Join(strings.Fields(foundSession.FirstPrompt), " ")
+		title := truncate(oneLine(foundSession.FirstPrompt), 120)
 		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
-			Tool:           open.tool,
-			SessionId:      foundSession.SessionId,
-			FolderId:       open.folderId,
-			Title:          title,
-			CreatedAt:      now,
-			LastActivityAt: now,
+			Tool:             open.tool,
+			SessionId:        foundSession.SessionId,
+			FolderId:         folderId,
+			WorkingDirectory: currentModel.workingDirectory,
+			Branch:           git.CurrentBranch(currentModel.workingDirectory),
+			Title:            title,
+			WithoutContext:   open.context == "none",
+			CreatedAt:        now,
+			LastActivityAt:   now,
 		})
 		currentModel.saveRepository()
 		if err := tmux.SetPaneOption(open.paneId, paneTitleOption, title); err != nil {
@@ -399,16 +549,130 @@ func (currentModel *model) trackNewSessions() error {
 	return nil
 }
 
+// observe reads every session's transcript and the merged branches in the background.
+func (currentModel model) observe() tea.Cmd {
+	type sessionReference struct{ tool, sessionId string }
+	var references []sessionReference
+	for _, session := range currentModel.repository.Sessions {
+		references = append(references, sessionReference{tool: session.Tool, sessionId: session.SessionId})
+	}
+	workingDirectory := currentModel.workingDirectory
+	return func() tea.Msg {
+		digests := map[string]agent.Digest{}
+		for _, reference := range references {
+			if adapter, known := agent.ByName(reference.tool); known {
+				if digest, found, err := adapter.Digest(reference.sessionId); err == nil && found {
+					digests[reference.sessionId] = digest
+				}
+			}
+		}
+		return observedMessage{digests: digests, mergedBranches: git.MergedBranches(workingDirectory)}
+	}
+}
+
+// applyObservation keeps session details current from their transcripts and runs the suggestion rules.
+func (currentModel *model) applyObservation(observed observedMessage) {
+	currentModel.digests, currentModel.mergedBranches = observed.digests, observed.mergedBranches
+	changed := false
+	for index := range currentModel.repository.Sessions {
+		session := &currentModel.repository.Sessions[index]
+		digest, found := observed.digests[session.SessionId]
+		if !found {
+			continue
+		}
+		if digest.Branch != "" && digest.Branch != session.Branch {
+			session.Branch, changed = digest.Branch, true
+		}
+		if digest.WorkingDirectory != "" && digest.WorkingDirectory != session.WorkingDirectory {
+			session.WorkingDirectory, changed = digest.WorkingDirectory, true
+		}
+		if digest.LastActivityAt.After(session.LastActivityAt) {
+			session.LastActivityAt, changed = digest.LastActivityAt, true
+		}
+	}
+	if currentModel.runRules() || changed {
+		currentModel.saveRepository()
+	}
+}
+
+// runRules offers what the local rules find in the current state; it reads nothing from disk, so it runs after every change.
+// It reports whether the queue changed.
+func (currentModel *model) runRules() bool {
+	openSessionIds := map[string]bool{}
+	for _, open := range currentModel.openAgents {
+		openSessionIds[open.sessionId] = true
+	}
+	changed := false
+	for _, suggestion := range brain.Suggest(brain.Observation{
+		Repository:     &currentModel.repository,
+		Digests:        currentModel.digests,
+		OpenSessionIds: openSessionIds,
+		MergedBranches: currentModel.mergedBranches,
+		Now:            time.Now(),
+	}) {
+		if currentModel.repository.Offer(suggestion) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// refreshContextTokens notes which folders have a context.md, and how big each is.
+func (currentModel *model) refreshContextTokens() {
+	contextTokens := map[string]int{}
+	folderIds := []string{""}
+	for _, folder := range currentModel.repository.Folders {
+		folderIds = append(folderIds, folder.Id)
+	}
+	for _, folderId := range folderIds {
+		if contextPath, err := currentModel.repository.ContextPath(folderId); err == nil {
+			if information, err := os.Stat(contextPath); err == nil && information.Size() > 1 {
+				contextTokens[folderId] = int(information.Size()+3) / 4
+			}
+		}
+	}
+	currentModel.contextTokens = contextTokens
+}
+
 // saveRepository keeps sessions ordered by last activity, newest first, and writes folders and sessions to disk.
+// The rules run first, so suggestions follow every change right away.
 func (currentModel *model) saveRepository() {
+	currentModel.runRules()
 	slices.SortStableFunc(currentModel.repository.Sessions, func(first store.Session, second store.Session) int {
 		return second.LastActivityAt.Compare(first.LastActivityAt)
 	})
 	currentModel.reportError(currentModel.repository.Save())
 }
 
-func (currentModel *model) reportError(err error) {
-	if err != nil {
-		currentModel.statusMessage = err.Error()
+func (currentModel *model) openAgentFor(sessionId string) *openAgent {
+	for agentIndex := range currentModel.openAgents {
+		if currentModel.openAgents[agentIndex].sessionId == sessionId {
+			return &currentModel.openAgents[agentIndex]
+		}
 	}
+	return nil
+}
+
+// reportError shows the error in the footer and tells whether there was one.
+func (currentModel *model) reportError(err error) bool {
+	if err != nil {
+		currentModel.setError(err.Error())
+	}
+	return err != nil
+}
+
+func (currentModel *model) setError(message string) {
+	currentModel.statusMessage, currentModel.statusIsError = message, true
+}
+
+func (currentModel *model) setStatus(message string) {
+	currentModel.statusMessage, currentModel.statusIsError = message, false
+}
+
+func (currentModel *model) clearStatus() {
+	currentModel.statusMessage, currentModel.statusIsError = "", false
+}
+
+func (currentModel model) repositoryName() string {
+	return filepath.Base(currentModel.repository.RepositoryPath)
 }

@@ -27,8 +27,19 @@ func run(arguments []string) error {
 	if len(arguments) > 0 && arguments[0] == "panel" {
 		return ui.Run()
 	}
+	// tmux runs "den layout" from its layout hooks, with nowhere to show an error but a message over the panel,
+	// so a failed layout, such as for a window that just closed, stays silent.
 	if len(arguments) > 1 && arguments[0] == "layout" {
-		return layout.Apply(arguments[1], ui.PanelMarkerOption, ui.PanelWidth)
+		layout.Apply(arguments[1], ui.PanelMarkerOption, ui.PanelWidth)
+		return nil
+	}
+	// Agents run "den hook status <state>" from their hooks; the pane they run in comes from tmux.
+	// Codex appends a JSON argument, which is ignored.
+	if len(arguments) > 2 && arguments[0] == "hook" && arguments[1] == "status" {
+		if paneId := tmux.CurrentPane(); paneId != "" {
+			return tmux.SetPaneStatus(paneId, arguments[2])
+		}
+		return nil
 	}
 	if err := checkDependencies(); err != nil {
 		return err
