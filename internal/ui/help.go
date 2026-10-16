@@ -33,7 +33,7 @@ func (currentModel model) helpGroups() []helpGroup {
 			keys.rename, keys.archive, keys.delete, keys.filter,
 		}},
 		{title: "FOLDERS AND DEN", bindings: []key.Binding{
-			relabeled(keys.newFolder, "new folder"), relabeled(keys.editContext, "edit context.md"),
+			keys.newFolder, relabeled(keys.newSubfolder, "subfolder of the selected folder"), relabeled(keys.editContext, "edit context.md"),
 			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview, relabeled(keys.review, "review proposals"),
 			relabeled(keys.chat, "ask den"), keys.quit,
 		}},

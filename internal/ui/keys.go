@@ -14,7 +14,8 @@ type keyMap struct {
 	open, accept, reject       key.Binding
 	newSession, newWithout     key.Binding
 	newFromAgent               key.Binding
-	newFolder, rename, delete  key.Binding
+	newFolder, newSubfolder    key.Binding
+	rename, delete             key.Binding
 	move, archive, editContext key.Binding
 	wide, review, chat         key.Binding
 	help, jump, quit, filter   key.Binding
@@ -40,7 +41,8 @@ func newKeyMap() keyMap {
 		newSession:    binding([]string{"n"}, "n", "new"),
 		newWithout:    binding([]string{"N"}, "N", "new without context"),
 		newFromAgent:  binding([]string{"alt+n"}, "⌥N", "new agent"),
-		newFolder:     binding([]string{"f"}, "f", "folder"),
+		newFolder:     binding([]string{"f"}, "f", "new folder"),
+		newSubfolder:  binding([]string{"F"}, "F", "subfolder"),
 		rename:        binding([]string{"r"}, "r", "rename"),
 		delete:        binding([]string{"d"}, "d", "delete"),
 		move:          binding([]string{"m"}, "m", "move"),

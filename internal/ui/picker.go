@@ -13,6 +13,9 @@ import (
 
 const folderPickerWidth = 36
 
+// archiveTarget stands for the archive in the picker; folder ids are hex, so it can't clash with one.
+const archiveTarget = "archive"
+
 // folderPicker is the overlay that asks which folder something goes to.
 // topLevelLabel names the top level: the Inbox for sessions, the top of the tree for folders.
 type folderPicker struct {
@@ -31,7 +34,8 @@ type pickedFolder struct {
 
 // pickFolder opens the picker with its cursor on currentFolderId. The folder being moved, if any,
 // is left out with its subfolders, since a folder can't go inside itself.
-func (currentModel *model) pickFolder(title string, topLevelLabel string, currentFolderId string, movingFolderId string, onPick func(currentModel *model, folderId string)) {
+// With withArchive, the archive comes last, for sessions.
+func (currentModel *model) pickFolder(title string, topLevelLabel string, currentFolderId string, movingFolderId string, withArchive bool, onPick func(currentModel *model, folderId string)) {
 	picker := &folderPicker{title: title, topLevelLabel: topLevelLabel, folderIds: []string{""}, onPick: onPick}
 	for _, entry := range currentModel.allFolders() {
 		isInsideMovingFolder := false
@@ -42,6 +46,9 @@ func (currentModel *model) pickFolder(title string, topLevelLabel string, curren
 			picker.folderIds = append(picker.folderIds, entry.folder.Id)
 		}
 	}
+	if withArchive {
+		picker.folderIds = append(picker.folderIds, archiveTarget)
+	}
 	picker.cursor = max(slices.Index(picker.folderIds, currentFolderId), 0)
 	currentModel.picker = picker
 }
@@ -51,12 +58,20 @@ func (currentModel *model) askWhereToMove(row listRow) {
 	switch row.kind {
 	case sessionRow:
 		sessionId := row.session.SessionId
-		currentModel.pickFolder("Move "+truncate(row.session.Title, 24)+" to", "Inbox", row.session.FolderId, "", func(currentModel *model, folderId string) {
+		currentFolderId := row.session.FolderId
+		if row.session.Archived {
+			currentFolderId = archiveTarget
+		}
+		currentModel.pickFolder("Move "+truncate(row.session.Title, 24)+" to", "Inbox", currentFolderId, "", true, func(currentModel *model, folderId string) {
+			if folderId == archiveTarget {
+				currentModel.setArchived([]string{sessionId}, true)
+				return
+			}
 			currentModel.moveSessionToFolder(sessionId, folderId)
 		})
 	case newAgentRow:
 		paneId := row.open.paneId
-		currentModel.pickFolder("Move new "+row.open.tool+" to", "Inbox", row.open.folderId, "", func(currentModel *model, folderId string) {
+		currentModel.pickFolder("Move new "+row.open.tool+" to", "Inbox", row.open.folderId, "", false, func(currentModel *model, folderId string) {
 			for agentIndex := range currentModel.openAgents {
 				if currentModel.openAgents[agentIndex].paneId == paneId {
 					currentModel.moveRowToFolder(listRow{kind: newAgentRow, open: &currentModel.openAgents[agentIndex]}, folderId)
@@ -65,7 +80,7 @@ func (currentModel *model) askWhereToMove(row listRow) {
 		})
 	case folderRow:
 		folderId := row.folder.Id
-		currentModel.pickFolder("Move "+truncate(row.folder.Name, 24)+" into", "top level", row.folder.ParentId, folderId, func(currentModel *model, parentId string) {
+		currentModel.pickFolder("Move "+truncate(row.folder.Name, 24)+" into", "top level", row.folder.ParentId, folderId, false, func(currentModel *model, parentId string) {
 			currentModel.moveFolder(folderId, parentId)
 		})
 	default:
@@ -118,11 +133,13 @@ func (currentModel model) folderPickerBox() string {
 		if folder := currentModel.repository.FindFolder(folderId); folder != nil && folder.Branch != "" {
 			prefix += "⎇ "
 		}
-		name := currentModel.repository.FolderName(folderId)
-		if folderId == "" {
-			name = picker.topLevelLabel
+		left := []segment{{text: prefix + currentModel.repository.FolderName(folderId), style: theme.folder}}
+		switch folderId {
+		case "":
+			left[0].text = picker.topLevelLabel
+		case archiveTarget:
+			left = []segment{{text: "Archive", style: theme.archive}}
 		}
-		left := []segment{{text: prefix + name, style: theme.folder}}
 		var right []segment
 		if _, hasContext := currentModel.contextTokens[folderId]; hasContext && folderId != "" {
 			right = []segment{{text: "◆", style: theme.accent}}

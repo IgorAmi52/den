@@ -49,7 +49,7 @@ func (row listRow) isMovable() bool {
 	return row.kind == sessionRow || row.kind == newAgentRow
 }
 
-// rows lists the tree: the repo's context and guides, the Inbox, the folders by name, and the archive when it holds anything.
+// rows lists the tree: the repo's context and guides, the Inbox, the folders by name, and the archive last.
 // While filtering, only matching sessions show, under every folder that holds one.
 func (currentModel model) rows() []listRow {
 	filterText := strings.ToLower(currentModel.filter.Value())
@@ -78,12 +78,10 @@ func (currentModel model) treeRows(expandAll bool) []listRow {
 			rows = append(rows, currentModel.rowsInFolder(folder.Id, 1, expandAll)...)
 		}
 	}
-	if currentModel.repository.ArchivedCount() > 0 {
-		rows = append(rows, listRow{kind: archiveRow})
-		if currentModel.archiveExpanded || expandAll {
-			for _, session := range currentModel.archivedSessions() {
-				rows = append(rows, listRow{kind: sessionRow, session: session, open: currentModel.openAgentFor(session.SessionId), depth: 1})
-			}
+	rows = append(rows, listRow{kind: archiveRow})
+	if currentModel.archiveExpanded || expandAll {
+		for _, session := range currentModel.archivedSessions() {
+			rows = append(rows, listRow{kind: sessionRow, session: session, open: currentModel.openAgentFor(session.SessionId), depth: 1})
 		}
 	}
 	return rows

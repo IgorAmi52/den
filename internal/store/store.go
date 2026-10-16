@@ -33,9 +33,13 @@ type Session struct {
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
 	WithoutContext bool      `json:"withoutContext,omitempty"`
 	Archived       bool      `json:"archived,omitempty"`
+	ArchivedAt     time.Time `json:"archivedAt,omitzero"`
 	CreatedAt      time.Time `json:"createdAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
 }
+
+// ArchiveKeepsFor is how long a session stays in the archive before den forgets it. The agent keeps its own history.
+const ArchiveKeepsFor = 30 * 24 * time.Hour
 
 type Repository struct {
 	RepositoryPath string `json:"repoPath"`
@@ -183,6 +187,40 @@ func (repository *Repository) SessionCount(folderId string) int {
 		}
 	}
 	return count
+}
+
+// SetArchived archives a session, or brings it back, and drops what den proposed for it.
+func (repository *Repository) SetArchived(sessionId string, archived bool) {
+	session := repository.FindSession(sessionId)
+	if session == nil {
+		return
+	}
+	session.Archived = archived
+	session.ArchivedAt = time.Time{}
+	if archived {
+		session.ArchivedAt = time.Now()
+	}
+	repository.ForgetSessionSuggestions(sessionId)
+}
+
+// ForgetExpiredArchive drops sessions archived longer than ArchiveKeepsFor and tells how many went.
+// Sessions archived before den recorded the time start counting now.
+func (repository *Repository) ForgetExpiredArchive(now time.Time) int {
+	before := len(repository.Sessions)
+	repository.Sessions = slices.DeleteFunc(repository.Sessions, func(session Session) bool {
+		return session.Archived && !session.ArchivedAt.IsZero() && now.Sub(session.ArchivedAt) > ArchiveKeepsFor
+	})
+	for index := range repository.Sessions {
+		if session := &repository.Sessions[index]; session.Archived && session.ArchivedAt.IsZero() {
+			session.ArchivedAt = now
+		}
+	}
+	return before - len(repository.Sessions)
+}
+
+// ArchiveTimeLeft is how long until den forgets an archived session.
+func (session Session) ArchiveTimeLeft(now time.Time) time.Duration {
+	return max(session.ArchivedAt.Add(ArchiveKeepsFor).Sub(now), 0)
 }
 
 func (repository *Repository) ArchivedCount() int {

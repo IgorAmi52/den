@@ -309,7 +309,7 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 		}
 		right = append(right, segment{text: fmt.Sprint(currentModel.repository.SessionCount(row.folder.Id)), style: theme.dim})
 	case archiveRow:
-		left = []segment{{text: folderArrow(!currentModel.archiveExpanded) + " ", style: theme.faint}, {text: "Archive", style: theme.dim}}
+		left = []segment{{text: folderArrow(!currentModel.archiveExpanded) + " ", style: theme.faint}, {text: "Archive", style: theme.archive}}
 		right = []segment{{text: fmt.Sprint(currentModel.repository.ArchivedCount()), style: theme.dim}}
 	case newAgentRow:
 		left = append(currentModel.paneMarker(row.open), segment{text: " new " + row.open.tool, style: theme.dim})
@@ -319,9 +319,13 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 		if row.session.Archived {
 			left[len(left)-1].style = theme.dim
 		}
-		if ghost := currentModel.ghostText(row.session.SessionId); ghost != "" {
+		switch ghost := currentModel.ghostText(row.session.SessionId); {
+		case ghost != "":
 			right = []segment{{text: truncate(ghost, min(ghostWidth, width/2)), style: theme.ghost}}
-		} else {
+		case row.session.Archived:
+			daysLeft := int(row.session.ArchiveTimeLeft(time.Now()).Hours()/24) + 1
+			right = []segment{{text: fmt.Sprintf("%dd left", daysLeft), style: theme.faint}}
+		default:
 			right = []segment{{text: relativeAge(row.session.LastActivityAt), style: theme.dim}}
 		}
 	}
@@ -404,7 +408,7 @@ func (currentModel model) rowHints() []key.Binding {
 		case newAgentRow:
 			bindings = append(bindings, relabeled(keys.open, "focus"), keys.move, relabeled(keys.delete, "close"))
 		case folderRow:
-			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.rename, relabeled(keys.newFolder, "subfolder"), keys.delete)
+			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.rename, keys.newSubfolder, keys.delete)
 		case repositoryRow:
 			bindings = append(bindings, relabeled(keys.open, "show files"), relabeled(keys.editContext, "repo context"))
 		case contextFileRow:
@@ -416,6 +420,7 @@ func (currentModel model) rowHints() []key.Binding {
 	if !exists || selected.kind != folderRow {
 		bindings = append(bindings, keys.newSession)
 	}
+	bindings = append(bindings, keys.newFolder)
 	if len(currentModel.repository.Suggestions) > 0 {
 		bindings = append(bindings, keys.review)
 	}

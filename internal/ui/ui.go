@@ -191,6 +191,11 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	if repository.ForgetExpiredArchive(time.Now()) > 0 {
+		if err := repository.Save(); err != nil {
+			return err
+		}
+	}
 	colorProfile := colorprofile.Detect(os.Stdout, os.Environ())
 	initialModel := model{
 		panelPaneId:      panelPaneId,
@@ -414,7 +419,9 @@ func (currentModel *model) resumeSession(sessionId string) {
 	launch, contextState := currentModel.launchFor(session.FolderId, !session.WithoutContext)
 	currentModel.launchInPane(session.Tool, sessionId, session.Title, session.FolderId, contextState, workingDirectory, adapter.ResumeCommand(sessionId, launch))
 	session.LastActivityAt = time.Now()
-	session.Archived = false
+	if session.Archived {
+		currentModel.repository.SetArchived(sessionId, false)
+	}
 	currentModel.saveRepository()
 	currentModel.cursorTo(func(row listRow) bool {
 		return row.session != nil && row.session.SessionId == sessionId
@@ -576,6 +583,10 @@ func (currentModel *model) applyObservation(observed observedMessage) {
 		if digest.LastActivityAt.After(session.LastActivityAt) {
 			session.LastActivityAt, changed = digest.LastActivityAt, true
 		}
+	}
+	if forgotten := currentModel.repository.ForgetExpiredArchive(time.Now()); forgotten > 0 {
+		changed = true
+		currentModel.setStatus(fmt.Sprintf("forgot %s archived over %d days ago", countedSessions(forgotten), archiveKeepDays()))
 	}
 	if currentModel.runRules() || changed {
 		currentModel.saveRepository()

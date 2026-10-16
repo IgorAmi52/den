@@ -322,6 +322,7 @@ func (currentModel *model) applyWelcome() {
 			Branch:           digest.Branch,
 			Title:            truncate(digest.FirstPrompt, 120),
 			Archived:         !isFiled && !brain.IsRecent(digest, now),
+			ArchivedAt:       archivedAt(!isFiled && !brain.IsRecent(digest, now), now),
 			CreatedAt:        digest.StartedAt,
 			LastActivityAt:   digest.LastActivityAt,
 		})
@@ -331,6 +332,13 @@ func (currentModel *model) applyWelcome() {
 			currentModel.reportError(currentModel.repository.WriteGuide(guide.Name, state.guideTexts[index]))
 		}
 	}
+}
+
+func archivedAt(archived bool, now time.Time) time.Time {
+	if archived {
+		return now
+	}
+	return time.Time{}
 }
 
 // folderNamed finds a top-level folder by name, ignoring case, so the welcome adds to folders that already exist.

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 
@@ -64,7 +65,11 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 			theme.dim.Render("Sessions here start with the repo's context only."),
 		}, width)
 	case archiveRow:
-		return "ARCHIVE", wrapAll([]string{theme.dim.Render("Archived sessions stay resumable: ↵ opens one, a brings it back.")}, width)
+		return "ARCHIVE", wrapAll([]string{
+			theme.dim.Render("Sessions that are done. den proposes the ones that look finished; a or m puts any session here yourself."),
+			"",
+			theme.dim.Render(fmt.Sprintf("They stay resumable: ↵ opens one, a or m brings it back. den forgets a session %d days after it was archived; the agent keeps its own history.", archiveKeepDays())),
+		}, width)
 	case newAgentRow:
 		return "SESSION", wrapAll([]string{
 			theme.bold.Render("new " + row.open.tool),
@@ -152,7 +157,7 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 	lines := []string{theme.bold.Render(session.Title)}
 	details := session.Tool + " · " + relativeAge(session.LastActivityAt) + " ago · " + currentModel.repository.FolderName(session.FolderId)
 	if session.Archived {
-		details += " · archived"
+		details += fmt.Sprintf(" · archived, %dd left", int(session.ArchiveTimeLeft(time.Now()).Hours()/24)+1)
 	}
 	lines = append(lines, theme.dim.Render(details))
 	if session.Branch != "" {

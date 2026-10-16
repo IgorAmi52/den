@@ -206,10 +206,19 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 		if dragging == nil || !isOverRow {
 			return currentModel, nil
 		}
-		if target := rows[rowIndex]; target.kind != inboxRow && target.kind != folderRow && !target.isMovable() {
+		target := rows[rowIndex]
+		sourceIndex := slices.IndexFunc(rows, dragging)
+		isIntoArchive := target.kind == archiveRow || (target.kind == sessionRow && target.session.Archived)
+		if isIntoArchive {
+			if sourceIndex >= 0 && rows[sourceIndex].kind == sessionRow && !rows[sourceIndex].session.Archived {
+				currentModel.setArchived([]string{rows[sourceIndex].session.SessionId}, true)
+			}
 			return currentModel, nil
 		}
-		if sourceIndex := slices.IndexFunc(rows, dragging); sourceIndex >= 0 && sourceIndex != rowIndex {
+		if target.kind != inboxRow && target.kind != folderRow && !target.isMovable() {
+			return currentModel, nil
+		}
+		if sourceIndex >= 0 && sourceIndex != rowIndex {
 			source := rows[sourceIndex]
 			fromFolderId := source.folderId()
 			// Saving sorts the sessions, so the row's pointer can't be trusted after the move.
@@ -217,7 +226,7 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 			if source.kind == sessionRow {
 				movedSessionId = source.session.SessionId
 			}
-			currentModel.moveRowToFolder(source, rows[rowIndex].folderId())
+			currentModel.moveRowToFolder(source, target.folderId())
 			if movedSessionId != "" {
 				currentModel.repository.RememberMovedOut(movedSessionId, fromFolderId)
 				currentModel.saveRepository()

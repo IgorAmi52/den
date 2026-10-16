@@ -94,7 +94,12 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		focusCommand := currentModel.filter.Focus()
 		return currentModel, focusCommand
 	case key.Matches(keyPress, keys.newFolder):
-		return currentModel, currentModel.askForNewFolder(currentModel.folderForNewItems())
+		return currentModel, currentModel.askForNewFolder("")
+	case key.Matches(keyPress, keys.newSubfolder):
+		if parentId := currentModel.folderForNewItems(); parentId != "" {
+			return currentModel, currentModel.askForNewFolder(parentId)
+		}
+		currentModel.setStatus("select a folder to add a subfolder to it")
 	case !exists:
 	case key.Matches(keyPress, keys.open):
 		return currentModel, currentModel.openRow(selected)
@@ -302,18 +307,15 @@ func (currentModel *model) askToDeleteSessions(sessionIds []string) {
 	}}
 }
 
-// setArchived archives sessions, or brings them back. Archived sessions stay resumable.
+// setArchived archives sessions, or brings them back. Archived sessions stay resumable until den forgets them.
 func (currentModel *model) setArchived(sessionIds []string, archived bool) {
 	for _, sessionId := range sessionIds {
-		if session := currentModel.repository.FindSession(sessionId); session != nil {
-			session.Archived = archived
-			currentModel.repository.ForgetSessionSuggestions(sessionId)
-		}
+		currentModel.repository.SetArchived(sessionId, archived)
 	}
 	currentModel.saveRepository()
 	currentModel.clampCursor()
 	if archived {
-		currentModel.setStatus(fmt.Sprintf("archived %s, still resumable", countedSessions(len(sessionIds))))
+		currentModel.setStatus(fmt.Sprintf("archived %s · kept %d days", countedSessions(len(sessionIds)), archiveKeepDays()))
 	} else {
 		currentModel.setStatus(fmt.Sprintf("brought back %s", countedSessions(len(sessionIds))))
 	}
@@ -366,6 +368,10 @@ func (currentModel *model) updatePaneFolders() {
 		currentModel.reportError(tmux.SetPaneOption(open.paneId, paneFolderNameOption, currentModel.repository.FolderName(session.FolderId)))
 	}
 	currentModel.reportError(currentModel.refreshAgents())
+}
+
+func archiveKeepDays() int {
+	return int(store.ArchiveKeepsFor.Hours() / 24)
 }
 
 func countedSessions(count int) string {

@@ -68,9 +68,9 @@ func (currentModel model) proposalReason(suggestion store.Suggestion, row listRo
 	case store.SuggestCleanup:
 		if row.kind == sessionRow {
 			if currentModel.mergedBranches[row.session.Branch] {
-				return "Its branch merged. Archived sessions stay resumable."
+				return fmt.Sprintf("Its branch merged. Archived sessions stay resumable for %d days.", archiveKeepDays())
 			}
-			return fmt.Sprintf("Untouched for %d days. Archived sessions stay resumable.", int(time.Since(row.session.LastActivityAt).Hours()/24))
+			return fmt.Sprintf("Untouched for %d days. Archived sessions stay resumable for %d more.", int(time.Since(row.session.LastActivityAt).Hours()/24), archiveKeepDays())
 		}
 	case store.SuggestContext:
 		reason := suggestion.Reason

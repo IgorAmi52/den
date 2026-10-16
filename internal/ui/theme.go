@@ -27,6 +27,8 @@ var (
 	removedColor    = paletteColor{"#ff8787", 210}
 	// folderColor is a manila tan, so folders never read as sessions and don't compete with the accent or the amber of waiting.
 	folderColor = paletteColor{"#d7af87", 180}
+	// archiveColor is a muted lavender grey: still a folder, but clearly the one for things that are done.
+	archiveColor = paletteColor{"#8787af", 103}
 )
 
 // Backgrounds only work on one kind of terminal background, so each has a dark and a light variant.
@@ -39,8 +41,6 @@ var (
 	removedLight    = paletteColor{"#f8e4e4", 224}
 	waitingBarDark  = paletteColor{"#3a2c00", 236}
 	waitingBarLight = paletteColor{"#fff0d0", 230}
-	overlayDark     = paletteColor{"#121315", 233}
-	overlayLight    = paletteColor{"#f4f4f4", 255}
 )
 
 // theme holds every style the views use; views never build styles themselves.
@@ -48,6 +48,7 @@ type theme struct {
 	text           lipgloss.Style
 	bold           lipgloss.Style
 	folder         lipgloss.Style
+	archive        lipgloss.Style
 	accent         lipgloss.Style
 	accentBold     lipgloss.Style
 	dim            lipgloss.Style
@@ -97,6 +98,7 @@ func newTheme(isDark bool, profile colorprofile.Profile) theme {
 		text:           base,
 		bold:           base.Bold(true),
 		folder:         base.Foreground(pick(folderColor)).Bold(true),
+		archive:        base.Foreground(pick(archiveColor)).Bold(true),
 		accent:         base.Foreground(accent),
 		accentBold:     base.Foreground(accent).Bold(true),
 		dim:            base.Foreground(dim),
@@ -116,7 +118,7 @@ func newTheme(isDark bool, profile colorprofile.Profile) theme {
 		key:            base.Foreground(accent),
 		action:         base.Foreground(dim),
 		card:           base.Border(lipgloss.RoundedBorder()).BorderForeground(suggestion).Padding(0, 2),
-		overlay:        base.Border(lipgloss.RoundedBorder()).BorderForeground(accent).Background(pickBackground(overlayLight, overlayDark)).Padding(0, 1),
+		overlay:        base.Border(lipgloss.RoundedBorder()).BorderForeground(accent).Padding(0, 1),
 		diffAdded:      base.Foreground(pick(runningColor)).Background(pickBackground(addedLight, addedDark)),
 		diffRemoved:    base.Foreground(pick(removedColor)).Background(pickBackground(removedLight, removedDark)),
 		diffContext:    base.Foreground(dim),

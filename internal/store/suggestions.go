@@ -181,12 +181,7 @@ func (repository *Repository) Accept(suggestionId string) error {
 		repository.moveSessions(suggestion.SessionIds, subfolder.Id)
 	case SuggestCleanup:
 		for _, sessionId := range suggestion.SessionIds {
-			if session := repository.FindSession(sessionId); session != nil {
-				session.Archived = true
-			}
-		}
-		for _, sessionId := range suggestion.SessionIds {
-			repository.ForgetSessionSuggestions(sessionId)
+			repository.SetArchived(sessionId, true)
 		}
 	case SuggestContext:
 		var err error
@@ -232,10 +227,7 @@ func (repository *Repository) AcceptFor(suggestionId string, sessionId string) e
 	if suggestion == nil || suggestion.Kind != SuggestCleanup {
 		return repository.Accept(suggestionId)
 	}
-	if session := repository.FindSession(sessionId); session != nil {
-		session.Archived = true
-	}
-	repository.ForgetSessionSuggestions(sessionId)
+	repository.SetArchived(sessionId, true)
 	return nil
 }
 
@@ -271,7 +263,7 @@ func (repository *Repository) ForgetSessionSuggestions(sessionId string) {
 // MoveByHand files a session where the user put it, dropping what den suggested for it.
 func (repository *Repository) MoveByHand(sessionId string, folderId string) {
 	if session := repository.FindSession(sessionId); session != nil {
-		session.FolderId, session.Archived = folderId, false
+		session.FolderId, session.Archived, session.ArchivedAt = folderId, false, time.Time{}
 		repository.ForgetSessionSuggestions(sessionId)
 	}
 }
@@ -290,7 +282,7 @@ func (repository *Repository) moveSessions(sessionIds []string, folderId string)
 	for _, sessionId := range sessionIds {
 		if session := repository.FindSession(sessionId); session != nil {
 			session.FolderId = folderId
-			session.Archived = false
+			session.Archived, session.ArchivedAt = false, time.Time{}
 		}
 	}
 	for _, sessionId := range sessionIds {
