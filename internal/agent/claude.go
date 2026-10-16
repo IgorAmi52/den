@@ -163,6 +163,7 @@ func readClaudeDigest(transcriptPath string) Digest {
 			if prompt := firstTypedText(event.Message.Content); prompt != "" && !event.IsMeta {
 				if digest.FirstPrompt == "" {
 					digest.FirstPrompt = oneLine(prompt)
+					digest.StartingFiles = MarkdownFilesIn(prompt, digest.WorkingDirectory)
 				}
 				digest.LastPrompt = oneLine(prompt)
 				digest.PromptCount++

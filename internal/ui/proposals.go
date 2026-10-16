@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 
+	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
@@ -60,7 +61,10 @@ func (currentModel model) proposalTitle(suggestion store.Suggestion) string {
 	case store.SuggestMove:
 		return "file into " + currentModel.repository.FolderName(suggestion.FolderId)
 	case store.SuggestSubfolder:
-		if suggestion.Branch == "" {
+		switch {
+		case suggestion.LinkedPath != "":
+			return "group in " + suggestion.FolderName + ", with " + filepath.Base(suggestion.LinkedPath) + " as its context"
+		case suggestion.Branch == "":
 			return "group in a new subfolder for " + suggestion.FolderName
 		}
 		return "group in a new ⎇ subfolder"
@@ -107,6 +111,9 @@ func (currentModel model) proposalReason(suggestion store.Suggestion, row listRo
 		if row.kind == sessionRow {
 			if currentModel.mergedBranches[row.session.Branch] {
 				return fmt.Sprintf("Its branch merged. Archived sessions stay resumable for %d days.", archiveKeepDays())
+			}
+			if brain.OnlyAskedQuestions(currentModel.digests, row.session.SessionId) {
+				return fmt.Sprintf("It only asked questions; no files changed. Archived sessions stay resumable for %d days.", archiveKeepDays())
 			}
 			return fmt.Sprintf("Untouched for %d days. Archived sessions stay resumable for %d more.", int(time.Since(row.session.LastActivityAt).Hours()/24), archiveKeepDays())
 		}

@@ -62,7 +62,9 @@ type Digest struct {
 	// PullRequests are the pull request links that came up in the session, in order.
 	PullRequests []string
 	// Plan is the latest plan the user approved in the tool's plan mode.
-	Plan           string
+	Plan string
+	// StartingFiles are the markdown files the first prompt points at, like @docs/PLAN.md, that exist.
+	StartingFiles  []string
 	StartedAt      time.Time
 	LastActivityAt time.Time
 }
@@ -90,6 +92,37 @@ func IssueKeyIn(text string) string {
 		}
 	}
 	return ""
+}
+
+// MarkdownFilesIn finds the markdown files a text points at that exist: @path, file:/…, ~/…, an absolute path,
+// or a path relative to one of the directories.
+func MarkdownFilesIn(text string, directories ...string) []string {
+	var found []string
+	for _, field := range strings.Fields(text) {
+		candidate := strings.Trim(field, "`'\"()[]{},;:")
+		candidate = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(candidate, "@"), "file://"), "file:")
+		candidate = strings.TrimSuffix(candidate, ".")
+		if !strings.EqualFold(filepath.Ext(candidate), ".md") {
+			continue
+		}
+		if rest, isHome := strings.CutPrefix(candidate, "~/"); isHome {
+			if userHome, err := os.UserHomeDir(); err == nil {
+				candidate = filepath.Join(userHome, rest)
+			}
+		}
+		bases := []string{""}
+		if !filepath.IsAbs(candidate) {
+			bases = directories
+		}
+		for _, base := range bases {
+			filePath := filepath.Clean(filepath.Join(base, candidate))
+			if information, err := os.Stat(filePath); err == nil && !information.IsDir() {
+				found = appendOnce(found, filePath)
+				break
+			}
+		}
+	}
+	return found
 }
 
 // LaptopFiles lists every supported tool's file of the user's own rules, whether it exists yet or not.

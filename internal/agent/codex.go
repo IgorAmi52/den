@@ -237,6 +237,7 @@ func readCodexDigest(filePath string) Digest {
 				if isTypedPrompt(item.Text) {
 					if digest.FirstPrompt == "" {
 						digest.FirstPrompt = oneLine(item.Text)
+						digest.StartingFiles = MarkdownFilesIn(item.Text, digest.WorkingDirectory)
 					}
 					digest.LastPrompt = oneLine(item.Text)
 					digest.PromptCount++

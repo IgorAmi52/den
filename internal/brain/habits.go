@@ -55,7 +55,15 @@ func NoticeHabits(observation Observation) []store.Habit {
 	if len(keys) > 0 {
 		description += ", like " + strings.Join(keys[:min(2, len(keys))], " and ")
 	}
-	return []store.Habit{{Name: HabitIssueSubfolders, Description: description, Seen: len(groups)}}
+	documents := groupableDocuments(observation)
+	documentDescription := "gives sessions the doc they start from as context"
+	if len(documents) > 0 {
+		documentDescription += ", like " + filepath.Base(documents[0].filePath)
+	}
+	return []store.Habit{
+		{Name: HabitStartingDocuments, Description: documentDescription, Seen: len(documents)},
+		{Name: HabitIssueSubfolders, Description: description, Seen: len(groups)},
+	}
 }
 
 // questions asks about a habit when den isn't sure of it: one open question at a time, one new one a day,
@@ -64,6 +72,21 @@ func questions(observation Observation) []store.Suggestion {
 	repository := observation.Repository
 	if repository.PendingOfKind(store.SuggestQuestion) != nil || observation.Now.Sub(repository.LastQuestionAt) < questionEvery {
 		return nil
+	}
+	if habit := repository.FindHabit(HabitStartingDocuments); habit != nil && habit.State == store.HabitNoticed && habit.Seen >= 1 {
+		largest := groupableDocuments(observation)[0]
+		for _, group := range groupableDocuments(observation) {
+			if len(group.sessionIds) > len(largest.sessionIds) {
+				largest = group
+			}
+		}
+		return []store.Suggestion{{
+			Kind:     store.SuggestQuestion,
+			Habit:    HabitStartingDocuments,
+			Question: "Give sessions the doc they start from as context, grouped by it?",
+			Reason: fmt.Sprintf("%d sessions start from %s. Yes, and den links each such doc to its sessions' folder, so you stop pointing agents at it; no, and it won't ask again.",
+				len(largest.sessionIds), relativeTo(repository.RepositoryPath, largest.filePath)),
+		}}
 	}
 	if habit := repository.FindHabit(HabitIssueSubfolders); habit != nil && habit.State == store.HabitNoticed && habit.Seen >= minimumQuestionEvidence {
 		var keys []string

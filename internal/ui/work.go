@@ -85,7 +85,7 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 	case key.Matches(keyPress, keys.review):
 		currentModel.openReview()
 	case key.Matches(keyPress, keys.chat):
-		return currentModel, currentModel.openChat(nil)
+		return currentModel, currentModel.openChatAbout(selected, exists)
 	case key.Matches(keyPress, keys.help):
 		currentModel.openScreen(helpScreen)
 	case key.Matches(keyPress, keys.filter):

@@ -37,11 +37,12 @@ type Observation struct {
 }
 
 // Suggest runs every rule. The store drops the suggestions the user already rejected or is still looking at.
-// Issue subfolders go before branch subfolders, since one issue can span branches.
+// Docs go first, since grouping by them also gives the sessions context; then issues, since one issue can span branches.
 // The cleanup comes last and may hold no sessions, which clears a cleanup that no longer applies.
 func Suggest(observation Observation) []store.Suggestion {
 	var suggestions []store.Suggestion
 	suggestions = append(suggestions, fileByBranch(observation)...)
+	suggestions = append(suggestions, documentSuggestions(observation)...)
 	suggestions = append(suggestions, issueSubfolders(observation)...)
 	suggestions = append(suggestions, branchSubfolders(observation)...)
 	suggestions = append(suggestions, folderNotes(observation)...)
@@ -117,7 +118,8 @@ func branchSubfolders(observation Observation) []store.Suggestion {
 	return suggestions
 }
 
-// cleanup offers to archive sessions that look finished: untouched for weeks, or on a branch that merged.
+// cleanup offers to archive sessions that look finished: untouched for weeks, on a branch that merged,
+// or that only asked questions, which are done once their pane closes.
 func cleanup(observation Observation) store.Suggestion {
 	var sessionIds []string
 	for _, session := range observation.Repository.Sessions {
@@ -125,12 +127,18 @@ func cleanup(observation Observation) store.Suggestion {
 			continue
 		}
 		idle := observation.Now.Sub(session.LastActivityAt)
-		if idle > staleAfter || (observation.MergedBranches[branchOf(session, observation.Digests)] && idle > mergedGracePeriod) {
+		if idle > staleAfter || (observation.MergedBranches[branchOf(session, observation.Digests)] && idle > mergedGracePeriod) || OnlyAskedQuestions(observation.Digests, session.SessionId) {
 			sessionIds = append(sessionIds, session.SessionId)
 		}
 	}
-	reason := fmt.Sprintf("Untouched for %d+ days, or their branch merged.", int(staleAfter.Hours()/24))
+	reason := fmt.Sprintf("Untouched for %d+ days, their branch merged, or they only asked questions.", int(staleAfter.Hours()/24))
 	return store.Suggestion{Kind: store.SuggestCleanup, SessionIds: sessionIds, Reason: reason}
+}
+
+// OnlyAskedQuestions tells whether a session changed no files, so it was a question rather than work.
+func OnlyAskedQuestions(digests map[string]agent.Digest, sessionId string) bool {
+	digest, found := digests[sessionId]
+	return found && digest.PromptCount > 0 && len(digest.TouchedFiles) == 0
 }
 
 // ShortBranch drops the owner prefix from a branch name: igor/eval-pagination becomes eval-pagination.

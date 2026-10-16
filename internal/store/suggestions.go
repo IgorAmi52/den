@@ -48,7 +48,7 @@ type Suggestion struct {
 	Source       string `json:"source,omitempty"`
 	// Starter says a context edit is a folder's first: an approved plan, or a draft den made.
 	Starter string `json:"starter,omitempty"`
-	// LinkedPath is the file a link proposes.
+	// LinkedPath is the file a link proposes, or the context of a subfolder for the sessions that start from it.
 	LinkedPath string `json:"linkedPath,omitempty"`
 	// Rule is the line a laptop rule or a question's yes adds; FilePaths are the laptop files that don't have it yet.
 	Rule      string   `json:"rule,omitempty"`
@@ -75,7 +75,7 @@ func (suggestion Suggestion) RejectionKeys() []string {
 		}
 		return keys
 	case SuggestSubfolder:
-		return []string{"subfolder:" + suggestion.ParentFolderId + ":" + suggestion.Branch + suggestion.IssueKey}
+		return []string{"subfolder:" + suggestion.ParentFolderId + ":" + suggestion.Branch + suggestion.IssueKey + suggestion.LinkedPath}
 	case SuggestCleanup:
 		var keys []string
 		for _, sessionId := range suggestion.SessionIds {
@@ -136,6 +136,9 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 		return repository.replaceCleanup(suggestion)
 	}
 	if suggestion.Kind == SuggestMove || suggestion.Kind == SuggestSubfolder {
+		if suggestion.Habit != "" {
+			repository.yieldToHabit(suggestion.SessionIds)
+		}
 		suggestion.SessionIds = slices.DeleteFunc(suggestion.SessionIds, func(sessionId string) bool {
 			return repository.PendingFor(sessionId) != nil
 		})
@@ -157,6 +160,23 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 	}
 	repository.Suggestions = append(repository.Suggestions, suggestion)
 	return true
+}
+
+// yieldToHabit takes sessions out of den's plain filing and grouping proposals, since a habit the user turned on
+// groups them now; proposals left with too few sessions go away.
+func (repository *Repository) yieldToHabit(sessionIds []string) {
+	for index := range repository.Suggestions {
+		pending := &repository.Suggestions[index]
+		if pending.Habit != "" || (pending.Kind != SuggestMove && pending.Kind != SuggestSubfolder) {
+			continue
+		}
+		pending.SessionIds = slices.DeleteFunc(pending.SessionIds, func(sessionId string) bool {
+			return slices.Contains(sessionIds, sessionId)
+		})
+	}
+	repository.Suggestions = slices.DeleteFunc(repository.Suggestions, func(pending Suggestion) bool {
+		return (pending.Kind == SuggestSubfolder && len(pending.SessionIds) < 2) || (pending.Kind == SuggestMove && len(pending.SessionIds) == 0)
+	})
 }
 
 func (repository *Repository) replaceCleanup(cleanup Suggestion) bool {
@@ -257,7 +277,7 @@ func (repository *Repository) Accept(suggestionId string) error {
 	case SuggestSubfolder:
 		subfolder := repository.AddFolder(suggestion.FolderName, suggestion.ParentFolderId)
 		createdFolder := repository.FindFolder(subfolder.Id)
-		createdFolder.Branch, createdFolder.IssueKey = suggestion.Branch, suggestion.IssueKey
+		createdFolder.Branch, createdFolder.IssueKey, createdFolder.LinkedPath = suggestion.Branch, suggestion.IssueKey, suggestion.LinkedPath
 		repository.moveSessions(suggestion.SessionIds, subfolder.Id)
 	case SuggestCleanup:
 		for _, sessionId := range suggestion.SessionIds {

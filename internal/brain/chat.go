@@ -2,7 +2,6 @@ package brain
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -42,6 +41,8 @@ type ChatContext struct {
 	Repository       *store.Repository
 	Digests          map[string]agent.Digest
 	WorkingDirectory string
+	// FolderId is the folder the chat is about, which a request that names no folder means.
+	FolderId string
 }
 
 // Reply answers the user in the chat. Without a model, den understands linking a file as a folder's context,
@@ -90,8 +91,13 @@ func linkReply(conversation []ChatMessage, chatContext ChatContext) (ChatMessage
 			folder = mentionedFolder(repository, recent[index])
 		}
 		if filePath == "" {
-			filePath = mentionedFile(recent[index], chatContext.WorkingDirectory, repository.RepositoryPath)
+			if mentioned := agent.MarkdownFilesIn(recent[index], chatContext.WorkingDirectory, repository.RepositoryPath); len(mentioned) > 0 {
+				filePath = mentioned[0]
+			}
 		}
+	}
+	if folder == nil {
+		folder = repository.FindFolder(chatContext.FolderId)
 	}
 	reply := func(text string, action *ChatAction) (ChatMessage, bool) {
 		return ChatMessage{FromDen: true, Text: text, Action: action}, true
@@ -145,35 +151,6 @@ func mentionedFolder(repository *store.Repository, text string) *store.Folder {
 		}
 	}
 	return found
-}
-
-// mentionedFile finds a markdown file the text names that exists: an absolute path, ~/…, @path, file://…,
-// or a path relative to den's directory or the repo.
-func mentionedFile(text string, workingDirectory string, repositoryPath string) string {
-	for _, field := range strings.Fields(text) {
-		candidate := strings.Trim(field, "`'\"()[]{},;:")
-		candidate = strings.TrimPrefix(strings.TrimPrefix(candidate, "file://"), "@")
-		candidate = strings.TrimSuffix(candidate, ".")
-		if !strings.EqualFold(filepath.Ext(candidate), ".md") {
-			continue
-		}
-		if rest, isHome := strings.CutPrefix(candidate, "~/"); isHome {
-			if homeDirectory, err := os.UserHomeDir(); err == nil {
-				candidate = filepath.Join(homeDirectory, rest)
-			}
-		}
-		bases := []string{""}
-		if !filepath.IsAbs(candidate) {
-			bases = []string{workingDirectory, repositoryPath}
-		}
-		for _, base := range bases {
-			filePath := filepath.Clean(filepath.Join(base, candidate))
-			if information, err := os.Stat(filePath); err == nil && !information.IsDir() {
-				return filePath
-			}
-		}
-	}
-	return ""
 }
 
 // writtenNotesFiles lists the markdown files of real size agents wrote in a folder's sessions, at most three.
