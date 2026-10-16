@@ -8,20 +8,23 @@ import (
 )
 
 // keyMap holds every binding. The same bindings drive the handlers and the key hints, so the two can't drift apart.
+// One meaning per key everywhere: enter says yes, backspace says no, esc steps back, tab moves on, space ticks.
 type keyMap struct {
-	up, down, left, right       key.Binding
-	open, accept, dismiss       key.Binding
-	newSession, newWithout      key.Binding
-	newFolder, rename, delete   key.Binding
-	move, archive, editContext  key.Binding
-	organize, review, chat      key.Binding
-	help, jump, quit, filter    key.Binding
-	selectRow, scrollPreview    key.Binding
-	back, yes, no, edit, skip   key.Binding
-	toggle, ask, done, next     key.Binding
-	send, scrollChat, collapse  key.Binding
-	pickPrevious, pickNext      key.Binding
-	confirmYes, confirmNo, save key.Binding
+	up, down                   key.Binding
+	open, accept, reject       key.Binding
+	newSession, newWithout     key.Binding
+	newFromAgent               key.Binding
+	newFolder, rename, delete  key.Binding
+	move, archive, editContext key.Binding
+	wide, review, chat         key.Binding
+	help, jump, quit, filter   key.Binding
+	selectRow, scrollPreview   key.Binding
+	back, yes, no, edit, skip  key.Binding
+	toggle, ask, done          key.Binding
+	send, scrollChat           key.Binding
+	pickPrevious, pickNext     key.Binding
+	confirmYes, confirmNo      key.Binding
+	save                       key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -31,20 +34,19 @@ func newKeyMap() keyMap {
 	return keyMap{
 		up:            binding([]string{"up", "k"}, "↑", "up"),
 		down:          binding([]string{"down", "j"}, "↓", "down"),
-		left:          binding([]string{"left", "h"}, "←", "folders"),
-		right:         binding([]string{"right", "l"}, "→", "sessions"),
 		open:          binding([]string{"enter"}, "↵", "open"),
-		accept:        binding([]string{"tab"}, "⇥", "accept"),
-		dismiss:       binding([]string{"x"}, "x", "dismiss"),
+		accept:        binding([]string{"tab"}, "⇥", "yes"),
+		reject:        binding([]string{"backspace"}, "⌫", "no"),
 		newSession:    binding([]string{"n"}, "n", "new"),
 		newWithout:    binding([]string{"N"}, "N", "new without context"),
+		newFromAgent:  binding([]string{"alt+n"}, "⌥N", "new agent"),
 		newFolder:     binding([]string{"f"}, "f", "folder"),
 		rename:        binding([]string{"r"}, "r", "rename"),
 		delete:        binding([]string{"d"}, "d", "delete"),
-		move:          binding([]string{"m", "space"}, "m", "move"),
+		move:          binding([]string{"m"}, "m", "move"),
 		archive:       binding([]string{"a"}, "a", "archive"),
 		editContext:   binding([]string{"e"}, "e", "context"),
-		organize:      binding([]string{"z"}, "z", "organize"),
+		wide:          binding([]string{"z"}, "z", "wide"),
 		review:        binding([]string{"v"}, "v", "review"),
 		chat:          binding([]string{"c"}, "c", "ask den"),
 		help:          binding([]string{"?"}, "?", "keys"),
@@ -54,21 +56,19 @@ func newKeyMap() keyMap {
 		selectRow:     binding([]string{"space"}, "space", "select"),
 		scrollPreview: binding([]string{"pgdown", "pgup", "J", "K"}, "J/K", "scroll preview"),
 		back:          binding([]string{"esc"}, "esc", "back"),
-		yes:           binding([]string{"y"}, "y", "accept"),
-		no:            binding([]string{"n"}, "n", "no"),
+		yes:           binding([]string{"enter"}, "↵", "yes"),
+		no:            binding([]string{"backspace"}, "⌫", "no"),
 		edit:          binding([]string{"e"}, "e", "edit"),
-		skip:          binding([]string{"s"}, "s", "skip"),
-		toggle:        binding([]string{"space"}, "space", "toggle"),
+		skip:          binding([]string{"tab"}, "⇥", "skip"),
+		toggle:        binding([]string{"space"}, "space", "tick"),
 		ask:           binding([]string{"c"}, "c", "ask den"),
-		done:          binding([]string{"q", "esc"}, "q", "done"),
-		next:          binding([]string{"tab"}, "⇥", "next"),
+		done:          binding([]string{"esc", "q"}, "esc", "done"),
 		send:          binding([]string{"enter"}, "↵", "send"),
 		scrollChat:    binding([]string{"pgup", "pgdown"}, "pgup/pgdn", "scroll"),
-		collapse:      binding([]string{"space"}, "space", "open/close"),
 		pickPrevious:  binding([]string{"left", "h", "up", "k"}, "←", "pick"),
 		pickNext:      binding([]string{"right", "l", "down", "j"}, "→", "pick"),
-		confirmYes:    binding([]string{"y"}, "y", "yes"),
-		confirmNo:     binding([]string{"n", "esc"}, "n", "no"),
+		confirmYes:    binding([]string{"enter"}, "↵", "yes"),
+		confirmNo:     binding([]string{"esc"}, "esc", "no"),
 		save:          binding([]string{"enter"}, "↵", "save"),
 	}
 }

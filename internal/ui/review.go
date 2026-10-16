@@ -66,7 +66,7 @@ func (currentModel model) updateReview(message tea.Msg) (tea.Model, tea.Cmd) {
 	if !isKeyPress {
 		return currentModel, nil
 	}
-	if currentModel.organize.picker != nil {
+	if currentModel.picker != nil {
 		return currentModel.updateFolderPicker(keyPress)
 	}
 	currentModel.clearStatus()
@@ -227,7 +227,7 @@ func (currentModel model) reviewView() string {
 		lines = append(lines, centered(theme.faint.Render("a rejected suggestion is remembered and never offered again"), width)...)
 	}
 	content := strings.Join(lines, "\n")
-	if currentModel.organize.picker != nil {
+	if currentModel.picker != nil {
 		content = currentModel.withOverlay(content, currentModel.folderPickerBox())
 	}
 	return content

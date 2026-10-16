@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
 
@@ -24,8 +25,6 @@ const (
 	PanelWidth         = 30
 	PanelMarkerOption  = "@den-panel"
 	windowMarkerOption = "@den"
-	// organizeMinimumWidth is the panel width from which the panel shows the organize view instead of the tree.
-	organizeMinimumWidth = 80
 	// observeEvery is how often den rereads transcripts and git to look for new suggestions.
 	observeEvery = 20 * time.Second
 )
@@ -56,9 +55,9 @@ var windowOptions = map[string]string{
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
-	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌃Space back #[default], den #[fg=colour240]⌃Space #[default]},#{?#{==:#{@den-status},waiting}," +
-		"#[fg=colour214 bold] ! #{@den-number} needs you · " + paneLabel + " #[default]," +
-		"#{?pane_active,#[bg=colour75 fg=colour231 bold] #{@den-number} " + paneLabel + " #[default], #{@den-number} " + paneLabel + " }}}",
+	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌥0 back #[default], den #[fg=colour240]⌥0 #[default]},#{?#{==:#{@den-status},waiting}," +
+		"#[fg=colour214 bold] ! ⌥#{@den-number} needs you · " + paneLabel + " #[default]," +
+		"#{?pane_active,#[bg=colour75 fg=colour231 bold] ⌥#{@den-number} " + paneLabel + " #[default], ⌥#{@den-number} " + paneLabel + " }}}",
 	windowMarkerOption: "1",
 }
 
@@ -120,10 +119,18 @@ type model struct {
 	zoomedForScreen bool
 
 	listCursor int
-	listOffset int
-	// inboxCollapsed and archiveExpanded fold the two built-in sections of the tree.
-	inboxCollapsed  bool
-	archiveExpanded bool
+	// listOffset is the first tree line on screen, counting the lines that explain a proposal.
+	listOffset    int
+	previewOffset int
+	// selected holds the sessions picked with space, which move, archive or delete together.
+	selected  map[string]bool
+	filter    textinput.Model
+	filtering bool
+	picker    *folderPicker
+	// repositoryExpanded, inboxCollapsed and archiveExpanded fold the built-in sections of the tree.
+	repositoryExpanded bool
+	inboxCollapsed     bool
+	archiveExpanded    bool
 	// newSessionFolderId is the folder the next new session goes into, chosen when n was pressed.
 	newSessionFolderId       string
 	newSessionWithoutContext bool
@@ -141,10 +148,9 @@ type model struct {
 	dragging      func(listRow) bool
 	dropTargetRow int
 
-	organize organizeState
-	review   reviewState
-	welcome  *welcomeState
-	chat     chatState
+	review  reviewState
+	welcome *welcomeState
+	chat    chatState
 
 	digests        map[string]agent.Digest
 	mergedBranches map[string]bool
@@ -180,7 +186,7 @@ func Run() error {
 	if err := tmux.BindTitleDragToSwapPanes(windowMarkerOption, PanelMarkerOption); err != nil {
 		return err
 	}
-	if err := tmux.BindDenKey(windowMarkerOption, PanelMarkerOption); err != nil {
+	if err := tmux.BindDenKeys(windowMarkerOption, PanelMarkerOption); err != nil {
 		return err
 	}
 	workingDirectory, err := os.Getwd()
@@ -204,10 +210,12 @@ func Run() error {
 		colorProfile:     colorProfile,
 		keys:             newKeyMap(),
 		dropTargetRow:    -1,
+		listCursor:       1,
 		digests:          map[string]agent.Digest{},
 		mergedBranches:   map[string]bool{},
 		contextTokens:    map[string]int{},
-		organize:         newOrganizeState(),
+		selected:         map[string]bool{},
+		filter:           newFilterInput(),
 		review:           newReviewState(),
 		chat:             newChatState(),
 	}
@@ -288,32 +296,28 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case helpScreen:
 		return currentModel.updateHelp(message)
 	}
-	if currentModel.isOrganizeLayout() {
-		return currentModel.updateOrganize(message)
-	}
 	return currentModel.updateWork(message)
 }
 
 // keepingSelection runs a background change that can add, drop or reorder sessions,
-// and keeps the same row selected in the panel and the same session in organize.
+// and keeps the same row selected.
 func (currentModel *model) keepingSelection(change func()) {
 	var matchesRow func(listRow) bool
 	if selected, exists := currentModel.selectedRow(); exists {
 		matchesRow = sameItemAs(selected)
 	}
-	selectedSessionId := ""
-	if item, exists := currentModel.selectedItem(); exists && item.kind == sessionItem {
-		selectedSessionId = item.session.SessionId
-	}
 	change()
 	if matchesRow != nil {
 		currentModel.cursorTo(matchesRow)
 	}
-	for index, item := range currentModel.organizeItems() {
-		if selectedSessionId != "" && item.kind == sessionItem && item.session.SessionId == selectedSessionId {
-			currentModel.organize.itemCursor = index
-		}
-	}
+}
+
+func newFilterInput() textinput.Model {
+	filter := textinput.New()
+	filter.Prompt = "/ "
+	filter.Placeholder = "filter sessions"
+	filter.CharLimit = 80
+	return filter
 }
 
 func (currentModel model) currentScreen() screen {
@@ -323,14 +327,9 @@ func (currentModel model) currentScreen() screen {
 	return currentModel.screens[len(currentModel.screens)-1]
 }
 
-// isOrganizeLayout is true when the panel is wide: zoomed, or alone in the window because no agent is open.
-func (currentModel model) isOrganizeLayout() bool {
-	return currentModel.width >= organizeMinimumWidth
-}
-
 // openScreen shows a full-window screen, zooming the panel first when it is the narrow column.
 func (currentModel *model) openScreen(next screen) {
-	if !currentModel.isOrganizeLayout() && len(currentModel.openAgents) > 0 && !tmux.IsZoomed(currentModel.windowId) {
+	if !currentModel.isWide() && len(currentModel.openAgents) > 0 && !tmux.IsZoomed(currentModel.windowId) {
 		if currentModel.reportError(tmux.ToggleZoom(currentModel.panelPaneId)) {
 			return
 		}
@@ -351,17 +350,12 @@ func (currentModel *model) closeScreen() {
 	}
 }
 
-// toggleOrganize zooms the panel to the full window, or back to the narrow column beside the agents.
-// Whatever was selected stays selected across the switch.
-func (currentModel *model) toggleOrganize() {
+// toggleWide zooms the panel to the full window, where the preview shows beside the tree,
+// or back to the narrow column beside the agents.
+func (currentModel *model) toggleWide() {
 	if len(currentModel.openAgents) == 0 {
 		currentModel.setStatus("no agents open, so the panel already fills the window")
 		return
-	}
-	if currentModel.isOrganizeLayout() {
-		currentModel.selectInPanelFromOrganize()
-	} else {
-		currentModel.selectInOrganizeFromPanel()
 	}
 	currentModel.zoomedForScreen = false
 	currentModel.reportError(tmux.ToggleZoom(currentModel.panelPaneId))

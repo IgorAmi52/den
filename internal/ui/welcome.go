@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/git"
 	"github.com/IgorAmi52/den/internal/store"
+	"github.com/IgorAmi52/den/internal/terminal"
+	"github.com/IgorAmi52/den/internal/tmux"
 )
 
 const (
@@ -29,6 +32,8 @@ const (
 	foldersStep
 	contextsStep
 	guidesStep
+	// keysStep teaches the keys and offers to turn on Terminal.app's Option key, which den's ⌥ keys need.
+	keysStep
 )
 
 // welcomeState is the first-run review: den reads the repo's past sessions and commits,
@@ -45,10 +50,15 @@ type welcomeState struct {
 	contextTexts    []string
 	guideAccepted   []bool
 	guideTexts      []string
+	// optionKeyProfile is Terminal.app's profile for new windows, when den runs in Terminal.app.
+	optionKeyProfile string
+	optionKeyEnabled bool
 }
 
 type pastSessionsMessage struct {
-	proposal brain.Welcome
+	proposal         brain.Welcome
+	optionKeyProfile string
+	optionKeyEnabled bool
 }
 
 func newWelcomeState() *welcomeState {
@@ -76,8 +86,22 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 			}
 		}
 		commitSubjects := git.RecentCommitSubjects(repositoryPath, recentCommitsCount)
-		return pastSessionsMessage{proposal: brain.FirstRun(digests, commitSubjects, repositoryPath)}
+		scanned := pastSessionsMessage{proposal: brain.FirstRun(digests, commitSubjects, repositoryPath)}
+		if isAppleTerminal() {
+			scanned.optionKeyProfile, scanned.optionKeyEnabled, _ = terminal.OptionKey()
+		}
+		return scanned
 	}
+}
+
+// isAppleTerminal tells whether den shows in Terminal.app. Inside tmux, TERM_PROGRAM names tmux,
+// so the environment the tmux server started with, which came from the terminal, is asked instead.
+func isAppleTerminal() bool {
+	terminalProgram := os.Getenv("TERM_PROGRAM")
+	if terminalProgram == "tmux" {
+		terminalProgram = tmux.GlobalEnvironment("TERM_PROGRAM")
+	}
+	return terminalProgram == "Apple_Terminal"
 }
 
 func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Model, tea.Cmd) {
@@ -86,6 +110,7 @@ func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Mo
 		return currentModel, nil
 	}
 	state.proposal = scanned.proposal
+	state.optionKeyProfile, state.optionKeyEnabled = scanned.optionKeyProfile, scanned.optionKeyEnabled
 	state.step = foldersStep
 	for _, folder := range scanned.proposal.Folders {
 		state.folderAccepted = append(state.folderAccepted, true)
@@ -116,6 +141,9 @@ func (currentModel model) updateWelcome(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	currentModel.clearStatus()
 	keys := currentModel.keys
+	if state.step == keysStep {
+		return currentModel.updateWelcomeKeysStep(keyPress)
+	}
 	indexes := currentModel.welcomeIndexes()
 	switch {
 	case key.Matches(keyPress, keys.up):
@@ -127,7 +155,7 @@ func (currentModel model) updateWelcome(message tea.Msg) (tea.Model, tea.Cmd) {
 		accepted[indexes[state.cursor]] = !accepted[indexes[state.cursor]]
 	case key.Matches(keyPress, keys.edit) && len(indexes) > 0:
 		return currentModel, currentModel.editWelcomeItem(indexes[state.cursor])
-	case key.Matches(keyPress, keys.yes), key.Matches(keyPress, keys.next):
+	case key.Matches(keyPress, keys.yes):
 		currentModel.advanceWelcome()
 	case key.Matches(keyPress, keys.no):
 		if state.step == foldersStep {
@@ -192,8 +220,30 @@ func (currentModel *model) advanceWelcome() {
 	case contextsStep:
 		state.step = guidesStep
 	case guidesStep:
+		state.step = keysStep
+	}
+}
+
+// updateWelcomeKeysStep finishes the setup; enter also turns on Terminal.app's Option key when it is off.
+func (currentModel model) updateWelcomeKeysStep(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	state := currentModel.welcome
+	keys := currentModel.keys
+	switch {
+	case key.Matches(keyPress, keys.yes):
+		profile, needsOptionKey := state.optionKeyProfile, currentModel.needsOptionKey()
+		currentModel.finishWelcome(true)
+		if needsOptionKey && !currentModel.reportError(terminal.EnableOptionKey(profile)) {
+			currentModel.setStatus("Option keys on for new Terminal windows · open one to use ⌥")
+		}
+	case key.Matches(keyPress, keys.no), key.Matches(keyPress, keys.back):
 		currentModel.finishWelcome(true)
 	}
+	return currentModel, nil
+}
+
+// needsOptionKey is true in Terminal.app when its profile still types characters with Option.
+func (currentModel model) needsOptionKey() bool {
+	return currentModel.welcome.optionKeyProfile != "" && !currentModel.welcome.optionKeyEnabled
 }
 
 func (currentModel *model) editWelcomeItem(index int) tea.Cmd {
@@ -316,6 +366,8 @@ func (currentModel model) welcomeView() string {
 		body = currentModel.welcomeContextsBody(innerWidth)
 	case guidesStep:
 		body = currentModel.welcomeGuidesBody(innerWidth)
+	case keysStep:
+		body = currentModel.welcomeKeysBody(innerWidth)
 	}
 	lines = append(lines, centered(theme.card.Width(cardWidth).Render(strings.Join(body, "\n")), width)...)
 	if currentModel.prompt != nil {
@@ -323,7 +375,7 @@ func (currentModel model) welcomeView() string {
 	} else if currentModel.statusMessage != "" {
 		lines = append(lines, centered(theme.dim.Render(currentModel.statusMessage), width)...)
 	} else if state.step != scanningStep {
-		lines = append(lines, centered(theme.faint.Render("esc skips the setup · nothing changes until you press y"), width)...)
+		lines = append(lines, centered(theme.faint.Render("esc skips the setup · nothing changes until you press enter"), width)...)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -334,12 +386,12 @@ func (currentModel model) welcomeTopBar(width int) string {
 	return currentModel.layoutRow(left, nil, width, false)
 }
 
-// welcomeStepCount is three steps, or two when no folder is proposed or kept, since there are no contexts to draft then.
+// welcomeStepCount is four steps, or three when no folder is proposed or kept, since there are no contexts to draft then.
 func (currentModel model) welcomeStepCount() int {
 	if slices.Contains(currentModel.welcome.folderAccepted, true) {
-		return 3
+		return 4
 	}
-	return 2
+	return 3
 }
 
 func (currentModel model) welcomeCardHeader(title string, step int, width int) string {
@@ -399,7 +451,7 @@ func (currentModel model) welcomeFoldersBody(width int) []string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "create"), currentModel.keys.toggle,
-		relabeled(currentModel.keys.edit, "rename"), relabeled(currentModel.keys.no, "start empty")}, width, 2)...)
+		relabeled(currentModel.keys.edit, "rename"), relabeled(currentModel.keys.no, "none of them")}, width, 2)...)
 	return lines
 }
 
@@ -444,7 +496,7 @@ func (currentModel model) welcomeContextsBody(width int) []string {
 func (currentModel model) welcomeGuidesBody(width int) []string {
 	theme := currentModel.theme
 	state := currentModel.welcome
-	lines := []string{currentModel.welcomeCardHeader("Guides", currentModel.welcomeStepCount(), width), ""}
+	lines := []string{currentModel.welcomeCardHeader("Guides", currentModel.welcomeStepCount()-1, width), ""}
 	lines = append(lines, wrapAll([]string{theme.text.Render("How you write commits, pull requests and issues in this repo. Agents read the matching guide before writing one, and den suggests edits as it learns your habits.")}, width)...)
 	lines = append(lines, "")
 	for index, guide := range state.proposal.Guides {
@@ -464,7 +516,7 @@ func (currentModel model) welcomeGuidesBody(width int) []string {
 		lines = append(lines, currentModel.draftPreview(state.guideTexts[min(state.cursor, len(state.guideTexts)-1)], width)...)
 	}
 	lines = append(lines, "")
-	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "save and finish"), currentModel.keys.toggle,
+	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "save"), currentModel.keys.toggle,
 		currentModel.keys.edit, relabeled(currentModel.keys.no, "skip")}, width, 2)...)
 	return lines
 }
@@ -477,4 +529,42 @@ func (currentModel model) draftPreview(text string, width int) []string {
 		shown = append(shown, currentModel.theme.faint.Render("…"))
 	}
 	return strings.Split(currentModel.theme.pinned.Render(strings.Join(shown, "\n")), "\n")
+}
+
+func (currentModel model) welcomeKeysBody(width int) []string {
+	theme := currentModel.theme
+	state := currentModel.welcome
+	keys := currentModel.keys
+	keyLine := func(keyLabel string, description string) string {
+		return theme.key.Render(padRight(keyLabel, 8)) + theme.text.Render(description)
+	}
+	lines := []string{currentModel.welcomeCardHeader("Getting around", currentModel.welcomeStepCount(), width), ""}
+	lines = append(lines, wrapAll([]string{theme.text.Render("den is the column on the left, and your agents sit beside it. Every key in den is a plain key; these work from anywhere in the window:")}, width)...)
+	lines = append(lines, "",
+		keyLine("⌥1–⌥4", "jump to that agent"),
+		keyLine("⌥0", "jump to den, and back"),
+		keyLine("⌥N", "start a new agent"),
+		keyLine("click", "focus any pane"),
+		"", theme.columnHeader.Render("IN DEN"),
+		keyLine("⇥  ⌫", "yes or no to what den proposes on a row"),
+		keyLine("↵", "open, or yes when den asks"),
+		keyLine("esc", "back out without changing anything"),
+		keyLine("?", "every key"),
+		"")
+	var finishHints []key.Binding
+	switch {
+	case currentModel.needsOptionKey():
+		lines = append(lines, wrapAll([]string{
+			theme.suggestionBold.Render("✦ Terminal.app types characters with Option right now, so the ⌥ keys can't reach den."),
+			theme.dim.Render(fmt.Sprintf("Enter turns on \"Use Option as Meta key\" for its profile \"%s\". New windows get it; Option stops typing characters like å there.", state.optionKeyProfile)),
+		}, width)...)
+		finishHints = []key.Binding{relabeled(keys.yes, "turn it on and finish"), relabeled(keys.no, "leave it off")}
+	case state.optionKeyProfile != "":
+		lines = append(lines, theme.running.Render("✓ ")+theme.dim.Render(fmt.Sprintf("Option keys work: \"Use Option as Meta key\" is on in Terminal.app (%s).", state.optionKeyProfile)))
+		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
+	default:
+		lines = append(lines, wrapAll([]string{theme.dim.Render("In iTerm2 set Option to send Esc+, in Ghostty set macos-option-as-alt, so the ⌥ keys reach den.")}, width)...)
+		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
+	}
+	return append(lines, "", strings.Join(currentModel.hintLines(finishHints, width, 1), ""))
 }

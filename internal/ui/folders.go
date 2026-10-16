@@ -62,7 +62,6 @@ func (currentModel *model) askForNewFolder(parentId string) tea.Cmd {
 		currentModel.saveRepository()
 		folderId := folder.Id
 		currentModel.cursorTo(func(row listRow) bool { return row.kind == folderRow && row.folder.Id == folderId })
-		currentModel.selectOrganizeFolder(folderId)
 		currentModel.setStatus("made " + name + " · e to give it context")
 	})
 }
@@ -224,14 +223,15 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 		return currentModel, nil
 	}
 	rows := currentModel.rows()
-	rowIndex := mouse.Y - listTopLine + currentModel.listOffset
-	isOverRow := mouse.Y >= listTopLine && rowIndex < len(rows) && mouse.Y < listTopLine+currentModel.listHeight()
+	rowIndex, isOverRow := currentModel.rowAtLine(mouse.Y)
+	isOverRow = isOverRow && mouse.X < currentModel.treeWidth()
+	var command tea.Cmd
 	switch message.(type) {
 	case tea.MouseClickMsg:
 		currentModel.dragging = nil
 		if isOverRow {
 			if currentModel.listCursor == rowIndex && !rows[rowIndex].isMovable() {
-				currentModel.openRow(rows[rowIndex])
+				command = currentModel.openRow(rows[rowIndex])
 			}
 			currentModel.listCursor = rowIndex
 			if rows[rowIndex].isMovable() {
@@ -246,7 +246,10 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 	case tea.MouseReleaseMsg:
 		dragging := currentModel.dragging
 		currentModel.dragging, currentModel.dropTargetRow = nil, -1
-		if dragging == nil || !isOverRow || rows[rowIndex].kind == archiveRow {
+		if dragging == nil || !isOverRow {
+			return currentModel, nil
+		}
+		if target := rows[rowIndex]; target.kind != inboxRow && target.kind != folderRow && !target.isMovable() {
 			return currentModel, nil
 		}
 		if sourceIndex := slices.IndexFunc(rows, dragging); sourceIndex >= 0 && sourceIndex != rowIndex {
@@ -264,5 +267,5 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 			}
 		}
 	}
-	return currentModel, nil
+	return currentModel, command
 }

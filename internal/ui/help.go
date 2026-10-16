@@ -15,22 +15,27 @@ type helpGroup struct {
 
 func (currentModel model) helpGroups() []helpGroup {
 	keys := currentModel.keys
+	optionKey := func(keyLabel string, description string) key.Binding {
+		return key.NewBinding(key.WithKeys(), key.WithHelp(keyLabel, description))
+	}
 	return []helpGroup{
-		{title: "WORK", bindings: []key.Binding{
-			relabeled(keys.open, "resume, focus, open"), relabeled(keys.newSession, "new session, with context"), keys.newWithout,
-			keys.jump, relabeled(keys.accept, "accept the faint suggestion"), relabeled(keys.dismiss, "reject it"),
-			relabeled(keys.move, "carry to a folder"), keys.rename, keys.archive, keys.delete,
+		{title: "FROM ANYWHERE", bindings: []key.Binding{
+			optionKey("⌥1-4", "jump to that agent"), optionKey("⌥0", "jump to den, and back"),
+			keys.newFromAgent, optionKey("click", "focus any pane"),
 		}},
-		{title: "FOLDERS AND CONTEXT", bindings: []key.Binding{
-			relabeled(keys.newFolder, "new folder"), relabeled(keys.editContext, "edit context.md in $EDITOR"),
-			relabeled(keys.organize, "organize: zoom in and out"), relabeled(keys.review, "review suggestions"), relabeled(keys.chat, "ask den"),
+		{title: "YES AND NO", bindings: []key.Binding{
+			relabeled(keys.accept, "yes to what den proposes"), relabeled(keys.reject, "no, and don't offer it again"),
+			relabeled(keys.back, "back out, change nothing"), relabeled(keys.yes, "yes, in reviews and questions"),
 		}},
-		{title: "ORGANIZE", bindings: []key.Binding{
-			relabeled(keys.left, "folders"), relabeled(keys.right, "sessions"), keys.selectRow, relabeled(keys.accept, "accept for selected"),
-			relabeled(keys.move, "move selected"), keys.filter, keys.scrollPreview, relabeled(keys.back, "back out"),
+		{title: "SESSIONS", bindings: []key.Binding{
+			relabeled(keys.open, "resume, focus, open"), relabeled(keys.newSession, "new, with context"), keys.newWithout,
+			keys.jump, relabeled(keys.move, "carry to a folder"), relabeled(keys.selectRow, "select several"),
+			keys.rename, keys.archive, keys.delete, keys.filter,
 		}},
-		{title: "REVIEW", bindings: []key.Binding{
-			keys.yes, keys.no, relabeled(keys.edit, "change it first"), keys.skip, keys.ask, keys.done,
+		{title: "FOLDERS AND DEN", bindings: []key.Binding{
+			relabeled(keys.newFolder, "new folder"), relabeled(keys.editContext, "edit context.md"),
+			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview, relabeled(keys.review, "review proposals"),
+			relabeled(keys.chat, "ask den"), keys.quit,
 		}},
 	}
 }
@@ -48,7 +53,7 @@ func (currentModel model) helpView() string {
 	theme := currentModel.theme
 	width := currentModel.width
 	lines := []string{currentModel.screenTopBar("keys", width), theme.border.Render(strings.Repeat("─", width)), ""}
-	const columnWidth = 38
+	const columnWidth = 40
 	var columns []string
 	for _, group := range currentModel.helpGroups() {
 		column := []string{theme.columnHeader.Render(group.title), ""}
@@ -65,7 +70,7 @@ func (currentModel model) helpView() string {
 		lines = append(lines, "")
 	}
 	notes := []string{
-		theme.dim.Render("Ctrl+Space jumps into den from any agent, and back again. Drag a pane's title onto another to swap them."),
+		theme.dim.Render("The Option keys need \"Use Option as Meta key\" in Terminal.app: Settings, Profiles, Keyboard. Drag a pane's title onto another to swap them."),
 		theme.dim.Render("◆ marks folders with context. Agents in a folder start with it; say \"remember for <folder>: …\" to add to it."),
 		theme.faint.Render("den only suggests. Nothing moves, changes or gets deleted until you say so."),
 	}

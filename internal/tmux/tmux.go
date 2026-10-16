@@ -170,6 +170,16 @@ func SetPaneStatus(paneId string, state string) error {
 	return nil
 }
 
+// GlobalEnvironment reads a variable from the environment tmux started with, which is the terminal's.
+func GlobalEnvironment(name string) string {
+	output, err := run("show-environment", "-g", name)
+	if err != nil {
+		return ""
+	}
+	_, value, _ := strings.Cut(output, "=")
+	return value
+}
+
 func IsZoomed(windowId string) bool {
 	output, err := run("display-message", "-p", "-t", windowId, "#{window_zoomed_flag}")
 	return err == nil && output == "1"
@@ -192,12 +202,29 @@ func DisplayPopup(title string, workingDirectory string, command []string) error
 	return err
 }
 
-// BindDenKey makes Ctrl+Space, with no prefix, move between den and the agents in den windows:
-// from an agent it selects the panel, the top-left pane, and from the panel it goes back to the last agent.
-// Elsewhere the key reaches the program as usual.
-func BindDenKey(windowMarkerOption string, panelMarkerOption string) error {
-	toggle := "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\""
-	_, err := run("bind-key", "-n", "C-Space", "if-shell", "-F", "#{"+windowMarkerOption+"}", toggle, "send-keys C-Space")
+// BindDenKeys binds Option keys, with no prefix, in den windows: ⌥1–⌥4 select that agent, the panel being the top-left
+// pane and the agents following it in pane order; ⌥0 selects the panel, or from the panel goes back to the last agent;
+// ⌥N asks the panel for a new agent. Outside den windows each key reaches the program as usual.
+// They replace Ctrl+Space, which an earlier den bound and macOS keeps for switching keyboard layouts.
+func BindDenKeys(windowMarkerOption string, panelMarkerOption string) error {
+	insideDenWindow := "#{" + windowMarkerOption + "}"
+	bindings := map[string]string{
+		"M-0": "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\"",
+		"M-n": "send-keys -t '{top-left}' M-n",
+	}
+	for agentNumber := 1; agentNumber <= 4; agentNumber++ {
+		number := strconv.Itoa(agentNumber)
+		bindings["M-"+number] = "if-shell -F '#{e|>:#{window_panes}," + number + "}' " +
+			"\"select-pane -t '{top-left}' ; select-pane -t ':.+" + number + "'\" " +
+			"'display-message \"no agent " + number + " open\"'"
+	}
+	for key, denCommand := range bindings {
+		if _, err := run("bind-key", "-n", key, "if-shell", "-F", insideDenWindow, denCommand, "send-keys "+key); err != nil {
+			return err
+		}
+	}
+	run("unbind-key", "-n", "C-Space")
+	_, err := run("bind-key", "Space", "next-layout")
 	return err
 }
 

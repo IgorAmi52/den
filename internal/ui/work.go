@@ -11,7 +11,7 @@ import (
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
-// updateWork handles the narrow panel beside the agents.
+// updateWork handles the tree, narrow beside the agents or wide with the preview.
 func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 	var command tea.Cmd
 	var updated tea.Model = currentModel
@@ -19,75 +19,103 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		updated, command = currentModel.updateWorkKey(typedMessage)
 	case tea.MouseMsg:
-		if currentModel.prompt == nil && currentModel.confirming == nil && !currentModel.picking {
+		if currentModel.prompt == nil && currentModel.confirming == nil && !currentModel.picking && currentModel.picker == nil {
 			updated, command = currentModel.updateMouse(typedMessage)
 		}
 	default:
 		if currentModel.prompt != nil {
 			updated, command = currentModel.updatePrompt(message)
+		} else if currentModel.filtering {
+			currentModel.filter, command = currentModel.filter.Update(message)
+			updated = currentModel
 		}
 	}
 	afterUpdate := updated.(model)
+	afterUpdate.clampCursor()
 	afterUpdate.scrollToCursor()
 	return afterUpdate, command
 }
 
 func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if currentModel.prompt != nil {
+	keys := currentModel.keys
+	if key.Matches(keyPress, keys.newFromAgent) && currentModel.prompt == nil && !currentModel.filtering {
+		currentModel.confirming, currentModel.picker, currentModel.grabbed = nil, nil, nil
+		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false)
+	}
+	switch {
+	case currentModel.prompt != nil:
 		return currentModel.updatePrompt(keyPress)
-	}
-	if currentModel.confirming != nil {
+	case currentModel.filtering:
+		return currentModel.updateFilter(keyPress)
+	case currentModel.confirming != nil:
 		return currentModel.updateConfirmation(keyPress)
-	}
-	if currentModel.picking {
+	case currentModel.picking:
 		return currentModel.updatePicker(keyPress)
-	}
-	if currentModel.grabbed != nil {
+	case currentModel.picker != nil:
+		return currentModel.updateFolderPicker(keyPress)
+	case currentModel.grabbed != nil:
 		return currentModel.updateGrab(keyPress)
 	}
 	currentModel.clearStatus()
-	keys := currentModel.keys
 	selected, exists := currentModel.selectedRow()
 	switch {
 	case key.Matches(keyPress, keys.quit):
 		currentModel.askToQuit()
+	case key.Matches(keyPress, keys.back):
+		currentModel.stepBack()
 	case key.Matches(keyPress, keys.up):
 		currentModel.listCursor = max(currentModel.listCursor-1, 0)
+		currentModel.previewOffset = 0
 	case key.Matches(keyPress, keys.down):
 		currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
+		currentModel.previewOffset = 0
+	case key.Matches(keyPress, keys.scrollPreview):
+		if keyPress.String() == "pgup" || keyPress.String() == "K" {
+			currentModel.previewOffset = max(currentModel.previewOffset-5, 0)
+		} else {
+			currentModel.previewOffset += 5
+		}
 	case key.Matches(keyPress, keys.newSession):
 		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false)
 	case key.Matches(keyPress, keys.newWithout):
 		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), true)
 	case key.Matches(keyPress, keys.jump):
 		currentModel.jumpToAgent(keyPress.String())
-	case key.Matches(keyPress, keys.organize):
-		currentModel.toggleOrganize()
+	case key.Matches(keyPress, keys.wide):
+		currentModel.toggleWide()
 	case key.Matches(keyPress, keys.review):
 		currentModel.openReview()
 	case key.Matches(keyPress, keys.chat):
 		return currentModel, currentModel.openChat(nil)
 	case key.Matches(keyPress, keys.help):
 		currentModel.openScreen(helpScreen)
+	case key.Matches(keyPress, keys.filter):
+		currentModel.filtering = true
+		currentModel.listCursor, currentModel.listOffset = 0, 0
+		currentModel.filter.SetWidth(currentModel.panelWidth() - 4)
+		focusCommand := currentModel.filter.Focus()
+		return currentModel, focusCommand
 	case key.Matches(keyPress, keys.newFolder):
 		return currentModel, currentModel.askForNewFolder(currentModel.folderForNewItems())
+	case len(currentModel.selected) > 0 && currentModel.updateSelection(keyPress):
 	case !exists:
 	case key.Matches(keyPress, keys.open):
-		currentModel.openRow(selected)
+		return currentModel, currentModel.openRow(selected)
 	case key.Matches(keyPress, keys.accept):
+		currentModel.acceptProposal(selected)
+	case key.Matches(keyPress, keys.reject):
+		currentModel.rejectProposal(selected)
+	case key.Matches(keyPress, keys.selectRow):
 		if selected.kind == sessionRow {
-			currentModel.acceptFilingFor(selected.session.SessionId)
-		}
-	case key.Matches(keyPress, keys.dismiss):
-		if selected.kind == sessionRow {
-			currentModel.rejectFilingFor(selected.session.SessionId)
+			currentModel.selected[selected.session.SessionId] = true
+			currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
 		}
 	case key.Matches(keyPress, keys.move):
 		currentModel.startGrab()
 	// Shortcuts for terminals that send Shift+arrows; Terminal.app sends them as plain arrows, so grab mode is the main way.
-	case keyPress.String() == "shift+down" || keyPress.String() == "J":
+	case keyPress.String() == "shift+down":
 		currentModel.moveSelected(1)
-	case keyPress.String() == "shift+up" || keyPress.String() == "K":
+	case keyPress.String() == "shift+up":
 		currentModel.moveSelected(-1)
 	case key.Matches(keyPress, keys.rename):
 		return currentModel, currentModel.askForRename(selected, true)
@@ -96,6 +124,9 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 			currentModel.setArchived([]string{selected.session.SessionId}, !selected.session.Archived)
 		}
 	case key.Matches(keyPress, keys.editContext):
+		if selected.kind == contextFileRow {
+			return currentModel, currentModel.editContextFile(selected.guide)
+		}
 		return currentModel, currentModel.editContext(selected.folderId())
 	case key.Matches(keyPress, keys.delete):
 		currentModel.askToDelete(selected)
@@ -103,9 +134,97 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 	return currentModel, nil
 }
 
-// openRow opens or closes a folder, focuses an open agent, or resumes a saved session.
-func (currentModel *model) openRow(row listRow) {
+// updateSelection handles the keys that act on every selected session, and tells whether the key was one of them.
+func (currentModel *model) updateSelection(keyPress tea.KeyPressMsg) bool {
+	keys := currentModel.keys
+	selected, exists := currentModel.selectedRow()
+	var sessionIds []string
+	for _, session := range currentModel.repository.Sessions {
+		if currentModel.selected[session.SessionId] {
+			sessionIds = append(sessionIds, session.SessionId)
+		}
+	}
+	switch {
+	case key.Matches(keyPress, keys.selectRow):
+		if exists && selected.kind == sessionRow {
+			sessionId := selected.session.SessionId
+			if currentModel.selected[sessionId] {
+				delete(currentModel.selected, sessionId)
+			} else {
+				currentModel.selected[sessionId] = true
+			}
+			currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
+		}
+	case key.Matches(keyPress, keys.accept):
+		accepted := 0
+		for _, sessionId := range sessionIds {
+			if session := currentModel.repository.FindSession(sessionId); session != nil && currentModel.repository.PendingFor(sessionId) != nil {
+				currentModel.acceptProposal(listRow{kind: sessionRow, session: session})
+				accepted++
+			}
+		}
+		currentModel.selected = map[string]bool{}
+		currentModel.setStatus(fmt.Sprintf("said yes to %d proposals", accepted))
+	case key.Matches(keyPress, keys.move):
+		currentModel.askWhereToMove(sessionIds)
+	case key.Matches(keyPress, keys.archive):
+		currentModel.setArchived(sessionIds, !currentModel.repository.FindSession(sessionIds[0]).Archived)
+		currentModel.selected = map[string]bool{}
+	case key.Matches(keyPress, keys.delete):
+		currentModel.askToDeleteSessions(sessionIds)
+	default:
+		return false
+	}
+	return true
+}
+
+// stepBack undoes one layer: the selection, then the filter, then the wide view.
+func (currentModel *model) stepBack() {
+	switch {
+	case len(currentModel.selected) > 0:
+		currentModel.selected = map[string]bool{}
+	case currentModel.filter.Value() != "":
+		currentModel.filter.SetValue("")
+		currentModel.listCursor, currentModel.listOffset = 0, 0
+	case currentModel.isWide() && len(currentModel.openAgents) > 0:
+		currentModel.toggleWide()
+	}
+}
+
+func (currentModel model) updateFilter(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(keyPress, currentModel.keys.back):
+		currentModel.filtering = false
+		currentModel.filter.SetValue("")
+		currentModel.filter.Blur()
+		currentModel.listCursor, currentModel.listOffset = 0, 0
+		return currentModel, nil
+	// Only the arrows leave the filter, since j and k are letters someone may be typing.
+	case key.Matches(keyPress, currentModel.keys.open), keyPress.String() == "down", keyPress.String() == "up":
+		currentModel.filtering = false
+		currentModel.filter.Blur()
+		currentModel.listCursor = 0
+		for rowIndex, row := range currentModel.rows() {
+			if row.kind == sessionRow {
+				currentModel.listCursor = rowIndex
+				break
+			}
+		}
+		return currentModel, nil
+	}
+	var command tea.Cmd
+	currentModel.filter, command = currentModel.filter.Update(keyPress)
+	currentModel.listCursor, currentModel.listOffset = 0, 0
+	return currentModel, command
+}
+
+// openRow opens or closes a folder, focuses an open agent, resumes a saved session, or edits a context file.
+func (currentModel *model) openRow(row listRow) tea.Cmd {
 	switch row.kind {
+	case repositoryRow:
+		currentModel.repositoryExpanded = !currentModel.repositoryExpanded
+	case contextFileRow:
+		return currentModel.editContextFile(row.guide)
 	case inboxRow:
 		currentModel.inboxCollapsed = !currentModel.inboxCollapsed
 	case archiveRow:
@@ -121,6 +240,14 @@ func (currentModel *model) openRow(row listRow) {
 			currentModel.resumeSession(row.session.SessionId)
 		}
 	}
+	return nil
+}
+
+func (currentModel *model) editContextFile(guide string) tea.Cmd {
+	if guide == "" {
+		return currentModel.editContext("")
+	}
+	return currentModel.editGuide(guide)
 }
 
 // startNewSession opens an agent in the folder, asking which agent first when more than one is installed.
@@ -230,7 +357,7 @@ func (currentModel *model) askToDeleteSessions(sessionIds []string) {
 		currentModel.saveRepository()
 		currentModel.reportError(currentModel.refreshAgents())
 		currentModel.clampCursor()
-		currentModel.organize.clearSelection()
+		currentModel.selected = map[string]bool{}
 		return nil
 	}}
 }
@@ -249,25 +376,6 @@ func (currentModel *model) setArchived(sessionIds []string, archived bool) {
 		currentModel.setStatus(fmt.Sprintf("archived %s, still resumable", countedSessions(len(sessionIds))))
 	} else {
 		currentModel.setStatus(fmt.Sprintf("brought back %s", countedSessions(len(sessionIds))))
-	}
-}
-
-// acceptFilingFor accepts the suggestion shown as ghost text on the session's row.
-func (currentModel *model) acceptFilingFor(sessionId string) {
-	suggestion := currentModel.repository.PendingFor(sessionId)
-	if suggestion == nil {
-		currentModel.setStatus("no suggestion here · m to move it yourself")
-		return
-	}
-	currentModel.acceptSuggestion(suggestion.Id)
-	currentModel.cursorTo(func(row listRow) bool {
-		return row.kind == sessionRow && row.session.SessionId == sessionId
-	})
-}
-
-func (currentModel *model) rejectFilingFor(sessionId string) {
-	if suggestion := currentModel.repository.PendingFor(sessionId); suggestion != nil {
-		currentModel.rejectSuggestion(suggestion.Id)
 	}
 }
 

@@ -18,18 +18,12 @@ var guideUses = map[string]string{
 	"issue":        "Agents read it before they write an issue.",
 }
 
+// previewColumnLines show the selected row in full beside the tree, when wide: a proposal first when there is one,
+// then the session, the folder's context or the file.
 func (currentModel model) previewColumnLines(width int, height int) []string {
 	innerWidth := width - 2
-	var header string
-	var body []string
-	if currentModel.organize.focus == itemsColumn {
-		if item, exists := currentModel.selectedItem(); exists {
-			header, body = currentModel.itemPreview(item, innerWidth)
-		}
-	} else {
-		header, body = currentModel.entryPreview(currentModel.selectedEntry(), innerWidth)
-	}
-	offset := min(currentModel.organize.previewOffset, max(len(body)-1, 0))
+	header, body := currentModel.rowPreview(innerWidth)
+	offset := min(currentModel.previewOffset, max(len(body)-1, 0))
 	lines := []string{currentModel.theme.columnHeader.Render(" " + header)}
 	for _, line := range body[offset:] {
 		lines = append(lines, " "+line)
@@ -45,37 +39,67 @@ func (currentModel model) previewColumnLines(width int, height int) []string {
 	return fitted
 }
 
-func (currentModel model) entryPreview(entry organizeEntry, width int) (string, []string) {
+func (currentModel model) rowPreview(width int) (string, []string) {
 	theme := currentModel.theme
-	switch entry.kind {
-	case reviewEntry:
-		count := len(currentModel.repository.Suggestions)
-		if count == 0 {
-			return "REVIEW", wrapAll([]string{
-				theme.dim.Render("Nothing waiting."),
-				"",
-				theme.dim.Render("den suggests where sessions go, ⎇ subfolders for branches, notes for context.md, and cleanups. Every suggestion waits here until you say yes or no."),
-			}, width)
+	if count := len(currentModel.selected); count > 0 {
+		lines := []string{theme.accentBold.Render(countedSessions(count) + " selected"), ""}
+		for _, session := range currentModel.repository.Sessions {
+			if currentModel.selected[session.SessionId] {
+				lines = append(lines, theme.text.Render("✓ "+truncate(session.Title, width-2)))
+			}
 		}
-		lines := []string{theme.suggestion.Render(fmt.Sprintf("✦ %d waiting", count)), ""}
-		for _, suggestion := range currentModel.repository.Suggestions {
-			label, summary := currentModel.suggestionSummary(suggestion)
-			lines = append(lines, theme.suggestion.Render(padRight(label, 10))+truncate(summary, width-10))
-		}
-		lines = append(lines, "", theme.dim.Render("↵ goes through them one at a time, like git add -p: y yes, n no, e edit, s skip."))
-		return "REVIEW", wrapAll(lines, width)
-	case repositoryEntry:
-		return "CONTEXT", currentModel.contextFilePreview("", width)
-	case inboxEntry:
+		lines = append(lines, "", theme.dim.Render("⇥ says yes to what den proposes for them, m moves them, a archives them, d deletes them, esc clears the selection."))
+		return "SELECTION", wrapAll(lines, width)
+	}
+	row, exists := currentModel.selectedRow()
+	if !exists {
+		return "", nil
+	}
+	var proposal []string
+	if suggestion := currentModel.proposalFor(row); suggestion != nil && row.kind != sessionRow {
+		proposal = append([]string{theme.suggestionBold.Render("✦ " + currentModel.proposalTitle(*suggestion))}, currentModel.suggestionBody(*suggestion, width)...)
+		proposal = append(proposal, theme.key.Render("⇥")+theme.action.Render(" yes  ")+theme.key.Render("⌫")+theme.action.Render(" no"), "", theme.border.Render(strings.Repeat("─", width)), "")
+	}
+	switch row.kind {
+	case repositoryRow:
+		return "CONTEXT", append(proposal, currentModel.repositoryPreview(width)...)
+	case contextFileRow:
+		return "FILE", append(proposal, currentModel.contextFilePreview(row.guide, width)...)
+	case folderRow:
+		return "CONTEXT", append(proposal, currentModel.folderContextPreview(row.folder, width)...)
+	case inboxRow:
 		return "INBOX", wrapAll([]string{
-			theme.dim.Render("Sessions that aren't filed yet. When den knows where one belongs, the row shows it in faint text, and ⇥ files it."),
+			theme.dim.Render("Sessions that aren't filed yet. When den knows where one belongs, the row says so in faint text, and ⇥ files it."),
 			"",
 			theme.dim.Render("Sessions here start with the repo's context only."),
 		}, width)
-	case archiveEntry:
+	case archiveRow:
 		return "ARCHIVE", wrapAll([]string{theme.dim.Render("Archived sessions stay resumable: ↵ opens one, a brings it back.")}, width)
+	case newAgentRow:
+		return "SESSION", wrapAll([]string{
+			theme.bold.Render("new " + row.open.tool),
+			currentModel.layoutRow(append([]segment{{text: "pane ", style: theme.dim}}, currentModel.paneMarker(row.open)...), nil, width, false),
+			"",
+			theme.dim.Render("den saves it once you send the first prompt."),
+		}, width)
 	}
-	return "CONTEXT", currentModel.folderContextPreview(entry.folder, width)
+	return "SESSION", currentModel.sessionPreview(row.session, row.open, width)
+}
+
+// repositoryPreview shows the repo's context and lists the guides.
+func (currentModel model) repositoryPreview(width int) []string {
+	theme := currentModel.theme
+	lines := currentModel.contextFilePreview("", width)
+	lines = append(lines, "", theme.columnHeader.Render("GUIDES"))
+	for _, guide := range store.Guides {
+		name, _, tokens := currentModel.contextFileDetails(guide)
+		size := theme.faint.Render("empty")
+		if tokens > 0 {
+			size = theme.dim.Render(fmt.Sprintf("~%d tokens", tokens))
+		}
+		lines = append(lines, theme.text.Render(padRight(name, 18))+size)
+	}
+	return append(lines, "", theme.dim.Render("↵ shows them in the tree, where ↵ on one opens it in $EDITOR."))
 }
 
 func (currentModel model) folderContextPreview(folder *store.Folder, width int) []string {
@@ -114,7 +138,11 @@ func (currentModel model) contextFilePreview(guide string, width int) []string {
 		text = currentModel.repository.ReadGuide(guide)
 		use = guideUses[guide]
 	}
-	lines := []string{currentModel.layoutRow([]segment{{text: name, style: theme.bold}}, []segment{{text: fmt.Sprintf("~%d tokens", tokens), style: theme.dim}}, width, false)}
+	size := segment{text: "empty", style: theme.faint}
+	if tokens > 0 {
+		size = segment{text: fmt.Sprintf("~%d tokens", tokens), style: theme.dim}
+	}
+	lines := []string{currentModel.layoutRow([]segment{{text: name, style: theme.bold}}, []segment{size}, width, false)}
 	lines = append(lines, theme.dim.Render(use), "")
 	if strings.TrimSpace(text) == "" {
 		lines = append(lines, theme.faint.Render("Empty. e writes it."))
@@ -126,24 +154,6 @@ func (currentModel model) contextFilePreview(guide string, width int) []string {
 	}
 	lines = append(lines, "", currentModel.fileLink(filePath, width))
 	return wrapAll(lines, width)
-}
-
-func (currentModel model) itemPreview(item organizeItem, width int) (string, []string) {
-	theme := currentModel.theme
-	switch item.kind {
-	case suggestionItem:
-		return "SUGGESTION", currentModel.suggestionBody(*item.suggestion, width)
-	case contextFileItem:
-		return "FILE", currentModel.contextFilePreview(item.guide, width)
-	case newAgentItem:
-		return "SESSION", wrapAll([]string{
-			theme.bold.Render("new " + item.open.tool),
-			currentModel.layoutRow(append([]segment{{text: "pane ", style: theme.dim}}, currentModel.paneMarker(item.open)...), nil, width, false),
-			"",
-			theme.dim.Render("den saves it once you send the first prompt."),
-		}, width)
-	}
-	return "SESSION", currentModel.sessionPreview(item.session, item.open, width)
 }
 
 func (currentModel model) sessionPreview(session *store.Session, open *openAgent, width int) []string {
@@ -171,11 +181,6 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 		lines = append(lines, glyph.style.Render(glyph.text)+theme.text.Render(fmt.Sprintf(" %s in pane %d", statusText, open.number)))
 	} else {
 		lines = append(lines, theme.faint.Render("· not open · ↵ resumes it"))
-	}
-	if suggestion := currentModel.repository.PendingFor(session.SessionId); suggestion != nil {
-		lines = append(lines, "", theme.suggestion.Render("✦ "+strings.TrimPrefix(currentModel.ghostText(session.SessionId), "→ ")))
-		lines = append(lines, theme.dim.Render(suggestion.Reason))
-		lines = append(lines, theme.key.Render("⇥")+theme.action.Render(" accept  ")+theme.key.Render("x")+theme.action.Render(" reject"))
 	}
 	if digest.FirstPrompt != "" {
 		lines = append(lines, "", theme.columnHeader.Render("FIRST PROMPT"), truncate(digest.FirstPrompt, width*4))

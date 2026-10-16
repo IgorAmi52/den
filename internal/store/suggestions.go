@@ -85,6 +85,11 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 		})
 	}
 	if suggestion.Kind == SuggestCleanup {
+		// Each session shows one proposal, so one already waiting to be filed stays out of the cleanup.
+		suggestion.SessionIds = slices.DeleteFunc(suggestion.SessionIds, func(sessionId string) bool {
+			pending := repository.PendingFor(sessionId)
+			return pending != nil && pending.Kind != SuggestCleanup
+		})
 		return repository.replaceCleanup(suggestion)
 	}
 	if suggestion.Kind == SuggestMove || suggestion.Kind == SuggestSubfolder {
@@ -198,16 +203,52 @@ func (repository *Repository) Accept(suggestionId string) error {
 	return nil
 }
 
-// PendingFor returns the waiting move or subfolder suggestion that would file this session, if any.
+// PendingFor returns the waiting suggestion that would file or archive this session, if any.
 func (repository *Repository) PendingFor(sessionId string) *Suggestion {
 	for index := range repository.Suggestions {
 		suggestion := &repository.Suggestions[index]
-		isFiling := suggestion.Kind == SuggestMove || suggestion.Kind == SuggestSubfolder
-		if isFiling && slices.Contains(suggestion.SessionIds, sessionId) {
+		if suggestion.Kind != SuggestContext && slices.Contains(suggestion.SessionIds, sessionId) {
 			return suggestion
 		}
 	}
 	return nil
+}
+
+// PendingContextFor returns the waiting edit of a folder's context, or of a guide when guide is set.
+func (repository *Repository) PendingContextFor(folderId string, guide string) *Suggestion {
+	for index := range repository.Suggestions {
+		suggestion := &repository.Suggestions[index]
+		if suggestion.Kind == SuggestContext && suggestion.FolderId == folderId && suggestion.Guide == guide {
+			return suggestion
+		}
+	}
+	return nil
+}
+
+// AcceptFor answers yes for one session's row. A cleanup only archives that session and keeps offering the rest;
+// every other kind is accepted whole.
+func (repository *Repository) AcceptFor(suggestionId string, sessionId string) error {
+	suggestion := repository.FindSuggestion(suggestionId)
+	if suggestion == nil || suggestion.Kind != SuggestCleanup {
+		return repository.Accept(suggestionId)
+	}
+	if session := repository.FindSession(sessionId); session != nil {
+		session.Archived = true
+	}
+	repository.ForgetSessionSuggestions(sessionId)
+	return nil
+}
+
+// RejectFor answers no for one session's row. A cleanup keeps only that session and still offers the rest;
+// every other kind is rejected whole.
+func (repository *Repository) RejectFor(suggestionId string, sessionId string) {
+	suggestion := repository.FindSuggestion(suggestionId)
+	if suggestion == nil || suggestion.Kind != SuggestCleanup {
+		repository.Reject(suggestionId)
+		return
+	}
+	repository.RejectedKeys = append(repository.RejectedKeys, "cleanup:"+sessionId)
+	repository.ForgetSessionSuggestions(sessionId)
 }
 
 // ForgetSessionSuggestions drops waiting suggestions about sessions the user just filed or archived by hand,
