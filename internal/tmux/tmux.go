@@ -128,7 +128,8 @@ func BindTitleDragToSwapPanes(windowMarkerOption string, fixedPaneOption string)
 	swapOntoTarget := []string{
 		"if-shell", "-F", "-t", "=", "#{&&:#{pane_marked_set}," + movablePane + "}",
 		"swap-pane -s '{marked}' -t = ; select-pane -M",
-		"if-shell -F '" + insideMarkedWindow + "' 'select-pane -M'",
+		// Not a title drag: pass the release on, so apps with their own mouse handling (like the panel) see the drop.
+		"if-shell -F '" + insideMarkedWindow + "' 'select-pane -M' ; send-keys -M -t =",
 	}
 	bindings := map[string][]string{
 		"MouseDown1Border":    {"if-shell", "-F", "-t", "=", movablePane, "select-pane -t = ; select-pane -M ; select-pane -m -t =", "select-pane -t ="},
