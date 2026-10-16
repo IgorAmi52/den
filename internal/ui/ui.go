@@ -56,7 +56,7 @@ var windowOptions = map[string]string{
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
-	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[default], den },#{?#{==:#{@den-status},waiting}," +
+	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌃Space back #[default], den #[fg=colour240]⌃Space #[default]},#{?#{==:#{@den-status},waiting}," +
 		"#[fg=colour214 bold] ! #{@den-number} needs you · " + paneLabel + " #[default]," +
 		"#{?pane_active,#[bg=colour75 fg=colour231 bold] #{@den-number} " + paneLabel + " #[default], #{@den-number} " + paneLabel + " }}}",
 	windowMarkerOption: "1",
@@ -180,7 +180,7 @@ func Run() error {
 	if err := tmux.BindTitleDragToSwapPanes(windowMarkerOption, PanelMarkerOption); err != nil {
 		return err
 	}
-	if err := tmux.BindPanelHotkey(windowMarkerOption); err != nil {
+	if err := tmux.BindDenKey(windowMarkerOption, PanelMarkerOption); err != nil {
 		return err
 	}
 	workingDirectory, err := os.Getwd()

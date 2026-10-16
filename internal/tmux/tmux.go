@@ -192,10 +192,12 @@ func DisplayPopup(title string, workingDirectory string, command []string) error
 	return err
 }
 
-// BindPanelHotkey makes prefix+Space select the panel, the top-left pane, in den windows.
-// Elsewhere it keeps tmux's default, next-layout.
-func BindPanelHotkey(windowMarkerOption string) error {
-	_, err := run("bind-key", "Space", "if-shell", "-F", "#{"+windowMarkerOption+"}", "select-pane -t '{top-left}'", "next-layout")
+// BindDenKey makes Ctrl+Space, with no prefix, move between den and the agents in den windows:
+// from an agent it selects the panel, the top-left pane, and from the panel it goes back to the last agent.
+// Elsewhere the key reaches the program as usual.
+func BindDenKey(windowMarkerOption string, panelMarkerOption string) error {
+	toggle := "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\""
+	_, err := run("bind-key", "-n", "C-Space", "if-shell", "-F", "#{"+windowMarkerOption+"}", toggle, "send-keys C-Space")
 	return err
 }
 

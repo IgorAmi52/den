@@ -65,7 +65,7 @@ func (currentModel model) helpView() string {
 		lines = append(lines, "")
 	}
 	notes := []string{
-		theme.dim.Render("prefix+Space jumps to this panel from any agent. Drag a pane's title onto another to swap them."),
+		theme.dim.Render("Ctrl+Space jumps into den from any agent, and back again. Drag a pane's title onto another to swap them."),
 		theme.dim.Render("◆ marks folders with context. Agents in a folder start with it; say \"remember for <folder>: …\" to add to it."),
 		theme.faint.Render("den only suggests. Nothing moves, changes or gets deleted until you say so."),
 	}
