@@ -416,7 +416,7 @@ func (currentModel model) welcomeFoldersBody(width int) []string {
 	}
 	readWith := "No model call, nothing left this Mac."
 	if proposal.ByModel {
-		readWith = "A small model grouped and named them, from those details only."
+		readWith = "den's model grouped and named them, from those details only."
 	}
 	lines = append(lines, wrapAll([]string{theme.text.Render(fmt.Sprintf("I read %s in this repo: their branches, the files they edited and their first prompts. %s",
 		countedSessions(proposal.PastSessionCount), readWith))}, width)...)
@@ -469,7 +469,7 @@ func (currentModel model) scanningNote() string {
 	if currentModel.helperCaller == nil {
 		return "Only branch names, edited files and first prompts, read on this Mac."
 	}
-	return "Branch names, edited files and first prompts; " + currentModel.helperCaller.Tool + "'s small model groups and names them."
+	return "Branch names, edited files and first prompts; " + currentModel.helperCaller.Name() + " groups and names them."
 }
 
 // leftoverSessions are the past sessions no accepted folder takes.

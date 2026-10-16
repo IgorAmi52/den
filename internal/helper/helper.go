@@ -19,8 +19,9 @@ import (
 
 const callTimeout = 3 * time.Minute
 
-// claudeModel is small and fast; den's calls are short and need no thinking.
-const claudeModel = "haiku"
+// claudeModel follows den's instructions on what not to do, which matters most where den acts without asking.
+// Its calls are short and need no thinking.
+const claudeModel = "sonnet"
 
 // Caller runs calls through one CLI: claude when installed, since its calls cost far fewer tokens, otherwise codex.
 type Caller struct {
@@ -41,6 +42,14 @@ type Usage struct {
 	OutputTokens int
 	CostDollars  float64
 	Duration     time.Duration
+}
+
+// Name says which CLI and model make the calls, like "claude sonnet"; codex uses the model its config picks.
+func (caller Caller) Name() string {
+	if caller.Tool == "claude" {
+		return "claude " + claudeModel
+	}
+	return caller.Tool
 }
 
 func Find() (Caller, bool) {

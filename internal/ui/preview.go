@@ -106,7 +106,7 @@ func (currentModel model) repositoryPreview(width int) []string {
 	if currentModel.helperCaller == nil {
 		lines = append(lines, theme.dim.Render("No agent CLI can make model calls, so den uses its local rules only."))
 	} else {
-		usage := fmt.Sprintf("%s's small model · %d calls this run", currentModel.helperCaller.Tool, currentModel.helperCalls)
+		usage := fmt.Sprintf("%s · %d calls this run", currentModel.helperCaller.Name(), currentModel.helperCalls)
 		if currentModel.helperUsage.CostDollars > 0 {
 			usage += fmt.Sprintf(" · $%.3f", currentModel.helperUsage.CostDollars)
 		}
