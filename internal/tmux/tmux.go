@@ -15,6 +15,7 @@ type Pane struct {
 	Top     int
 	Width   int
 	Height  int
+	Options map[string]string
 }
 
 func InsideSession() bool {
@@ -144,16 +145,28 @@ func SelectPane(paneId string) error {
 	return err
 }
 
-func ListPanes(windowId string) ([]Pane, error) {
-	output, err := run("list-panes", "-t", windowId, "-F", "#{pane_id} #{pane_left} #{pane_top} #{pane_width} #{pane_height} #{pane_current_command}")
+// ListPanes returns the window's panes in pane order, with the values of the requested pane options.
+func ListPanes(windowId string, optionNames ...string) ([]Pane, error) {
+	fields := []string{"#{pane_id}", "#{pane_left}", "#{pane_top}", "#{pane_width}", "#{pane_height}"}
+	for _, optionName := range optionNames {
+		fields = append(fields, "#{"+optionName+"}")
+	}
+	// The command name is never empty, so it goes last: the output is trimmed, which would drop empty trailing fields.
+	fields = append(fields, "#{pane_current_command}")
+	output, err := run("list-panes", "-t", windowId, "-F", strings.Join(fields, "\t"))
 	if err != nil {
 		return nil, err
 	}
 	var panes []Pane
 	for _, line := range strings.Split(output, "\n") {
-		var pane Pane
-		if _, err := fmt.Sscanf(line, "%s %d %d %d %d %s", &pane.Id, &pane.Left, &pane.Top, &pane.Width, &pane.Height, &pane.Command); err != nil {
-			return nil, err
+		values := strings.Split(line, "\t")
+		pane := Pane{Id: values[0], Command: values[len(values)-1], Options: map[string]string{}}
+		pane.Left, _ = strconv.Atoi(values[1])
+		pane.Top, _ = strconv.Atoi(values[2])
+		pane.Width, _ = strconv.Atoi(values[3])
+		pane.Height, _ = strconv.Atoi(values[4])
+		for optionIndex, optionName := range optionNames {
+			pane.Options[optionName] = values[5+optionIndex]
 		}
 		panes = append(panes, pane)
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/layout"
+	"github.com/IgorAmi52/den/internal/store"
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
@@ -20,6 +22,13 @@ const (
 	PanelWidth         = 30
 	PanelMarkerOption  = "@den-panel"
 	windowMarkerOption = "@den"
+)
+
+// Each agent pane remembers what runs in it, so a restarted panel can pick the sessions up again.
+const (
+	paneToolOption       = "@den-tool"
+	paneSessionOption    = "@den-session-id"
+	paneLaunchedAtOption = "@den-launched-at"
 )
 
 var (
@@ -40,8 +49,10 @@ var windowOptions = map[string]string{
 }
 
 type openAgent struct {
-	paneId    string
-	agentName string
+	paneId     string
+	tool       string
+	sessionId  string
+	launchedAt time.Time
 }
 
 type tickMessage struct{}
@@ -52,6 +63,8 @@ type model struct {
 	workingDirectory string
 	installedAgents  []agent.Adapter
 	openAgents       []openAgent
+	repository       store.Repository
+	sessionCursor    int
 	picking          bool
 	pickerCursor     int
 	confirmingQuit   bool
@@ -89,11 +102,16 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	repository, err := store.Load(workingDirectory)
+	if err != nil {
+		return err
+	}
 	initialModel := model{
 		panelPaneId:      panelPaneId,
 		windowId:         windowId,
 		workingDirectory: workingDirectory,
 		installedAgents:  agent.Installed(),
+		repository:       repository,
 	}
 	if err := initialModel.refreshAgents(); err != nil {
 		return err
@@ -119,6 +137,7 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typedMessage := message.(type) {
 	case tickMessage:
 		currentModel.reportError(currentModel.refreshAgents())
+		currentModel.reportError(currentModel.trackNewSessions())
 		return currentModel, tick()
 	case tea.KeyPressMsg:
 		if currentModel.confirmingQuit {
@@ -145,6 +164,14 @@ func (currentModel model) updateMain(key string) (tea.Model, tea.Cmd) {
 		} else {
 			currentModel.picking = true
 			currentModel.pickerCursor = 0
+		}
+	case "up", "k":
+		currentModel.sessionCursor = max(currentModel.sessionCursor-1, 0)
+	case "down", "j":
+		currentModel.sessionCursor = max(min(currentModel.sessionCursor+1, len(currentModel.repository.Sessions)-1), 0)
+	case "enter":
+		if currentModel.sessionCursor < len(currentModel.repository.Sessions) {
+			currentModel.resumeSession(currentModel.repository.Sessions[currentModel.sessionCursor].SessionId)
 		}
 	case "1", "2", "3", "4":
 		agentIndex := int(key[0] - '1')
@@ -182,15 +209,52 @@ func (currentModel model) updatePicker(key string) (tea.Model, tea.Cmd) {
 	return currentModel, nil
 }
 
-// openAgent splits the last pane so the new agent comes last in pane order, then lets the layout place it.
 func (currentModel *model) openAgent(adapter agent.Adapter) {
+	command, sessionId := adapter.NewSessionCommand()
+	currentModel.launchInPane(adapter.Name(), sessionId, command)
+}
+
+func (currentModel *model) resumeSession(sessionId string) {
+	for _, open := range currentModel.openAgents {
+		if open.sessionId == sessionId {
+			currentModel.reportError(tmux.SelectPane(open.paneId))
+			return
+		}
+	}
+	if len(currentModel.openAgents) >= maximumAgents {
+		currentModel.statusMessage = fmt.Sprintf("max %d agents, close one first", maximumAgents)
+		return
+	}
+	session := currentModel.repository.FindSession(sessionId)
+	adapter, known := agent.ByName(session.Tool)
+	if !known {
+		currentModel.statusMessage = "unknown tool " + session.Tool
+		return
+	}
+	currentModel.launchInPane(session.Tool, sessionId, adapter.ResumeCommand(sessionId))
+	session.LastActivityAt = time.Now()
+	currentModel.saveSessions()
+	currentModel.sessionCursor = slices.IndexFunc(currentModel.repository.Sessions, func(saved store.Session) bool {
+		return saved.SessionId == sessionId
+	})
+}
+
+// launchInPane splits the last pane so the new agent comes last in pane order, then lets the layout place it.
+func (currentModel *model) launchInPane(tool string, sessionId string, command []string) {
 	targetPaneId := currentModel.panelPaneId
 	if len(currentModel.openAgents) > 0 {
 		targetPaneId = currentModel.openAgents[len(currentModel.openAgents)-1].paneId
 	}
-	if _, err := tmux.SplitPane(targetPaneId, true, currentModel.workingDirectory, adapter.NewSessionCommand()); err != nil {
+	launchedAt := time.Now()
+	paneId, err := tmux.SplitPane(targetPaneId, true, currentModel.workingDirectory, command)
+	if err != nil {
 		currentModel.reportError(err)
 		return
+	}
+	currentModel.reportError(tmux.SetPaneOption(paneId, paneToolOption, tool))
+	currentModel.reportError(tmux.SetPaneOption(paneId, paneLaunchedAtOption, strconv.FormatInt(launchedAt.UnixMilli(), 10)))
+	if sessionId != "" {
+		currentModel.reportError(tmux.SetPaneOption(paneId, paneSessionOption, sessionId))
 	}
 	currentModel.reportError(currentModel.refreshAgents())
 	currentModel.reportError(layout.Apply(currentModel.windowId, PanelMarkerOption, PanelWidth))
@@ -198,25 +262,71 @@ func (currentModel *model) openAgent(adapter agent.Adapter) {
 
 // refreshAgents reads the agents from tmux in pane order, so numbering follows the screen after swaps.
 func (currentModel *model) refreshAgents() error {
-	agentPanes, err := currentModel.agentPanes()
+	windowPanes, err := tmux.ListPanes(currentModel.windowId, paneToolOption, paneSessionOption, paneLaunchedAtOption)
 	if err != nil {
 		return err
 	}
 	currentModel.openAgents = nil
-	for _, pane := range agentPanes {
-		currentModel.openAgents = append(currentModel.openAgents, openAgent{paneId: pane.Id, agentName: pane.Command})
+	for _, pane := range windowPanes {
+		if pane.Id == currentModel.panelPaneId {
+			continue
+		}
+		launchedAtMilliseconds, _ := strconv.ParseInt(pane.Options[paneLaunchedAtOption], 10, 64)
+		currentModel.openAgents = append(currentModel.openAgents, openAgent{
+			paneId:     pane.Id,
+			tool:       pane.Options[paneToolOption],
+			sessionId:  pane.Options[paneSessionOption],
+			launchedAt: time.UnixMilli(launchedAtMilliseconds),
+		})
 	}
 	return nil
 }
 
-func (currentModel *model) agentPanes() ([]tmux.Pane, error) {
-	windowPanes, err := tmux.ListPanes(currentModel.windowId)
-	if err != nil {
-		return nil, err
+// trackNewSessions saves sessions of open panes once their first prompt exists; before that there is nothing to resume.
+func (currentModel *model) trackNewSessions() error {
+	for agentIndex, open := range currentModel.openAgents {
+		adapter, known := agent.ByName(open.tool)
+		if !known || (open.sessionId != "" && currentModel.repository.FindSession(open.sessionId) != nil) {
+			continue
+		}
+		foundSession, found, err := adapter.FindSession(open.sessionId, currentModel.workingDirectory, open.launchedAt)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		if open.sessionId == "" {
+			if err := tmux.SetPaneOption(open.paneId, paneSessionOption, foundSession.SessionId); err != nil {
+				return err
+			}
+			currentModel.openAgents[agentIndex].sessionId = foundSession.SessionId
+		}
+		now := time.Now()
+		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
+			Tool:           open.tool,
+			SessionId:      foundSession.SessionId,
+			Title:          strings.Join(strings.Fields(foundSession.FirstPrompt), " "),
+			CreatedAt:      now,
+			LastActivityAt: now,
+		})
+		currentModel.saveSessions()
 	}
-	return slices.DeleteFunc(windowPanes, func(pane tmux.Pane) bool {
-		return pane.Id == currentModel.panelPaneId
-	}), nil
+	return nil
+}
+
+// saveSessions keeps the list ordered by last activity, newest first, and writes it to disk.
+func (currentModel *model) saveSessions() {
+	slices.SortStableFunc(currentModel.repository.Sessions, func(first store.Session, second store.Session) int {
+		return second.LastActivityAt.Compare(first.LastActivityAt)
+	})
+	currentModel.reportError(currentModel.repository.Save())
+}
+
+func (currentModel model) openAgentFor(sessionId string) bool {
+	return slices.ContainsFunc(currentModel.openAgents, func(open openAgent) bool {
+		return open.sessionId == sessionId
+	})
 }
 
 func (currentModel *model) reportError(err error) {
@@ -241,16 +351,65 @@ func (currentModel model) View() tea.View {
 		}
 		content.WriteString("\n" + hintStyle.Render("enter start · esc cancel") + "\n")
 	} else {
-		for agentIndex, open := range currentModel.openAgents {
-			content.WriteString(fmt.Sprintf("%d %s\n", agentIndex+1, open.agentName))
-		}
-		if len(currentModel.openAgents) == 0 {
-			content.WriteString(hintStyle.Render("no agents yet") + "\n")
-		}
-		content.WriteString("\n" + hintStyle.Render("n new · q quit\n1-4 focus agent\nclick a pane to focus\ndrag a title to swap") + "\n")
+		currentModel.writeOpenAgents(&content)
+		content.WriteString("\n" + titleStyle.Render("sessions") + "\n")
+		currentModel.writeSessions(&content)
+		content.WriteString("\n" + hintStyle.Render("n new · enter resume · q quit\nclick focus · drag title swap") + "\n")
 	}
 	if currentModel.statusMessage != "" {
 		content.WriteString("\n" + currentModel.statusMessage + "\n")
 	}
 	return tea.NewView(content.String())
+}
+
+func (currentModel model) writeOpenAgents(content *strings.Builder) {
+	if len(currentModel.openAgents) == 0 {
+		content.WriteString(hintStyle.Render("no agents open") + "\n")
+	}
+	for agentIndex, open := range currentModel.openAgents {
+		label := hintStyle.Render("new")
+		if session := currentModel.repository.FindSession(open.sessionId); session != nil {
+			label = truncate(session.Title, PanelWidth-10)
+		}
+		content.WriteString(fmt.Sprintf("%d %-7s %s\n", agentIndex+1, open.tool, label))
+	}
+}
+
+func (currentModel model) writeSessions(content *strings.Builder) {
+	if len(currentModel.repository.Sessions) == 0 {
+		content.WriteString(hintStyle.Render("none yet") + "\n")
+	}
+	for sessionIndex, session := range currentModel.repository.Sessions {
+		openMarker := " "
+		if currentModel.openAgentFor(session.SessionId) {
+			openMarker = "●"
+		}
+		age := relativeAge(session.LastActivityAt)
+		line := fmt.Sprintf("%s %-*s %s", openMarker, PanelWidth-8, truncate(session.Title, PanelWidth-8), age)
+		if sessionIndex == currentModel.sessionCursor {
+			content.WriteString(selectedStyle.Render(">"+line) + "\n")
+		} else {
+			content.WriteString(" " + line + "\n")
+		}
+	}
+}
+
+func truncate(text string, maximumLength int) string {
+	characters := []rune(text)
+	if len(characters) <= maximumLength {
+		return text
+	}
+	return string(characters[:maximumLength-1]) + "…"
+}
+
+func relativeAge(moment time.Time) string {
+	elapsed := time.Since(moment)
+	if elapsed < time.Minute {
+		return "now"
+	} else if elapsed < time.Hour {
+		return fmt.Sprintf("%dm", int(elapsed.Minutes()))
+	} else if elapsed < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(elapsed.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(elapsed.Hours()/24))
 }
