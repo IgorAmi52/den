@@ -56,6 +56,9 @@ type model struct {
 	pickerCursor     int
 	confirmingQuit   bool
 	statusMessage    string
+	tipIndex         int
+	width            int
+	height           int
 }
 
 func Run() error {
@@ -117,6 +120,8 @@ func (currentModel model) Init() tea.Cmd {
 
 func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typedMessage := message.(type) {
+	case tea.WindowSizeMsg:
+		currentModel.width, currentModel.height = typedMessage.Width, typedMessage.Height
 	case tickMessage:
 		currentModel.reportError(currentModel.refreshAgents())
 		return currentModel, tick()
@@ -137,6 +142,8 @@ func (currentModel model) updateMain(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q", "ctrl+c":
 		currentModel.confirmingQuit = true
+	case "t":
+		currentModel.tipIndex = (currentModel.tipIndex + 1) % len(tips)
 	case "n":
 		if len(currentModel.openAgents) >= maximumAgents {
 			currentModel.statusMessage = fmt.Sprintf("max %d agents", maximumAgents)
@@ -228,6 +235,11 @@ func (currentModel *model) reportError(err error) {
 func (currentModel model) View() tea.View {
 	var content strings.Builder
 	content.WriteString(titleStyle.Render("den") + "\n\n")
+	var agentNames []string
+	for _, open := range currentModel.openAgents {
+		agentNames = append(agentNames, open.agentName)
+	}
+	content.WriteString(caveView(agentNames) + "\n\n")
 	if currentModel.confirmingQuit {
 		content.WriteString("Quit den and close all agents?\n\n" + hintStyle.Render("y yes · any other key no") + "\n")
 	} else if currentModel.picking {
@@ -247,10 +259,20 @@ func (currentModel model) View() tea.View {
 		if len(currentModel.openAgents) == 0 {
 			content.WriteString(hintStyle.Render("no agents yet") + "\n")
 		}
-		content.WriteString("\n" + hintStyle.Render("n new · q quit\n1-4 focus agent\nclick a pane to focus\ndrag a title to swap") + "\n")
+		content.WriteString("\n" + hintStyle.Render("n new · t tip · q quit") + "\n")
 	}
 	if currentModel.statusMessage != "" {
 		content.WriteString("\n" + currentModel.statusMessage + "\n")
 	}
-	return tea.NewView(content.String())
+	return tea.NewView(currentModel.pinToBottom(content.String(), currentModel.tipView()))
+}
+
+func (currentModel model) tipView() string {
+	return hintStyle.Width(PanelWidth).Render("tip: " + tips[currentModel.tipIndex])
+}
+
+func (currentModel model) pinToBottom(top string, bottom string) string {
+	top = strings.TrimSuffix(top, "\n")
+	padding := max(currentModel.height-lipgloss.Height(top)-lipgloss.Height(bottom)+1, 1)
+	return top + strings.Repeat("\n", padding) + bottom
 }
