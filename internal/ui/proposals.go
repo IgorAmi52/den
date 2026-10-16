@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -10,22 +12,26 @@ import (
 	"github.com/IgorAmi52/den/internal/store"
 )
 
-// proposalFor finds what den proposes for a row: filing or archiving a session, or an edit of a folder's context,
-// the repo's context or a guide.
+// proposalFor finds what den proposes for a row: filing or archiving a session, a folder's first context
+// or an edit of it, a rule for the laptop files, or on the repo row, a question.
 func (currentModel model) proposalFor(row listRow) *store.Suggestion {
+	repository := &currentModel.repository
 	switch row.kind {
 	case sessionRow:
-		return currentModel.repository.PendingFor(row.session.SessionId)
+		return repository.PendingFor(row.session.SessionId)
 	case folderRow:
-		return currentModel.repository.PendingContextFor(row.folder.Id, "")
+		return repository.PendingForFolder(row.folder.Id)
 	case contextFileRow:
-		return currentModel.repository.PendingContextFor("", row.guide)
-	case repositoryRow:
-		if suggestion := currentModel.repository.PendingContextFor("", ""); suggestion != nil {
+		if row.laptopTool == "" {
+			return repository.PendingForFolder("")
+		}
+		laptopFile, _ := currentModel.laptopFile(row.laptopTool)
+		if suggestion := repository.PendingOfKind(store.SuggestLaptopRule); suggestion != nil && slices.Contains(suggestion.FilePaths, laptopFile.Path) {
 			return suggestion
 		}
-		for _, guide := range store.Guides {
-			if suggestion := currentModel.repository.PendingContextFor("", guide); suggestion != nil {
+	case repositoryRow:
+		for _, suggestion := range []*store.Suggestion{repository.PendingOfKind(store.SuggestQuestion), repository.PendingForFolder(""), repository.PendingOfKind(store.SuggestLaptopRule)} {
+			if suggestion != nil {
 				return suggestion
 			}
 		}
@@ -41,7 +47,7 @@ func (currentModel model) ghostText(sessionId string) string {
 	}
 	switch suggestion.Kind {
 	case store.SuggestSubfolder:
-		return "→ ⎇ " + suggestion.FolderName
+		return "→ " + subfolderLabel(*suggestion)
 	case store.SuggestCleanup:
 		return "→ archive"
 	}
@@ -54,12 +60,44 @@ func (currentModel model) proposalTitle(suggestion store.Suggestion) string {
 	case store.SuggestMove:
 		return "file into " + currentModel.repository.FolderName(suggestion.FolderId)
 	case store.SuggestSubfolder:
+		if suggestion.Branch == "" {
+			return "group in a new subfolder for " + suggestion.FolderName
+		}
 		return "group in a new ⎇ subfolder"
 	case store.SuggestCleanup:
 		return "archive it"
+	case store.SuggestLink:
+		return "link " + filepath.Base(suggestion.LinkedPath) + " as its context"
+	case store.SuggestLaptopRule:
+		return "add a rule to " + laptopFileNames(suggestion.FilePaths)
+	case store.SuggestQuestion:
+		return suggestion.Question
+	}
+	switch suggestion.Starter {
+	case store.StarterPlan:
+		return "save the plan as its notes"
+	case store.StarterDraft:
+		return "start notes for " + currentModel.contextHeading(suggestion.FolderId)
 	}
 	added, removed := diffCounts(lineDiff(currentModel.currentContextText(suggestion), suggestion.ProposedText))
 	return fmt.Sprintf("update %s  +%d −%d", currentModel.contextFileName(suggestion), added, removed)
+}
+
+// subfolderLabel names a proposed subfolder, with ⎇ when it groups a branch.
+func subfolderLabel(suggestion store.Suggestion) string {
+	if suggestion.Branch != "" {
+		return "⎇ " + suggestion.FolderName
+	}
+	return suggestion.FolderName
+}
+
+// laptopFileNames names the laptop files a rule goes to, like "CLAUDE.md and AGENTS.md".
+func laptopFileNames(filePaths []string) string {
+	var names []string
+	for _, filePath := range filePaths {
+		names = append(names, filepath.Base(filePath))
+	}
+	return strings.Join(names, " and ")
 }
 
 // proposalReason says why den proposes it, for the session on this row when the proposal covers several.
@@ -74,13 +112,19 @@ func (currentModel model) proposalReason(suggestion store.Suggestion, row listRo
 		}
 	case store.SuggestContext:
 		reason := suggestion.Reason
-		if suggestion.Source != "" {
+		if suggestion.Source != "" && suggestion.Starter == "" {
 			reason = "Learned in " + suggestion.Source + ". " + reason
 		}
 		if !currentModel.isWide() {
-			reason += " z shows the change."
+			reason += " z shows it."
 		}
 		return reason
+	case store.SuggestLink:
+		if !currentModel.isWide() {
+			return suggestion.Reason + " z shows it."
+		}
+	case store.SuggestLaptopRule:
+		return "\"" + suggestion.Rule + "\" " + suggestion.Reason
 	}
 	return suggestion.Reason
 }
@@ -117,9 +161,18 @@ func (currentModel model) suggestionSummary(suggestion store.Suggestion) (label 
 		}
 		return "Move", truncate(title, 28) + " → " + currentModel.repository.FolderName(suggestion.FolderId)
 	case store.SuggestSubfolder:
-		return "Subfolder", fmt.Sprintf("⎇ %s in %s (%d)", suggestion.FolderName, currentModel.repository.FolderName(suggestion.ParentFolderId), len(suggestion.SessionIds))
+		return "Subfolder", fmt.Sprintf("%s in %s (%d)", subfolderLabel(suggestion), currentModel.repository.FolderName(suggestion.ParentFolderId), len(suggestion.SessionIds))
 	case store.SuggestCleanup:
 		return "Cleanup", countedSessions(len(suggestion.SessionIds)) + " look finished"
+	case store.SuggestLink:
+		return "Link", filepath.Base(suggestion.LinkedPath) + " → ◆ " + currentModel.contextHeading(suggestion.FolderId)
+	case store.SuggestLaptopRule:
+		return "Laptop rule", truncate(suggestion.Rule, 40)
+	case store.SuggestQuestion:
+		return "Question", suggestion.Question
+	}
+	if suggestion.Starter != "" {
+		return "Notes", currentModel.proposalTitle(suggestion)
 	}
 	added, removed := diffCounts(lineDiff(currentModel.currentContextText(suggestion), suggestion.ProposedText))
 	return "Context", fmt.Sprintf("%s  +%d −%d", currentModel.contextFileName(suggestion), added, removed)

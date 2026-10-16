@@ -11,13 +11,14 @@ import (
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
-// textPrompt asks for one line of text and hands it to submit on enter.
+// textPrompt asks for one line of text and hands it to submit on enter; an empty answer cancels, unless allowsEmpty.
 // With inlineRow set, the input replaces that row in the tree, as a rename in place.
 type textPrompt struct {
-	question  string
-	input     textinput.Model
-	submit    func(currentModel *model, value string)
-	inlineRow func(listRow) bool
+	question    string
+	input       textinput.Model
+	submit      func(currentModel *model, value string)
+	inlineRow   func(listRow) bool
+	allowsEmpty bool
 }
 
 func (currentModel *model) askForText(question string, initialValue string, submit func(currentModel *model, value string)) tea.Cmd {
@@ -35,9 +36,9 @@ func (currentModel model) updatePrompt(message tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case key.Matches(keyPress, currentModel.keys.save):
 			value := strings.TrimSpace(currentModel.prompt.input.Value())
-			submit := currentModel.prompt.submit
+			submit, allowsEmpty := currentModel.prompt.submit, currentModel.prompt.allowsEmpty
 			currentModel.prompt = nil
-			if value != "" {
+			if value != "" || allowsEmpty {
 				submit(&currentModel, value)
 			}
 			return currentModel, nil
@@ -82,6 +83,7 @@ func (currentModel *model) askForRename(row listRow, inline bool) tea.Cmd {
 		command = currentModel.askForText("Rename session", row.session.Title, func(currentModel *model, title string) {
 			session := currentModel.repository.FindSession(sessionId)
 			session.Title, session.TitlePinned = title, true
+			delete(currentModel.retitles, sessionId)
 			if open := currentModel.openAgentFor(sessionId); open != nil {
 				currentModel.reportError(tmux.SetPaneOption(open.paneId, paneTitleOption, title))
 			}

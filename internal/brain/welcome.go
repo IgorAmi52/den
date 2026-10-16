@@ -40,7 +40,6 @@ type Welcome struct {
 	// Unfiled are the past sessions no proposed folder takes.
 	Unfiled []agent.Digest
 	Noticed []string
-	Guides  []ProposedGuide
 }
 
 type ProposedFolder struct {
@@ -51,19 +50,12 @@ type ProposedFolder struct {
 	Context string
 }
 
-type ProposedGuide struct {
-	Name   string
-	Text   string
-	Reason string
-}
-
 // IsRecent tells whether an unfiled past session goes to the Inbox rather than straight to the archive.
 func IsRecent(digest agent.Digest, now time.Time) bool {
 	return now.Sub(digest.LastActivityAt) < recentSession
 }
 
-// FirstRun groups past sessions into topics by the words of their branches, edited directories and first prompts,
-// and drafts the guides from the user's own commits.
+// FirstRun groups past sessions into topics by the words of their branches, edited directories and first prompts.
 func FirstRun(digests []agent.Digest, commitSubjects []string, repositoryPath string) Welcome {
 	welcome := Welcome{PastSessionCount: len(digests)}
 	topicWordsBySession := make([][]string, len(digests))
@@ -115,7 +107,6 @@ func FirstRun(digests []agent.Digest, commitSubjects []string, repositoryPath st
 		}
 	}
 	welcome.Noticed = noticedPatterns(digests, commitSubjects)
-	welcome.Guides = draftGuides(digests, commitSubjects)
 	return welcome
 }
 
@@ -170,9 +161,21 @@ func companionWords(word string, sessionIndexes []int, topicWordsBySession [][]s
 // draftContext lists where the folder's sessions edited code and which branches they used.
 // It is a starting point the user edits, not a summary; summaries need a model.
 func draftContext(folder ProposedFolder, repositoryPath string) string {
+	var draft strings.Builder
+	fmt.Fprintf(&draft, "# %s\n", folder.Name)
+	if len(folder.Keywords) > 0 {
+		fmt.Fprintf(&draft, "\nCovers %s.\n", strings.Join(folder.Keywords, ", "))
+	}
+	writeCodeSections(&draft, folder.Sessions, repositoryPath)
+	draft.WriteString("\n## Notes\n- \n")
+	return draft.String()
+}
+
+// writeCodeSections adds where the sessions edited code, the directories most sessions touched first, and their branches.
+func writeCodeSections(draft *strings.Builder, digests []agent.Digest, repositoryPath string) {
 	sessionCountByDirectory := map[string]int{}
 	var branches []string
-	for _, digest := range folder.Sessions {
+	for _, digest := range digests {
 		seen := map[string]bool{}
 		for _, filePath := range digest.TouchedFiles {
 			relativePath, err := filepath.Rel(repositoryPath, filePath)
@@ -199,25 +202,18 @@ func draftContext(folder ProposedFolder, repositoryPath string) string {
 		}
 		return directories[first] < directories[second]
 	})
-	var draft strings.Builder
-	fmt.Fprintf(&draft, "# %s\n", folder.Name)
-	if len(folder.Keywords) > 0 {
-		fmt.Fprintf(&draft, "\nCovers %s.\n", strings.Join(folder.Keywords, ", "))
-	}
 	if len(directories) > 0 {
 		draft.WriteString("\n## Where the code is\n")
 		for _, directory := range directories[:min(6, len(directories))] {
-			fmt.Fprintf(&draft, "- %s/ (edited in %s)\n", directory, countedSessions(sessionCountByDirectory[directory], "session"))
+			fmt.Fprintf(draft, "- %s/ (edited in %s)\n", directory, countedSessions(sessionCountByDirectory[directory], "session"))
 		}
 	}
 	if len(branches) > 0 {
 		draft.WriteString("\n## Branches\n")
 		for _, branch := range branches[:min(4, len(branches))] {
-			fmt.Fprintf(&draft, "- %s\n", branch)
+			fmt.Fprintf(draft, "- %s\n", branch)
 		}
 	}
-	draft.WriteString("\n## Notes\n- \n")
-	return draft.String()
 }
 
 func noticedPatterns(digests []agent.Digest, commitSubjects []string) []string {
@@ -254,8 +250,14 @@ func noticedPatterns(digests []agent.Digest, commitSubjects []string) []string {
 type commitHabits struct {
 	conventional bool
 	types        []string
-	issueKeys    bool
-	capitalized  bool
+	// issueKeyCount of subjectCount subjects name an issue key.
+	issueKeyCount int
+	subjectCount  int
+}
+
+// IsConventional tells whether most of the commit subjects are conventional commits.
+func IsConventional(commitSubjects []string) bool {
+	return commitStyle(commitSubjects).conventional
 }
 
 // commitStyle reads the habits most of the user's commit subjects share.
@@ -264,25 +266,19 @@ func commitStyle(commitSubjects []string) commitHabits {
 	if len(commitSubjects) == 0 {
 		return habits
 	}
-	conventionalCount, issueKeyCount, capitalizedCount := 0, 0, 0
+	conventionalCount := 0
 	typeCounts := map[string]int{}
 	for _, subject := range commitSubjects {
-		summary := subject
 		if match := conventionalCommitPattern.FindStringSubmatch(subject); match != nil {
 			conventionalCount++
 			typeCounts[match[1]]++
-			summary = strings.TrimPrefix(subject, match[0])
 		}
-		if issueKeyPattern.MatchString(subject) {
-			issueKeyCount++
-		}
-		if summary != "" && strings.ToUpper(summary[:1]) == summary[:1] && strings.ToLower(summary[:1]) != summary[:1] {
-			capitalizedCount++
+		if agent.IssueKeyIn(subject) != "" {
+			habits.issueKeyCount++
 		}
 	}
+	habits.subjectCount = len(commitSubjects)
 	habits.conventional = conventionalCount*2 > len(commitSubjects)
-	habits.issueKeys = issueKeyCount*2 > len(commitSubjects)
-	habits.capitalized = capitalizedCount*2 > len(commitSubjects)
 	for commitType := range typeCounts {
 		habits.types = append(habits.types, commitType)
 	}
@@ -293,53 +289,6 @@ func commitStyle(commitSubjects []string) commitHabits {
 		return habits.types[first] < habits.types[second]
 	})
 	return habits
-}
-
-func draftGuides(digests []agent.Digest, commitSubjects []string) []ProposedGuide {
-	habits := commitStyle(commitSubjects)
-	var commit strings.Builder
-	commit.WriteString("# Commit messages\n\n")
-	if habits.conventional {
-		fmt.Fprintf(&commit, "- Subject: `<type>: <summary>`. Types used here: %s.\n", strings.Join(habits.types, ", "))
-	} else {
-		commit.WriteString("- Subject: one line that says what changed.\n")
-	}
-	if habits.issueKeys {
-		commit.WriteString("- Put the issue key from the branch in the subject.\n")
-	}
-	if habits.capitalized {
-		commit.WriteString("- Start the summary with a capital letter, imperative mood, no trailing period.\n")
-	} else {
-		commit.WriteString("- Lowercase summary in the imperative mood, no trailing period.\n")
-	}
-	commit.WriteString("- Keep the subject under 72 characters.\n- Add a body only when the reason for the change isn't obvious from the diff.\n")
-	commitReason := "starter, no commits of yours found yet"
-	if len(commitSubjects) > 0 {
-		commitReason = fmt.Sprintf("from your last %d commits", len(commitSubjects))
-	}
-	issueLine := "- Link the issue when there is one.\n"
-	for _, digest := range digests {
-		if issueKey := issueKeyPattern.FindString(digest.Branch); issueKey != "" {
-			issueLine = fmt.Sprintf("- Link the issue from the branch name (like %s).\n", issueKey)
-			break
-		}
-	}
-	return []ProposedGuide{
-		{Name: "commit", Text: commit.String(), Reason: commitReason},
-		{
-			Name: "pull-request",
-			Text: "# Pull requests\n\n- Title: same style as a commit subject.\n" + issueLine +
-				"- Description, short:\n  - What changed, in two or three bullets.\n  - Why it changed.\n  - How to test it.\n" +
-				"- Leave out anything the diff already shows.\n",
-			Reason: "starter, den refines it as you go",
-		},
-		{
-			Name: "issue",
-			Text: "# Issues\n\n- Title: the problem in one line, not the fix.\n- Body:\n  - What happens, and what should happen instead.\n" +
-				"  - How to reproduce it, or where in the code it is.\n  - What was already ruled out.\n",
-			Reason: "starter, den refines it as you go",
-		},
-	}
 }
 
 func titleCase(word string) string {

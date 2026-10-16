@@ -27,15 +27,26 @@ type Observation struct {
 	Digests        map[string]agent.Digest
 	OpenSessionIds map[string]bool
 	MergedBranches map[string]bool
-	Now            time.Time
+	CommitSubjects []string
+	// ContextTokens has an entry for each folder with context, the repo's under "".
+	ContextTokens map[string]int
+	LaptopFiles   []LaptopFile
+	// ConventionalRepositories names the other repos on this machine whose commits are conventional.
+	ConventionalRepositories []string
+	Now                      time.Time
 }
 
 // Suggest runs every rule. The store drops the suggestions the user already rejected or is still looking at.
+// Issue subfolders go before branch subfolders, since one issue can span branches.
 // The cleanup comes last and may hold no sessions, which clears a cleanup that no longer applies.
 func Suggest(observation Observation) []store.Suggestion {
 	var suggestions []store.Suggestion
 	suggestions = append(suggestions, fileByBranch(observation)...)
+	suggestions = append(suggestions, issueSubfolders(observation)...)
 	suggestions = append(suggestions, branchSubfolders(observation)...)
+	suggestions = append(suggestions, folderNotes(observation)...)
+	suggestions = append(suggestions, laptopRules(observation)...)
+	suggestions = append(suggestions, questions(observation)...)
 	return append(suggestions, cleanup(observation))
 }
 
@@ -68,7 +79,7 @@ func branchSubfolders(observation Observation) []store.Suggestion {
 	repository := observation.Repository
 	var suggestions []store.Suggestion
 	for _, folder := range repository.Folders {
-		if folder.Branch != "" {
+		if folder.Branch != "" || folder.IssueKey != "" {
 			continue
 		}
 		sessionIdsByBranch := map[string][]string{}
@@ -157,7 +168,7 @@ func folderNamedIn(repository *store.Repository, session store.Session, branch s
 	branchWords, titleWords := words(branch), words(session.Title)
 	for index := range repository.Folders {
 		folder := &repository.Folders[index]
-		if folder.Branch != "" {
+		if folder.Branch != "" || folder.IssueKey != "" {
 			continue
 		}
 		folderWords := words(folder.Name)

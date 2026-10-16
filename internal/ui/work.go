@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 
 	"charm.land/bubbles/v2/key"
@@ -117,9 +118,14 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		}
 	case key.Matches(keyPress, keys.editContext):
 		if selected.kind == contextFileRow {
-			return currentModel, currentModel.editContextFile(selected.guide)
+			return currentModel, currentModel.editContextFile(selected.laptopTool)
 		}
 		return currentModel, currentModel.editContext(selected.folderId())
+	case key.Matches(keyPress, keys.link):
+		if selected.kind == folderRow {
+			return currentModel, currentModel.askForLink(selected.folder)
+		}
+		currentModel.setStatus("select a folder to link a file as its context")
 	case key.Matches(keyPress, keys.delete):
 		currentModel.askToDelete(selected)
 	}
@@ -170,7 +176,7 @@ func (currentModel *model) openRow(row listRow) tea.Cmd {
 	case repositoryRow:
 		currentModel.repositoryExpanded = !currentModel.repositoryExpanded
 	case contextFileRow:
-		return currentModel.editContextFile(row.guide)
+		return currentModel.editContextFile(row.laptopTool)
 	case inboxRow:
 		currentModel.inboxCollapsed = !currentModel.inboxCollapsed
 	case archiveRow:
@@ -189,11 +195,11 @@ func (currentModel *model) openRow(row listRow) tea.Cmd {
 	return nil
 }
 
-func (currentModel *model) editContextFile(guide string) tea.Cmd {
-	if guide == "" {
+func (currentModel *model) editContextFile(laptopTool string) tea.Cmd {
+	if laptopTool == "" {
 		return currentModel.editContext("")
 	}
-	return currentModel.editGuide(guide)
+	return currentModel.editLaptopFile(laptopTool)
 }
 
 // startNewSession opens an agent in the folder, asking which agent first when more than one is installed.
@@ -334,8 +340,8 @@ func (currentModel *model) acceptSuggestion(suggestionId string) {
 	}
 	currentModel.expandFolder(destinationFolderId)
 	currentModel.updatePaneFolders()
-	currentModel.saveRepository()
 	currentModel.refreshContextTokens()
+	currentModel.saveRepository()
 	currentModel.setStatus(done)
 }
 
@@ -350,9 +356,21 @@ func (currentModel model) describeDone(suggestion store.Suggestion) string {
 	case store.SuggestMove:
 		return fmt.Sprintf("filed %s in %s", countedSessions(len(suggestion.SessionIds)), currentModel.repository.FolderName(suggestion.FolderId))
 	case store.SuggestSubfolder:
-		return "made ⎇ " + suggestion.FolderName
+		return "made " + subfolderLabel(suggestion)
 	case store.SuggestCleanup:
 		return fmt.Sprintf("archived %s, still resumable", countedSessions(len(suggestion.SessionIds)))
+	case store.SuggestLink:
+		return "linked " + filepath.Base(suggestion.LinkedPath) + " · new sessions in " + currentModel.contextHeading(suggestion.FolderId) + " start with it"
+	case store.SuggestLaptopRule:
+		return "added to " + laptopFileNames(suggestion.FilePaths) + " · agents follow it in every repo"
+	case store.SuggestQuestion:
+		if suggestion.Rule != "" {
+			return "noted · added the rule to " + currentModel.repositoryName() + "'s context.md"
+		}
+		return "noted · den suggests it from now on"
+	}
+	if suggestion.Starter != "" {
+		return "saved notes for " + currentModel.contextHeading(suggestion.FolderId) + " · new sessions there start with them"
 	}
 	return "updated " + currentModel.contextFileName(suggestion)
 }

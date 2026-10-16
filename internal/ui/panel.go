@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -283,11 +284,11 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 	}
 	switch row.kind {
 	case repositoryRow:
-		left = []segment{{text: "◆ ", style: theme.accent}, {text: "context & guides", style: theme.accent}}
+		left = []segment{{text: "◆ ", style: theme.accent}, {text: "context", style: theme.accent}}
 		right = append(proposalMark(), segment{text: folderArrow(!currentModel.repositoryExpanded), style: theme.dim})
 	case contextFileRow:
-		name, _, tokens := currentModel.contextFileDetails(row.guide)
-		left = []segment{{text: name, style: theme.dim}}
+		name, scope, tokens := currentModel.contextFileDetails(row.laptopTool)
+		left = []segment{{text: name, style: theme.dim}, {text: " " + scope, style: theme.faint}}
 		right = proposalMark()
 		if tokens > 0 {
 			right = append(right, segment{text: fmt.Sprintf("~%d", tokens), style: theme.dim})
@@ -315,10 +316,7 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 		left = append(currentModel.paneMarker(row.open), segment{text: " new " + row.open.tool, style: theme.dim})
 		right = []segment{{text: relativeAge(row.open.launchedAt), style: theme.dim}}
 	case sessionRow:
-		left = append(currentModel.paneMarker(row.open), segment{text: " " + row.session.Title, style: theme.text})
-		if row.session.Archived {
-			left[len(left)-1].style = theme.dim
-		}
+		left = append(currentModel.paneMarker(row.open), currentModel.sessionTitleSegments(row.session)...)
 		switch ghost := currentModel.ghostText(row.session.SessionId); {
 		case ghost != "":
 			right = []segment{{text: truncate(ghost, min(ghostWidth, width/2)), style: theme.ghost}}
@@ -408,7 +406,7 @@ func (currentModel model) rowHints() []key.Binding {
 		case newAgentRow:
 			bindings = append(bindings, relabeled(keys.open, "focus"), keys.move, relabeled(keys.delete, "close"))
 		case folderRow:
-			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.rename, keys.newSubfolder, keys.delete)
+			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.link, keys.rename, keys.newSubfolder, keys.delete)
 		case repositoryRow:
 			bindings = append(bindings, relabeled(keys.open, "show files"), relabeled(keys.editContext, "repo context"))
 		case contextFileRow:
@@ -454,11 +452,13 @@ func (currentModel model) pickerLine(width int) string {
 	return currentModel.layoutRow(segments, nil, width, false)
 }
 
-func (currentModel model) contextFileDetails(guide string) (name string, description string, tokens int) {
-	if guide == "" {
-		return "context.md", "every session", store.EstimatedTokens(currentModel.repository.ReadContext(""))
+// contextFileDetails names a context file row: the repo's context.md, or a laptop file, with where it reaches.
+func (currentModel model) contextFileDetails(laptopTool string) (name string, scope string, tokens int) {
+	if laptopTool == "" {
+		return "context.md", "repo", store.EstimatedTokens(currentModel.repository.ReadContext(""))
 	}
-	return guide + ".md", "guide", store.EstimatedTokens(currentModel.repository.ReadGuide(guide))
+	laptopFile, _ := currentModel.laptopFile(laptopTool)
+	return filepath.Base(laptopFile.Path), "laptop", store.EstimatedTokens(laptopFile.Text)
 }
 
 func padLines(lines []string, prefix string) []string {

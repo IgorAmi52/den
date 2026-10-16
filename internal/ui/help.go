@@ -33,7 +33,8 @@ func (currentModel model) helpGroups() []helpGroup {
 			keys.rename, keys.archive, keys.delete, keys.filter,
 		}},
 		{title: "FOLDERS AND DEN", bindings: []key.Binding{
-			keys.newFolder, relabeled(keys.newSubfolder, "subfolder of the selected folder"), relabeled(keys.editContext, "edit context.md"),
+			keys.newFolder, relabeled(keys.newSubfolder, "subfolder of the selected folder"), relabeled(keys.editContext, "edit context"),
+			relabeled(keys.link, "link a plan or spec as context"),
 			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview, relabeled(keys.review, "review proposals"),
 			relabeled(keys.chat, "ask den"), keys.quit,
 		}},
@@ -71,7 +72,7 @@ func (currentModel model) helpView() string {
 	}
 	notes := []string{
 		theme.dim.Render("The Option keys need \"Use Option as Meta key\" in Terminal.app: Settings, Profiles, Keyboard. Drag a pane's title onto another to swap them."),
-		theme.dim.Render("◆ marks folders with context. Agents in a folder start with it; say \"remember for <folder>: …\" to add to it."),
+		theme.dim.Render("◆ marks folders with context. Agents in a folder start with it, and edit it when you ask them to update the notes."),
 		theme.faint.Render("den only suggests. Nothing moves, changes or gets deleted until you say so."),
 	}
 	for _, note := range notes {

@@ -12,13 +12,6 @@ import (
 	"github.com/IgorAmi52/den/internal/store"
 )
 
-// guideUses says when agents read each guide.
-var guideUses = map[string]string{
-	"commit":       "Agents read it before they write a commit message.",
-	"pull-request": "Agents read it before they open or describe a pull request.",
-	"issue":        "Agents read it before they write an issue.",
-}
-
 // previewColumnLines show the selected row in full beside the tree, when wide: a proposal first when there is one,
 // then the session, the folder's context or the file.
 func (currentModel model) previewColumnLines(width int, height int) []string {
@@ -55,7 +48,7 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 	case repositoryRow:
 		return "CONTEXT", append(proposal, currentModel.repositoryPreview(width)...)
 	case contextFileRow:
-		return "FILE", append(proposal, currentModel.contextFilePreview(row.guide, width)...)
+		return "FILE", append(proposal, currentModel.contextFilePreview(row.laptopTool, width)...)
 	case folderRow:
 		return "CONTEXT", append(proposal, currentModel.folderContextPreview(row.folder, width)...)
 	case inboxRow:
@@ -81,57 +74,93 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 	return "SESSION", currentModel.sessionPreview(row.session, row.open, width)
 }
 
-// repositoryPreview shows the repo's context and lists the guides.
+// repositoryPreview shows the repo's context, lists the laptop files, and what den has noticed about how you work.
 func (currentModel model) repositoryPreview(width int) []string {
 	theme := currentModel.theme
 	lines := currentModel.contextFilePreview("", width)
-	lines = append(lines, "", theme.columnHeader.Render("GUIDES"))
-	for _, guide := range store.Guides {
-		name, _, tokens := currentModel.contextFileDetails(guide)
-		size := theme.faint.Render("empty")
-		if tokens > 0 {
-			size = theme.dim.Render(fmt.Sprintf("~%d tokens", tokens))
+	if laptopFiles := currentModel.shownLaptopFiles(); len(laptopFiles) > 0 {
+		lines = append(lines, "", theme.columnHeader.Render("LAPTOP · EVERY REPO"))
+		for _, laptopFile := range laptopFiles {
+			size := theme.faint.Render("none yet")
+			if laptopFile.Exists {
+				size = theme.dim.Render(fmt.Sprintf("~%d tokens", store.EstimatedTokens(laptopFile.Text)))
+			}
+			lines = append(lines, theme.text.Render(padRight(filepath.Base(laptopFile.Path), 12))+theme.faint.Render(padRight(laptopFile.Tool, 8))+size)
 		}
-		lines = append(lines, theme.text.Render(padRight(name, 18))+size)
 	}
-	return append(lines, "", theme.dim.Render("↵ shows them in the tree, where ↵ on one opens it in $EDITOR."))
+	if habits := currentModel.repository.Habits; len(habits) > 0 {
+		lines = append(lines, "", theme.columnHeader.Render("HABITS"))
+		for _, habit := range habits {
+			counts := fmt.Sprintf("seen %d", habit.Seen)
+			if habit.Accepted+habit.Rejected > 0 {
+				counts += fmt.Sprintf(" · yes %d · no %d", habit.Accepted, habit.Rejected)
+			}
+			description := habit.Description
+			if description == "" {
+				description = habit.Name
+			}
+			lines = append(lines, theme.text.Render(description), theme.dim.Render("  "+string(habit.State)+" · "+counts))
+		}
+	}
+	return append(lines, "", theme.dim.Render("↵ shows the files in the tree, where ↵ on one opens it in $EDITOR."))
 }
 
 func (currentModel model) folderContextPreview(folder *store.Folder, width int) []string {
 	theme := currentModel.theme
-	contextPath, _ := currentModel.repository.ContextPath(folder.Id)
-	text := currentModel.repository.ReadContext(folder.Id)
-	var lines []string
 	inherits := []string{currentModel.repositoryName()}
 	for _, ancestor := range currentModel.repository.FolderPath(folder.ParentId) {
 		inherits = append(inherits, ancestor.Name)
 	}
-	if strings.TrimSpace(text) == "" {
+	contextPath, _ := currentModel.repository.ContextPath(folder.Id)
+	notes := currentModel.repository.ReadContext(folder.Id)
+	linked := ""
+	if folder.LinkedPath != "" {
+		linked = store.ReadText(folder.LinkedPath)
+	}
+	var lines []string
+	if strings.TrimSpace(notes) == "" && folder.LinkedPath == "" {
 		lines = append(lines, theme.bold.Render(folder.Name), "", theme.dim.Render("No context yet. Sessions here start with the context of "+strings.Join(inherits, " and ")+"."), "")
-		lines = append(lines, theme.key.Render("e")+theme.action.Render(" writes it, or tell an agent in this folder:"), theme.text.Render("  remember for "+folder.Name+": …"))
+		lines = append(lines, theme.key.Render("l")+theme.action.Render(" links a file you or an agent wrote, like a plan or a spec"))
+		lines = append(lines, theme.key.Render("e")+theme.action.Render(" writes den's notes for it instead"))
+		lines = append(lines, "", theme.faint.Render("When an agent here writes a plan, den offers to link it."))
 		return wrapAll(lines, width)
 	}
-	lines = append(lines, currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · context.md", style: theme.dim}},
-		[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(text)), style: theme.dim}}, width, false), "")
-	lines = append(lines, currentModel.markdownLines(text)...)
-	lines = append(lines, "", currentModel.fileLink(contextPath, width))
+	if folder.LinkedPath != "" {
+		size := segment{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(linked)), style: theme.dim}
+		if strings.TrimSpace(linked) == "" {
+			size = segment{text: "missing", style: theme.errorText}
+		}
+		lines = append(lines, currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · " + filepath.Base(folder.LinkedPath) + " · linked", style: theme.dim}},
+			[]segment{size}, width, false), "")
+		lines = append(lines, currentModel.markdownLines(linked)...)
+		lines = append(lines, "", currentModel.fileLink(folder.LinkedPath, width), theme.faint.Render("yours: den only proposes changes · l relinks"))
+	}
+	if strings.TrimSpace(notes) != "" {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · den's notes", style: theme.dim}},
+			[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(notes)), style: theme.dim}}, width, false), "")
+		lines = append(lines, currentModel.markdownLines(notes)...)
+		lines = append(lines, "", currentModel.fileLink(contextPath, width))
+	}
 	lines = append(lines, theme.dim.Render("loads after "+strings.Join(inherits, ", ")))
 	return wrapAll(lines, width)
 }
 
-// contextFilePreview shows the repo's context.md or one of its guides.
-func (currentModel model) contextFilePreview(guide string, width int) []string {
+// contextFilePreview shows the repo's context.md, or a laptop file.
+func (currentModel model) contextFilePreview(laptopTool string, width int) []string {
 	theme := currentModel.theme
-	name, _, tokens := currentModel.contextFileDetails(guide)
+	name, _, tokens := currentModel.contextFileDetails(laptopTool)
 	var filePath, text, use string
-	if guide == "" {
+	if laptopTool == "" {
 		filePath, _ = currentModel.repository.ContextPath("")
 		text = currentModel.repository.ReadContext("")
-		use = "Loads into every session in " + currentModel.repositoryName() + ", before the folder's own context."
+		use = "Your private rules and notes for " + currentModel.repositoryName() + ". Every session here starts with them, before the folder's context."
 	} else {
-		filePath, _ = currentModel.repository.GuidePath(guide)
-		text = currentModel.repository.ReadGuide(guide)
-		use = guideUses[guide]
+		laptopFile, _ := currentModel.laptopFile(laptopTool)
+		filePath, text = laptopFile.Path, laptopFile.Text
+		use = laptopTool + " loads it in every repo, so den never adds it to a session. den only proposes rules for it, ones that hold in more than one repo."
 	}
 	size := segment{text: "empty", style: theme.faint}
 	if tokens > 0 {
@@ -141,7 +170,7 @@ func (currentModel model) contextFilePreview(guide string, width int) []string {
 	lines = append(lines, theme.dim.Render(use), "")
 	if strings.TrimSpace(text) == "" {
 		lines = append(lines, theme.faint.Render("Empty. e writes it."))
-		if guide == "" {
+		if laptopTool == "" {
 			lines = append(lines, "", theme.dim.Render("This is the read-this-first file you would paste into every new session."))
 		}
 	} else {
@@ -167,6 +196,9 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 		}
 		lines = append(lines, theme.dim.Render(branchLine))
 	}
+	if digest.IssueKey != "" {
+		lines = append(lines, theme.dim.Render("issue "+digest.IssueKey))
+	}
 	if open != nil {
 		statusText := map[string]string{"running": "running", "waiting": "waiting for you"}[open.status]
 		if statusText == "" {
@@ -190,6 +222,12 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 		}
 		if len(digest.TouchedFiles) > 8 {
 			lines = append(lines, theme.faint.Render(fmt.Sprintf("and %d more", len(digest.TouchedFiles)-8)))
+		}
+	}
+	if len(digest.PullRequests) > 0 {
+		lines = append(lines, "", theme.columnHeader.Render("PULL REQUESTS"))
+		for _, link := range digest.PullRequests {
+			lines = append(lines, ansi.SetHyperlink(link)+theme.link.Render(truncate(link, width))+ansi.ResetHyperlink())
 		}
 	}
 	lines = append(lines, "", theme.columnHeader.Render("CONTEXT"))

@@ -51,7 +51,8 @@ func RecentCommitSubjects(directory string, count int) []string {
 	return strings.Split(output, "\n")
 }
 
-// MergedBranches lists local branches already merged into main or master.
+// MergedBranches lists local branches already merged into main or master, and those whose remote branch is gone,
+// which is how a squash-merged pull request looks after a fetch. den never fetches; it reads what the last fetch left.
 func MergedBranches(directory string) map[string]bool {
 	merged := map[string]bool{}
 	for _, defaultBranch := range []string{"main", "master"} {
@@ -64,7 +65,13 @@ func MergedBranches(directory string) map[string]bool {
 				merged[branch] = true
 			}
 		}
-		return merged
+		break
+	}
+	output, _ := run(directory, "for-each-ref", "--format=%(refname:short) %(upstream:track)", "refs/heads")
+	for _, line := range strings.Split(output, "\n") {
+		if branch, isGone := strings.CutSuffix(line, " [gone]"); isGone {
+			merged[branch] = true
+		}
 	}
 	return merged
 }

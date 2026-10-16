@@ -31,25 +31,22 @@ const (
 	scanningStep welcomeStep = iota
 	foldersStep
 	contextsStep
-	guidesStep
 	// keysStep teaches the keys and offers to turn on Terminal.app's Option key, which den's ⌥ keys need.
 	keysStep
 )
 
 // welcomeState is the first-run review: den reads the repo's past sessions and commits,
-// then proposes folders, their contexts and the guides, and the user picks what to keep.
+// then proposes folders and their contexts, and the user picks what to keep.
 type welcomeState struct {
 	step     welcomeStep
 	spinner  spinner.Model
 	proposal brain.Welcome
 	cursor   int
-	// folderNames, contextTexts and guideTexts start as den's drafts and change when the user edits them.
+	// folderNames and contextTexts start as den's drafts and change when the user edits them.
 	folderAccepted  []bool
 	folderNames     []string
 	contextAccepted []bool
 	contextTexts    []string
-	guideAccepted   []bool
-	guideTexts      []string
 	// optionKeyProfile is Terminal.app's profile for new windows, when den runs in Terminal.app.
 	optionKeyProfile string
 	optionKeyEnabled bool
@@ -118,10 +115,6 @@ func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Mo
 		state.contextAccepted = append(state.contextAccepted, true)
 		state.contextTexts = append(state.contextTexts, folder.Context)
 	}
-	for _, guide := range scanned.proposal.Guides {
-		state.guideAccepted = append(state.guideAccepted, currentModel.repository.ReadGuide(guide.Name) == "")
-		state.guideTexts = append(state.guideTexts, guide.Text)
-	}
 	return currentModel, nil
 }
 
@@ -175,7 +168,7 @@ func (currentModel model) updateWelcome(message tea.Msg) (tea.Model, tea.Cmd) {
 	return currentModel, nil
 }
 
-// welcomeIndexes are the rows of the current step: every proposed folder, the drafts of the accepted ones, or the guides.
+// welcomeIndexes are the rows of the current step: every proposed folder, or the drafts of the accepted ones.
 func (currentModel model) welcomeIndexes() []int {
 	state := currentModel.welcome
 	var indexes []int
@@ -190,22 +183,15 @@ func (currentModel model) welcomeIndexes() []int {
 				indexes = append(indexes, index)
 			}
 		}
-	case guidesStep:
-		for index := range state.guideTexts {
-			indexes = append(indexes, index)
-		}
 	}
 	return indexes
 }
 
 func (currentModel model) welcomeAccepted() []bool {
-	switch currentModel.welcome.step {
-	case foldersStep:
+	if currentModel.welcome.step == foldersStep {
 		return currentModel.welcome.folderAccepted
-	case contextsStep:
-		return currentModel.welcome.contextAccepted
 	}
-	return currentModel.welcome.guideAccepted
+	return currentModel.welcome.contextAccepted
 }
 
 func (currentModel *model) advanceWelcome() {
@@ -213,13 +199,11 @@ func (currentModel *model) advanceWelcome() {
 	state.cursor = 0
 	switch state.step {
 	case foldersStep:
-		state.step = guidesStep
+		state.step = keysStep
 		if slices.Contains(state.folderAccepted, true) {
 			state.step = contextsStep
 		}
 	case contextsStep:
-		state.step = guidesStep
-	case guidesStep:
 		state.step = keysStep
 	}
 }
@@ -253,23 +237,16 @@ func (currentModel *model) editWelcomeItem(index int) tea.Cmd {
 		return currentModel.askForText("Folder name", state.folderNames[index], func(currentModel *model, name string) {
 			currentModel.welcome.folderNames[index] = name
 		})
-	case contextsStep:
-		return currentModel.editDraft("◆ "+state.folderNames[index]+" · draft context", state.contextTexts[index], func(currentModel *model, text string) {
-			currentModel.welcome.contextTexts[index] = text
-			currentModel.welcome.contextAccepted[index] = true
-			currentModel.setStatus("draft updated")
-		})
 	}
-	guide := state.proposal.Guides[index]
-	return currentModel.editDraft(guide.Name+".md · draft", state.guideTexts[index], func(currentModel *model, text string) {
-		currentModel.welcome.guideTexts[index] = text
-		currentModel.welcome.guideAccepted[index] = true
+	return currentModel.editDraft("◆ "+state.folderNames[index]+" · draft context", state.contextTexts[index], func(currentModel *model, text string) {
+		currentModel.welcome.contextTexts[index] = text
+		currentModel.welcome.contextAccepted[index] = true
 		currentModel.setStatus("draft updated")
 	})
 }
 
 // finishWelcome saves what was accepted: the folders with the past sessions filed in them,
-// recent leftovers in the Inbox and older ones in the archive, the contexts and the guides.
+// recent leftovers in the Inbox and older ones in the archive, and the contexts.
 // Without apply, nothing is imported, and the welcome still won't show again.
 func (currentModel *model) finishWelcome(apply bool) {
 	state := currentModel.welcome
@@ -314,23 +291,23 @@ func (currentModel *model) applyWelcome() {
 			continue
 		}
 		folderId, isFiled := filedIn[digest.SessionId]
+		title := digest.AgentTitle
+		if title == "" {
+			title = truncate(digest.FirstPrompt, 120)
+		}
 		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
 			Tool:             digest.Tool,
 			SessionId:        digest.SessionId,
 			FolderId:         folderId,
 			WorkingDirectory: digest.WorkingDirectory,
 			Branch:           digest.Branch,
-			Title:            truncate(digest.FirstPrompt, 120),
+			Title:            title,
+			TitledAtPrompt:   digest.PromptCount,
 			Archived:         !isFiled && !brain.IsRecent(digest, now),
 			ArchivedAt:       archivedAt(!isFiled && !brain.IsRecent(digest, now), now),
 			CreatedAt:        digest.StartedAt,
 			LastActivityAt:   digest.LastActivityAt,
 		})
-	}
-	for index, guide := range state.proposal.Guides {
-		if state.guideAccepted[index] && currentModel.repository.ReadGuide(guide.Name) == "" {
-			currentModel.reportError(currentModel.repository.WriteGuide(guide.Name, state.guideTexts[index]))
-		}
 	}
 }
 
@@ -372,8 +349,6 @@ func (currentModel model) welcomeView() string {
 		body = currentModel.welcomeFoldersBody(innerWidth)
 	case contextsStep:
 		body = currentModel.welcomeContextsBody(innerWidth)
-	case guidesStep:
-		body = currentModel.welcomeGuidesBody(innerWidth)
 	case keysStep:
 		body = currentModel.welcomeKeysBody(innerWidth)
 	}
@@ -394,12 +369,12 @@ func (currentModel model) welcomeTopBar(width int) string {
 	return currentModel.layoutRow(left, nil, width, false)
 }
 
-// welcomeStepCount is four steps, or three when no folder is proposed or kept, since there are no contexts to draft then.
+// welcomeStepCount is three steps, or two when no folder is proposed or kept, since there are no contexts to draft then.
 func (currentModel model) welcomeStepCount() int {
 	if slices.Contains(currentModel.welcome.folderAccepted, true) {
-		return 4
+		return 3
 	}
-	return 3
+	return 2
 }
 
 func (currentModel model) welcomeCardHeader(title string, step int, width int) string {
@@ -497,34 +472,6 @@ func (currentModel model) welcomeContextsBody(width int) []string {
 	}
 	lines = append(lines, "")
 	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "save drafts"), currentModel.keys.toggle,
-		currentModel.keys.edit, relabeled(currentModel.keys.no, "skip")}, width, 2)...)
-	return lines
-}
-
-func (currentModel model) welcomeGuidesBody(width int) []string {
-	theme := currentModel.theme
-	state := currentModel.welcome
-	lines := []string{currentModel.welcomeCardHeader("Guides", currentModel.welcomeStepCount()-1, width), ""}
-	lines = append(lines, wrapAll([]string{theme.text.Render("How you write commits, pull requests and issues in this repo. Agents read the matching guide before writing one, and den suggests edits as it learns your habits.")}, width)...)
-	lines = append(lines, "")
-	for index, guide := range state.proposal.Guides {
-		checkbox := segment{text: "[x] ", style: theme.accent}
-		if !state.guideAccepted[index] {
-			checkbox = segment{text: "[ ] ", style: theme.faint}
-		}
-		reason := guide.Reason
-		if currentModel.repository.ReadGuide(guide.Name) != "" {
-			reason = "you have one already, kept as is"
-		}
-		left := []segment{checkbox, {text: padRight(guide.Name+".md", 18), style: theme.bold}, {text: reason, style: theme.dim}}
-		lines = append(lines, currentModel.layoutRow(left, nil, width, index == state.cursor))
-	}
-	if len(state.guideTexts) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, currentModel.draftPreview(state.guideTexts[min(state.cursor, len(state.guideTexts)-1)], width)...)
-	}
-	lines = append(lines, "")
-	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "save"), currentModel.keys.toggle,
 		currentModel.keys.edit, relabeled(currentModel.keys.no, "skip")}, width, 2)...)
 	return lines
 }

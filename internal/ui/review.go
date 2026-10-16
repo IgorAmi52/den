@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -173,6 +174,14 @@ func (currentModel *model) editCard(card *store.Suggestion) tea.Cmd {
 				currentModel.nextCard()
 			}
 		})
+	case store.SuggestLaptopRule:
+		return currentModel.askForText("Rule", card.Rule, func(currentModel *model, rule string) {
+			if suggestion := currentModel.repository.FindSuggestion(suggestionId); suggestion != nil {
+				suggestion.Rule = rule
+				currentModel.acceptSuggestion(suggestionId)
+				currentModel.nextCard()
+			}
+		})
 	case store.SuggestContext:
 		return currentModel.editDraft("✦ "+currentModel.contextFileName(*card)+" · proposed", card.ProposedText, func(currentModel *model, text string) {
 			if suggestion := currentModel.repository.FindSuggestion(suggestionId); suggestion != nil {
@@ -209,9 +218,6 @@ func (currentModel model) reviewView() string {
 	label, _ := currentModel.suggestionSummary(*card)
 	if card.Kind == store.SuggestContext {
 		label = "Context · ◆ " + currentModel.contextHeading(card.FolderId)
-		if card.Guide != "" {
-			label = "Guide · " + card.Guide + ".md"
-		}
 	}
 	cardLines := []string{currentModel.layoutRow([]segment{{text: "✦ " + label, style: theme.suggestionBold}},
 		[]segment{{text: fmt.Sprintf("%d of %d", position, total), style: theme.dim}}, innerWidth, false), ""}
@@ -248,6 +254,12 @@ func (currentModel model) cardHints(card store.Suggestion) []key.Binding {
 			}
 		}
 		return []key.Binding{relabeled(keys.yes, fmt.Sprintf("archive %d", archiveCount)), keys.toggle, relabeled(keys.no, "keep all"), keys.skip, keys.done}
+	case store.SuggestLink:
+		return []key.Binding{relabeled(keys.yes, "link"), keys.no, keys.skip, keys.ask, keys.done}
+	case store.SuggestLaptopRule:
+		return []key.Binding{relabeled(keys.yes, "add"), keys.no, relabeled(keys.edit, "edit rule"), keys.skip, keys.ask, keys.done}
+	case store.SuggestQuestion:
+		return []key.Binding{keys.yes, keys.no, relabeled(keys.skip, "not now"), keys.ask, keys.done}
 	}
 	return []key.Binding{relabeled(keys.yes, "apply"), keys.no, keys.edit, keys.skip, keys.ask, keys.done}
 }
@@ -277,7 +289,7 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 		}
 		lines = append(lines, theme.dim.Render(from)+theme.dim.Render("  →  ")+theme.accentBold.Render(currentModel.repository.FolderName(suggestion.FolderId)))
 	case store.SuggestSubfolder:
-		lines = append(lines, theme.text.Render("New ")+theme.accentBold.Render("⎇ "+suggestion.FolderName)+theme.text.Render(" in "+currentModel.repository.FolderName(suggestion.ParentFolderId)))
+		lines = append(lines, theme.text.Render("New ")+theme.accentBold.Render(subfolderLabel(suggestion))+theme.text.Render(" in "+currentModel.repository.FolderName(suggestion.ParentFolderId)))
 		lines = append(lines, theme.dim.Render("moves "+countedSessions(len(suggestion.SessionIds))+":"))
 		for _, sessionId := range suggestion.SessionIds {
 			lines = append(lines, theme.text.Render("  · "+truncate(sessionTitle(sessionId), width-4)))
@@ -301,10 +313,26 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 			lines = append(lines, currentModel.layoutRow([]segment{checkbox, {text: session.Title, style: theme.text}}, right, width, isCard && index == currentModel.review.cleanupCursor))
 		}
 	case store.SuggestContext:
-		if suggestion.Source != "" {
+		if suggestion.Source != "" && suggestion.Starter == "" {
 			lines = append(lines, theme.dim.Render("learned in "+suggestion.Source))
 		}
 		lines = append(lines, currentModel.diffLines(currentModel.currentContextText(suggestion), suggestion.ProposedText, width)...)
+	case store.SuggestLink:
+		text := store.ReadText(suggestion.LinkedPath)
+		lines = append(lines, currentModel.layoutRow([]segment{{text: filepath.Base(suggestion.LinkedPath), style: theme.bold}},
+			[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(text)), style: theme.dim}}, width, false))
+		lines = append(lines, currentModel.fileLink(suggestion.LinkedPath, width), "")
+		lines = append(lines, currentModel.draftPreview(text, width)...)
+	case store.SuggestLaptopRule:
+		lines = append(lines, currentModel.diffLines("", "- "+suggestion.Rule, width)...)
+		lines = append(lines, "", theme.dim.Render("goes to "+laptopFileNames(suggestion.FilePaths)+", the files with no such rule yet"))
+	case store.SuggestQuestion:
+		if currentModel.currentScreen() == reviewScreen {
+			lines = append(lines, theme.bold.Render(suggestion.Question))
+		}
+		if suggestion.Rule != "" {
+			lines = append(lines, "", theme.dim.Render("A yes adds: ")+theme.text.Render(suggestion.Rule))
+		}
 	}
 	if suggestion.Reason != "" {
 		lines = append(lines, "")

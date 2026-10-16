@@ -74,6 +74,9 @@ func restorePanelIfMissing(denSessionName string, workingDirectory string, panel
 }
 
 func checkDependencies() error {
+	if _, err := exec.LookPath("git"); err != nil {
+		return errors.New("git not found. Install it with: xcode-select --install (or: brew install git)")
+	}
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return errors.New("tmux not found. Install it with: brew install tmux")
 	}

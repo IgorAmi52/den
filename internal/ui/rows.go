@@ -4,13 +4,15 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
 type rowKind int
 
 const (
-	// repositoryRow holds what applies to the whole repo: its context and the guides, shown as contextFileRow children.
+	// repositoryRow holds the context that reaches beyond one folder: the repo's context.md and the laptop files,
+	// shown as contextFileRow children.
 	repositoryRow rowKind = iota
 	contextFileRow
 	inboxRow
@@ -22,14 +24,14 @@ const (
 )
 
 // listRow is one line of the panel tree. A saved session that is open in a pane has both session and open set.
-// A contextFileRow names its guide, or none for the repo's context.md.
+// A contextFileRow names the tool of its laptop file, or none for the repo's context.md.
 type listRow struct {
-	kind    rowKind
-	folder  *store.Folder
-	session *store.Session
-	open    *openAgent
-	guide   string
-	depth   int
+	kind       rowKind
+	folder     *store.Folder
+	session    *store.Session
+	open       *openAgent
+	laptopTool string
+	depth      int
 }
 
 func (row listRow) folderId() string {
@@ -49,7 +51,7 @@ func (row listRow) isMovable() bool {
 	return row.kind == sessionRow || row.kind == newAgentRow
 }
 
-// rows lists the tree: the repo's context and guides, the Inbox, the folders by name, and the archive last.
+// rows lists the tree: the repo's context and laptop files, the Inbox, the folders by name, and the archive last.
 // While filtering, only matching sessions show, under every folder that holds one.
 func (currentModel model) rows() []listRow {
 	filterText := strings.ToLower(currentModel.filter.Value())
@@ -64,8 +66,8 @@ func (currentModel model) treeRows(expandAll bool) []listRow {
 	rows := []listRow{{kind: repositoryRow}}
 	if currentModel.repositoryExpanded && !expandAll {
 		rows = append(rows, listRow{kind: contextFileRow, depth: 1})
-		for _, guide := range store.Guides {
-			rows = append(rows, listRow{kind: contextFileRow, guide: guide, depth: 1})
+		for _, laptopFile := range currentModel.shownLaptopFiles() {
+			rows = append(rows, listRow{kind: contextFileRow, laptopTool: laptopFile.Tool, depth: 1})
 		}
 	}
 	rows = append(rows, listRow{kind: inboxRow})
@@ -178,6 +180,26 @@ func (currentModel model) subfolders(parentId string) []*store.Folder {
 	return subfolders
 }
 
+// shownLaptopFiles are the laptop files that exist, and those of installed tools, which can be created.
+func (currentModel model) shownLaptopFiles() []brain.LaptopFile {
+	var shown []brain.LaptopFile
+	for _, laptopFile := range currentModel.laptopFiles {
+		if laptopFile.Exists || laptopFile.Installed {
+			shown = append(shown, laptopFile)
+		}
+	}
+	return shown
+}
+
+func (currentModel model) laptopFile(tool string) (brain.LaptopFile, bool) {
+	for _, laptopFile := range currentModel.laptopFiles {
+		if laptopFile.Tool == tool {
+			return laptopFile, true
+		}
+	}
+	return brain.LaptopFile{}, false
+}
+
 func (currentModel model) selectedRow() (listRow, bool) {
 	rows := currentModel.rows()
 	if currentModel.listCursor >= len(rows) {
@@ -223,8 +245,10 @@ func sameItemAs(row listRow) func(listRow) bool {
 		paneId := row.open.paneId
 		return func(candidate listRow) bool { return candidate.open != nil && candidate.open.paneId == paneId }
 	case contextFileRow:
-		guide := row.guide
-		return func(candidate listRow) bool { return candidate.kind == contextFileRow && candidate.guide == guide }
+		laptopTool := row.laptopTool
+		return func(candidate listRow) bool {
+			return candidate.kind == contextFileRow && candidate.laptopTool == laptopTool
+		}
 	}
 	kind := row.kind
 	return func(candidate listRow) bool { return candidate.kind == kind }

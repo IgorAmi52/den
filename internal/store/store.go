@@ -17,8 +17,11 @@ type Folder struct {
 	Name      string `json:"name"`
 	ParentId  string `json:"parentId,omitempty"`
 	Collapsed bool   `json:"collapsed,omitempty"`
-	// Branch is set on subfolders that group the sessions of one branch or worktree.
-	Branch string `json:"branch,omitempty"`
+	// Branch is set on subfolders that group the sessions of one branch or worktree, IssueKey on those of one issue.
+	Branch   string `json:"branch,omitempty"`
+	IssueKey string `json:"issueKey,omitempty"`
+	// LinkedPath is a markdown file the user or an agent wrote, linked as the folder's context. den never writes it.
+	LinkedPath string `json:"linkedPath,omitempty"`
 }
 
 type Session struct {
@@ -30,6 +33,8 @@ type Session struct {
 	Title            string `json:"title"`
 	// TitlePinned is set by a manual rename, so automatic titles stop changing it.
 	TitlePinned bool `json:"titlePinned,omitempty"`
+	// TitledAtPrompt is the prompt count when den last looked at the title, so it looks again a few prompts later.
+	TitledAtPrompt int `json:"titledAtPrompt,omitempty"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
 	WithoutContext bool      `json:"withoutContext,omitempty"`
 	Archived       bool      `json:"archived,omitempty"`
@@ -50,6 +55,9 @@ type Repository struct {
 	Suggestions []Suggestion `json:"suggestions,omitempty"`
 	// RejectedKeys remembers rejected suggestions, so the same one is never offered again.
 	RejectedKeys []string `json:"rejectedKeys,omitempty"`
+	Habits       []Habit  `json:"habits,omitempty"`
+	// LastQuestionAt keeps den to one new question a day.
+	LastQuestionAt time.Time `json:"lastQuestionAt,omitzero"`
 }
 
 // DataDirectory is ~/.den, or DEN_HOME when set.
@@ -62,6 +70,23 @@ func DataDirectory() (string, error) {
 		return "", err
 	}
 	return filepath.Join(homeDirectory, ".den"), nil
+}
+
+// KnownRepositoryPaths lists every repo den was opened in on this machine.
+func KnownRepositoryPaths() []string {
+	dataDirectory, err := DataDirectory()
+	if err != nil {
+		return nil
+	}
+	filePaths, _ := filepath.Glob(filepath.Join(dataDirectory, "repos", "*", "den.json"))
+	var repositoryPaths []string
+	for _, filePath := range filePaths {
+		var repository Repository
+		if content, err := os.ReadFile(filePath); err == nil && json.Unmarshal(content, &repository) == nil && repository.RepositoryPath != "" {
+			repositoryPaths = append(repositoryPaths, repository.RepositoryPath)
+		}
+	}
+	return repositoryPaths
 }
 
 func Load(repositoryPath string) (Repository, error) {

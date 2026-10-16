@@ -20,23 +20,73 @@ type editorClosedMessage struct {
 	isStarter bool
 }
 
-// editContext opens a folder's context.md in $EDITOR, in a popup over the grid.
-// A new file starts with the folder's name as its heading.
+// editContext opens a folder's context in $EDITOR, in a popup over the grid: its linked file when it has one,
+// otherwise den's context.md, which starts with the folder's name as its heading.
 func (currentModel *model) editContext(folderId string) tea.Cmd {
+	name := currentModel.contextHeading(folderId)
+	if folder := currentModel.repository.FindFolder(folderId); folder != nil && folder.LinkedPath != "" {
+		return currentModel.editFile("◆ "+name+" · "+filepath.Base(folder.LinkedPath), folder.LinkedPath, "", nil)
+	}
 	contextPath, err := currentModel.repository.ContextPath(folderId)
 	if currentModel.reportError(err) {
 		return nil
 	}
-	name := currentModel.contextHeading(folderId)
 	return currentModel.editFile("◆ "+name+" · context.md", contextPath, "# "+name+"\n\n", nil)
 }
 
-func (currentModel *model) editGuide(guide string) tea.Cmd {
-	guidePath, err := currentModel.repository.GuidePath(guide)
-	if currentModel.reportError(err) {
-		return nil
+// editLaptopFile opens one of the user's own rule files, which the tool loads in every repo.
+func (currentModel *model) editLaptopFile(tool string) tea.Cmd {
+	laptopFile, _ := currentModel.laptopFile(tool)
+	return currentModel.editFile(filepath.Base(laptopFile.Path)+" · every repo", laptopFile.Path, "# My rules for every repo\n\n", nil)
+}
+
+// askForLink links a markdown file as a folder's context, or with an empty answer, unlinks it.
+// A relative path is read from den's working directory.
+func (currentModel *model) askForLink(folder *store.Folder) tea.Cmd {
+	folderId := folder.Id
+	command := currentModel.askForText("Link a file as "+folder.Name+"'s context (empty unlinks)", folder.LinkedPath, func(currentModel *model, answer string) {
+		linkedFolder := currentModel.repository.FindFolder(folderId)
+		if linkedFolder == nil {
+			return
+		}
+		filePath := expandedPath(answer, currentModel.workingDirectory)
+		if filePath == "" {
+			unlinkedName := filepath.Base(linkedFolder.LinkedPath)
+			currentModel.repository.Unlink(folderId)
+			currentModel.saveRepository()
+			currentModel.refreshContextTokens()
+			currentModel.setStatus("unlinked " + unlinkedName + " · new sessions in " + linkedFolder.Name + " start without it")
+			return
+		}
+		if information, err := os.Stat(filePath); err != nil || information.IsDir() {
+			currentModel.setError("no file at " + displayPath(filePath))
+			return
+		}
+		linkedFolder.LinkedPath = filePath
+		currentModel.repository.ForgetFolderStarters(folderId)
+		currentModel.saveRepository()
+		currentModel.refreshContextTokens()
+		currentModel.setStatus("linked " + filepath.Base(filePath) + " · new sessions in " + linkedFolder.Name + " start with it")
+	})
+	currentModel.prompt.allowsEmpty = true
+	return command
+}
+
+// expandedPath turns ~/… and relative paths into absolute ones; an empty answer stays empty.
+func expandedPath(path string, workingDirectory string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
 	}
-	return currentModel.editFile(guide+".md", guidePath, "# "+guide+"\n\n", nil)
+	if rest, isHome := strings.CutPrefix(path, "~/"); isHome {
+		if homeDirectory, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(homeDirectory, rest)
+		}
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workingDirectory, path)
+	}
+	return filepath.Clean(path)
 }
 
 // editDraft opens text that isn't saved anywhere yet, like a proposed context, and hands back what the user saved.
@@ -118,17 +168,11 @@ func (currentModel model) contextHeading(folderId string) string {
 
 // contextFileName names the file a context suggestion changes.
 func (currentModel model) contextFileName(suggestion store.Suggestion) string {
-	if suggestion.Guide != "" {
-		return suggestion.Guide + ".md"
-	}
 	return currentModel.contextHeading(suggestion.FolderId) + " context"
 }
 
 // currentContextText is what a context suggestion would replace.
 func (currentModel model) currentContextText(suggestion store.Suggestion) string {
-	if suggestion.Guide != "" {
-		return currentModel.repository.ReadGuide(suggestion.Guide)
-	}
 	return currentModel.repository.ReadContext(suggestion.FolderId)
 }
 

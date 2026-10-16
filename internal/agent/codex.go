@@ -3,11 +3,13 @@ package agent
 import (
 	"encoding/json"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -107,6 +109,7 @@ func (Codex) Digest(sessionId string) (Digest, bool, error) {
 		return Digest{}, false, nil
 	}
 	digest, err := cachedDigestOf(transcriptPaths[0], readCodexDigest)
+	digest.AgentTitle = codexThreadNames()[sessionId]
 	return digest, err == nil, err
 }
 
@@ -116,15 +119,60 @@ func (Codex) PastSessions(directories []string) ([]Digest, error) {
 		resolvedDirectories[resolvedPath(directory)] = true
 	}
 	var digests []Digest
+	threadNames := codexThreadNames()
 	err := eachCodexSession(time.Time{}, func(filePath string, start codexSessionStart) {
 		if !resolvedDirectories[resolvedPath(start.Payload.Cwd)] {
 			return
 		}
 		if digest, err := cachedDigestOf(filePath, readCodexDigest); err == nil && digest.FirstPrompt != "" {
+			digest.AgentTitle = threadNames[digest.SessionId]
 			digests = append(digests, digest)
 		}
 	})
 	return digests, err
+}
+
+func (Codex) LaptopFilePath() (string, error) {
+	codexHome, err := homeDirectory("CODEX_HOME", ".codex")
+	return filepath.Join(codexHome, "AGENTS.md"), err
+}
+
+// codexThreadNameCache keeps the names from Codex's session index while the index stays unchanged.
+var (
+	codexThreadNameCache        map[string]string
+	codexThreadNameModifiedTime time.Time
+	codexThreadNameMutex        sync.Mutex
+)
+
+// codexThreadNames reads the names Codex gave its sessions. The index lists every rename in order, so the last one wins.
+func codexThreadNames() map[string]string {
+	codexHome, err := homeDirectory("CODEX_HOME", ".codex")
+	if err != nil {
+		return nil
+	}
+	indexPath := filepath.Join(codexHome, "session_index.jsonl")
+	information, err := os.Stat(indexPath)
+	if err != nil {
+		return nil
+	}
+	codexThreadNameMutex.Lock()
+	defer codexThreadNameMutex.Unlock()
+	if codexThreadNameCache != nil && codexThreadNameModifiedTime.Equal(information.ModTime()) {
+		return codexThreadNameCache
+	}
+	threadNames := map[string]string{}
+	eachJsonLine(indexPath, func(line json.RawMessage) bool {
+		var entry struct {
+			Id         string `json:"id"`
+			ThreadName string `json:"thread_name"`
+		}
+		if json.Unmarshal(line, &entry) == nil && entry.Id != "" && entry.ThreadName != "" {
+			threadNames[entry.Id] = oneLine(entry.ThreadName)
+		}
+		return true
+	})
+	codexThreadNameCache, codexThreadNameModifiedTime = threadNames, information.ModTime()
+	return threadNames
 }
 
 // eachCodexSession visits every session the user started that changed since modifiedSince,
@@ -162,6 +210,7 @@ func resolvedPath(path string) string {
 
 func readCodexDigest(filePath string) Digest {
 	digest := Digest{Tool: "codex"}
+	promptIssueKey := ""
 	eachJsonLine(filePath, func(line json.RawMessage) bool {
 		var start codexSessionStart
 		if json.Unmarshal(line, &start) == nil && start.Type == "session_meta" {
@@ -178,6 +227,7 @@ func readCodexDigest(filePath string) Digest {
 		if !event.Timestamp.IsZero() {
 			digest.LastActivityAt = event.Timestamp
 		}
+		digest.notePullRequests(line)
 		switch event.Payload.Type {
 		case "message":
 			if event.Payload.Role != "user" {
@@ -190,6 +240,9 @@ func readCodexDigest(filePath string) Digest {
 					}
 					digest.LastPrompt = oneLine(item.Text)
 					digest.PromptCount++
+					if promptIssueKey == "" {
+						promptIssueKey = IssueKeyIn(item.Text)
+					}
 					break
 				}
 			}
@@ -200,5 +253,6 @@ func readCodexDigest(filePath string) Digest {
 		}
 		return true
 	})
+	digest.settleIssueKey(promptIssueKey)
 	return digest
 }

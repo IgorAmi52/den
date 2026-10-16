@@ -1,19 +1,21 @@
 package store
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-// Guides describe how this user writes commits, pull requests and issues in this repo.
-// Agents read the matching guide before writing one, and den suggests edits to them.
-var Guides = []string{"commit", "pull-request", "issue"}
-
 // repositoryContextFolder holds the context for the whole repo; folder ids are hex, so it can't clash with one.
 const repositoryContextFolder = "repo"
+
+const (
+	// fullContextTokens is the most of one file a session starts with; past it, the agent gets the start and the path.
+	fullContextTokens = 2000
+	// firstSectionLines caps the start of a long file.
+	firstSectionLines = 40
+)
 
 // ContextPath is the private context.md of a folder; the top level holds the context for the whole repo.
 // Each lives in its own directory, so an agent allowed to edit one can't touch den's other files.
@@ -33,7 +35,7 @@ func (repository Repository) ReadContext(folderId string) string {
 	if err != nil {
 		return ""
 	}
-	return readText(filePath)
+	return ReadText(filePath)
 }
 
 func (repository Repository) WriteContext(folderId string, text string) error {
@@ -44,71 +46,119 @@ func (repository Repository) WriteContext(folderId string, text string) error {
 	return writeText(filePath, text)
 }
 
-func (repository Repository) GuidePath(guide string) (string, error) {
-	directory, err := repository.Directory()
-	if err != nil {
-		return "", err
+// ContextFilePaths are the files a folder's context comes from: the linked file first, then den's notes.
+// The top level has only the repo's context.md.
+func (repository *Repository) ContextFilePaths(folderId string) []string {
+	var filePaths []string
+	if folder := repository.FindFolder(folderId); folder != nil && folder.LinkedPath != "" {
+		filePaths = append(filePaths, folder.LinkedPath)
 	}
-	return filepath.Join(directory, "guides", guide+".md"), nil
+	if contextPath, err := repository.ContextPath(folderId); err == nil {
+		filePaths = append(filePaths, contextPath)
+	}
+	return filePaths
 }
 
-func (repository Repository) ReadGuide(guide string) string {
-	filePath, err := repository.GuidePath(guide)
-	if err != nil {
-		return ""
-	}
-	return readText(filePath)
+// contextLayer is one file a session starts with, under a heading that names it.
+type contextLayer struct {
+	heading  string
+	filePath string
+	text     string
+	// isDens marks den's own files, which the agent may edit without a permission prompt.
+	isDens bool
 }
 
-func (repository Repository) WriteGuide(guide string, text string) error {
-	filePath, err := repository.GuidePath(guide)
-	if err != nil {
-		return err
-	}
-	return writeText(filePath, text)
-}
-
-// MergedContext is what a session launched in the folder starts with: the repo's context,
-// then each folder's from the top down, then where those files and the guides live, so the agent can edit them.
-// writableDirectories lists the directories the agent may write to without asking,
-// and hasNotes tells whether any layer has notes yet.
-func (repository *Repository) MergedContext(folderId string) (text string, writableDirectories []string, hasNotes bool) {
-	var notes, locations []string
-	addLayer := func(heading string, layerFolderId string) {
-		contextPath, err := repository.ContextPath(layerFolderId)
-		if err != nil {
-			return
-		}
-		os.MkdirAll(filepath.Dir(contextPath), 0o755)
-		writableDirectories = append(writableDirectories, filepath.Dir(contextPath))
-		locations = append(locations, fmt.Sprintf("- %s: %s", heading, contextPath))
-		if content := strings.TrimSpace(readText(contextPath)); content != "" {
-			notes = append(notes, "## "+heading+"\n\n"+content)
+func (repository *Repository) contextLayers(folderId string) []contextLayer {
+	var layers []contextLayer
+	addLayer := func(heading string, filePath string, isDens bool) {
+		if text := strings.TrimSpace(ReadText(filePath)); text != "" {
+			layers = append(layers, contextLayer{heading: heading, filePath: filePath, text: text, isDens: isDens})
 		}
 	}
-	addLayer(filepath.Base(repository.RepositoryPath)+" (whole repo)", "")
+	if contextPath, err := repository.ContextPath(""); err == nil {
+		addLayer(filepath.Base(repository.RepositoryPath)+", whole repo", contextPath, true)
+	}
 	for _, folder := range repository.FolderPath(folderId) {
-		addLayer(folder.Name, folder.Id)
-	}
-	var guideLocations []string
-	for _, guide := range Guides {
-		if guidePath, err := repository.GuidePath(guide); err == nil && readText(guidePath) != "" {
-			guideLocations = append(guideLocations, fmt.Sprintf("- %s: %s", guide, guidePath))
-			if !slices.Contains(writableDirectories, filepath.Dir(guidePath)) {
-				writableDirectories = append(writableDirectories, filepath.Dir(guidePath))
-			}
+		if folder.LinkedPath != "" {
+			addLayer(folder.Name, folder.LinkedPath, false)
+		}
+		if contextPath, err := repository.ContextPath(folder.Id); err == nil {
+			addLayer(folder.Name, contextPath, true)
 		}
 	}
-	var sections []string
-	sections = append(sections, "# Private notes from den\n\nden organizes this user's agent sessions and keeps private notes outside the repo. The user wrote or approved everything below.")
-	sections = append(sections, notes...)
-	sections = append(sections, "## Where the notes live\n\n"+strings.Join(locations, "\n")+
-		"\n\nWhen the user asks you to remember something for one of these (\"remember for "+lastHeading(repository, folderId)+": ...\"), edit that file. Keep it short and factual.")
-	if len(guideLocations) > 0 {
-		sections = append(sections, "## Guides\n\nBefore you write a commit message, a pull request or an issue, read the matching guide and follow it:\n"+
-			strings.Join(guideLocations, "\n")+"\n\nWhen the user asks to change how one of these is written, edit the guide.")
+	return layers
+}
+
+// MergedContext is what a session launched in the folder starts with: the repo's context, then each folder's
+// from the top down, each under a heading naming its file. With no context anywhere, it is empty, so nothing is added.
+// The agent is never told about den; it only gets the notes. writableDirectories are the directories it may edit
+// without asking: den's own files, and linked files outside the repo.
+func (repository *Repository) MergedContext(folderId string) (text string, writableDirectories []string, hasNotes bool) {
+	layers := repository.contextLayers(folderId)
+	if len(layers) == 0 {
+		return "", nil, false
 	}
-	return strings.Join(sections, "\n\n"), writableDirectories, len(notes) > 0
+	sections := []string{"# Notes for this work"}
+	for _, layer := range layers {
+		body := layer.text
+		if EstimatedTokens(body) > fullContextTokens {
+			body = firstSection(body) + "\n\n(This is the start. Read the rest of " + layer.filePath + " before you begin.)"
+		}
+		sections = append(sections, "## "+layer.heading+" · "+layer.filePath+"\n\n"+body)
+		directory := filepath.Dir(layer.filePath)
+		if (layer.isDens || !isInside(repository.RepositoryPath, layer.filePath)) && !slices.Contains(writableDirectories, directory) {
+			writableDirectories = append(writableDirectories, directory)
+		}
+	}
+	sections = append(sections, "If the user asks to update these notes, edit the file named in its heading. Keep it short and factual.")
+	return strings.Join(sections, "\n\n"), writableDirectories, true
+}
+
+// firstSection is the start of a long file: up to its second heading, at most firstSectionLines lines.
+func firstSection(text string) string {
+	var kept []string
+	hasContent := false
+	for _, line := range strings.Split(text, "\n") {
+		isHeading := strings.HasPrefix(line, "#")
+		if isHeading && hasContent {
+			break
+		}
+		if !isHeading && strings.TrimSpace(line) != "" {
+			hasContent = true
+		}
+		kept = append(kept, line)
+		if len(kept) == firstSectionLines {
+			break
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// AppendRule adds a rule as a bullet at the end of a file, creating the file when it's missing,
+// unless the file already says it. It reports whether it added the rule.
+func AppendRule(filePath string, rule string) (bool, error) {
+	text := ReadText(filePath)
+	if HasRule(text, rule) {
+		return false, nil
+	}
+	if trimmedText := strings.TrimRight(text, "\n"); trimmedText != "" {
+		lines := strings.Split(trimmedText, "\n")
+		separator := "\n\n"
+		if strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "- ") {
+			separator = "\n"
+		}
+		text = trimmedText + separator
+	}
+	return true, writeText(filePath, text+"- "+rule)
+}
+
+// HasRule tells whether text already says rule, ignoring case and spacing.
+func HasRule(text string, rule string) bool {
+	return strings.Contains(normalizedWords(text), normalizedWords(rule))
+}
+
+func normalizedWords(text string) string {
+	return strings.Join(strings.Fields(strings.ToLower(text)), " ")
 }
 
 // EstimatedTokens is a rough count for showing what a context costs; about four characters make a token.
@@ -116,14 +166,13 @@ func EstimatedTokens(text string) int {
 	return (len(text) + 3) / 4
 }
 
-func lastHeading(repository *Repository, folderId string) string {
-	if folder := repository.FindFolder(folderId); folder != nil {
-		return folder.Name
-	}
-	return filepath.Base(repository.RepositoryPath)
+func isInside(directory string, filePath string) bool {
+	relativePath, err := filepath.Rel(directory, filePath)
+	return err == nil && !strings.HasPrefix(relativePath, "..")
 }
 
-func readText(filePath string) string {
+// ReadText reads a file, or returns nothing when it's missing.
+func ReadText(filePath string) string {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return ""

@@ -20,6 +20,7 @@ type Claude struct{}
 
 type claudeEvent struct {
 	Type        string    `json:"type"`
+	AiTitle     string    `json:"aiTitle"`
 	IsMeta      bool      `json:"isMeta"`
 	IsSidechain bool      `json:"isSidechain"`
 	Cwd         string    `json:"cwd"`
@@ -114,6 +115,11 @@ func (Claude) PastSessions(directories []string) ([]Digest, error) {
 	return digests, nil
 }
 
+func (Claude) LaptopFilePath() (string, error) {
+	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
+	return filepath.Join(configurationDirectory, "CLAUDE.md"), err
+}
+
 func claudeTranscriptPath(sessionId string) (string, bool, error) {
 	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
 	if err != nil {
@@ -128,6 +134,9 @@ func claudeTranscriptPath(sessionId string) (string, bool, error) {
 
 func readClaudeDigest(transcriptPath string) Digest {
 	digest := Digest{Tool: "claude", SessionId: strings.TrimSuffix(filepath.Base(transcriptPath), ".jsonl")}
+	promptIssueKey := ""
+	// proposedPlans waits for the answer to each plan, by tool call, since only an approved plan counts.
+	proposedPlans := map[string]string{}
 	eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
 		var event claudeEvent
 		if json.Unmarshal(line, &event) != nil || event.IsSidechain {
@@ -146,6 +155,10 @@ func readClaudeDigest(transcriptPath string) Digest {
 			digest.LastActivityAt = event.Timestamp
 		}
 		switch event.Type {
+		case "ai-title":
+			if event.AiTitle != "" {
+				digest.AgentTitle = oneLine(event.AiTitle)
+			}
 		case "user":
 			if prompt := firstTypedText(event.Message.Content); prompt != "" && !event.IsMeta {
 				if digest.FirstPrompt == "" {
@@ -153,35 +166,55 @@ func readClaudeDigest(transcriptPath string) Digest {
 				}
 				digest.LastPrompt = oneLine(prompt)
 				digest.PromptCount++
+				if promptIssueKey == "" {
+					promptIssueKey = IssueKeyIn(prompt)
+				}
 			}
+			for _, block := range claudeBlocks(event.Message.Content) {
+				if plan, proposed := proposedPlans[block.ToolUseId]; proposed && block.Type == "tool_result" {
+					if !block.IsError {
+						digest.Plan = plan
+					}
+					delete(proposedPlans, block.ToolUseId)
+				}
+			}
+			digest.notePullRequests(line)
 		case "assistant":
-			for _, filePath := range claudeEditedFiles(event.Message.Content) {
-				digest.TouchedFiles = appendOnce(digest.TouchedFiles, filePath)
+			for _, block := range claudeBlocks(event.Message.Content) {
+				if block.Type != "tool_use" {
+					continue
+				}
+				if claudeEditingTools[block.Name] && block.Input.FilePath != "" {
+					digest.TouchedFiles = appendOnce(digest.TouchedFiles, block.Input.FilePath)
+				}
+				if block.Name == "ExitPlanMode" && strings.TrimSpace(block.Input.Plan) != "" {
+					proposedPlans[block.Id] = block.Input.Plan
+				}
 			}
+			digest.notePullRequests(line)
 		}
 		return true
 	})
+	digest.settleIssueKey(promptIssueKey)
 	return digest
 }
 
-func claudeEditedFiles(content json.RawMessage) []string {
-	var blocks []struct {
-		Type  string `json:"type"`
-		Name  string `json:"name"`
-		Input struct {
-			FilePath string `json:"file_path"`
-		} `json:"input"`
-	}
-	if json.Unmarshal(content, &blocks) != nil {
-		return nil
-	}
-	var filePaths []string
-	for _, block := range blocks {
-		if block.Type == "tool_use" && claudeEditingTools[block.Name] && block.Input.FilePath != "" {
-			filePaths = append(filePaths, block.Input.FilePath)
-		}
-	}
-	return filePaths
+type claudeBlock struct {
+	Type      string `json:"type"`
+	Id        string `json:"id"`
+	Name      string `json:"name"`
+	ToolUseId string `json:"tool_use_id"`
+	IsError   bool   `json:"is_error"`
+	Input     struct {
+		FilePath string `json:"file_path"`
+		Plan     string `json:"plan"`
+	} `json:"input"`
+}
+
+func claudeBlocks(content json.RawMessage) []claudeBlock {
+	var blocks []claudeBlock
+	json.Unmarshal(content, &blocks)
+	return blocks
 }
 
 // firstTypedText reads a message content that is either plain text or a list of content blocks.

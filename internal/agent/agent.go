@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +25,8 @@ type Adapter interface {
 	Digest(sessionId string) (digest Digest, found bool, err error)
 	// PastSessions digests every session the tool recorded in one of the directories.
 	PastSessions(directories []string) ([]Digest, error)
+	// LaptopFilePath is the tool's own file of the user's rules, which it loads into every session in every repo.
+	LaptopFilePath() (string, error)
 }
 
 // Launch is what den adds to an agent's command line.
@@ -51,12 +54,54 @@ type Digest struct {
 	LastPrompt       string
 	PromptCount      int
 	// TouchedFiles are the files the agent edited, in the order it first touched them.
-	TouchedFiles   []string
+	TouchedFiles []string
+	// AgentTitle is the name the tool itself gave the session, when it makes one.
+	AgentTitle string
+	// IssueKey is the issue the session works on: the key in its branch, or else the first one typed in a prompt.
+	IssueKey string
+	// PullRequests are the pull request links that came up in the session, in order.
+	PullRequests []string
+	// Plan is the latest plan the user approved in the tool's plan mode.
+	Plan           string
 	StartedAt      time.Time
 	LastActivityAt time.Time
 }
 
+// LaptopFile is a tool's file of the user's own rules, which it loads in every repo.
+type LaptopFile struct {
+	Tool string
+	Path string
+}
+
 var supportedAdapters = []Adapter{Claude{}, Codex{}}
+
+var (
+	issueKeyPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9]+)-\d+\b`)
+	// notIssuePrefixes look like issue keys but name standards and encodings, like UTF-8 or SHA-256.
+	notIssuePrefixes   = map[string]bool{"UTF": true, "SHA": true, "ISO": true, "RFC": true, "CVE": true, "HTTP": true, "TLS": true, "SSL": true, "AES": true, "RSA": true, "PEP": true, "GPT": true, "UTC": true, "GMT": true, "ES": true}
+	pullRequestPattern = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://gitlab\.[\w.-]+/[\w./-]+/-/merge_requests/\d+`)
+)
+
+// IssueKeyIn finds the first issue key in text, like YT-123.
+func IssueKeyIn(text string) string {
+	for _, match := range issueKeyPattern.FindAllStringSubmatch(text, -1) {
+		if !notIssuePrefixes[match[1]] {
+			return match[0]
+		}
+	}
+	return ""
+}
+
+// LaptopFiles lists every supported tool's file of the user's own rules, whether it exists yet or not.
+func LaptopFiles() []LaptopFile {
+	var laptopFiles []LaptopFile
+	for _, adapter := range supportedAdapters {
+		if filePath, err := adapter.LaptopFilePath(); err == nil {
+			laptopFiles = append(laptopFiles, LaptopFile{Tool: adapter.Name(), Path: filePath})
+		}
+	}
+	return laptopFiles
+}
 
 func Installed() []Adapter {
 	var installedAdapters []Adapter
@@ -146,6 +191,21 @@ func cachedDigestOf(transcriptPath string, read func(transcriptPath string) Dige
 	digestCache[transcriptPath] = cachedDigest{size: information.Size(), modifiedTime: information.ModTime(), digest: digest}
 	digestCacheMutex.Unlock()
 	return digest, nil
+}
+
+// notePullRequests adds the pull request links in a transcript line to the digest.
+func (digest *Digest) notePullRequests(line json.RawMessage) {
+	for _, link := range pullRequestPattern.FindAllString(string(line), -1) {
+		digest.PullRequests = appendOnce(digest.PullRequests, link)
+	}
+}
+
+// settleIssueKey prefers the issue key in the branch over one typed in a prompt.
+func (digest *Digest) settleIssueKey(promptIssueKey string) {
+	digest.IssueKey = IssueKeyIn(digest.Branch)
+	if digest.IssueKey == "" {
+		digest.IssueKey = promptIssueKey
+	}
 }
 
 func appendOnce(values []string, value string) []string {

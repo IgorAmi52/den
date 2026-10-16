@@ -12,10 +12,22 @@ const (
 	SuggestMove SuggestionKind = "move"
 	// SuggestSubfolder creates a branch or worktree subfolder and moves its sessions in.
 	SuggestSubfolder SuggestionKind = "subfolder"
-	// SuggestContext rewrites a folder's context.md, or a guide when Guide is set.
+	// SuggestContext rewrites a folder's context.md, or the repo's for the top level.
 	SuggestContext SuggestionKind = "context"
 	// SuggestCleanup archives sessions that look finished.
 	SuggestCleanup SuggestionKind = "cleanup"
+	// SuggestLink links a markdown file an agent wrote as a folder's context.
+	SuggestLink SuggestionKind = "link"
+	// SuggestLaptopRule adds a rule to the user's own files that agents load in every repo.
+	SuggestLaptopRule SuggestionKind = "laptopRule"
+	// SuggestQuestion asks about a habit den isn't sure of; a yes turns it on.
+	SuggestQuestion SuggestionKind = "question"
+)
+
+// Starters propose the first context of a folder that has none.
+const (
+	StarterPlan  = "plan"
+	StarterDraft = "draft"
 )
 
 type Suggestion struct {
@@ -26,16 +38,30 @@ type Suggestion struct {
 	SessionIds []string `json:"sessionIds,omitempty"`
 	// FolderId is where a move goes, or whose context a context edit changes.
 	FolderId string `json:"folderId,omitempty"`
-	// ParentFolderId, Branch and FolderName describe the subfolder to create.
+	// ParentFolderId, FolderName and the Branch or IssueKey it groups describe the subfolder to create.
 	ParentFolderId string `json:"parentFolderId,omitempty"`
 	Branch         string `json:"branch,omitempty"`
+	IssueKey       string `json:"issueKey,omitempty"`
 	FolderName     string `json:"folderName,omitempty"`
-	// Guide names the guide a context edit changes instead of a folder's context.
-	Guide string `json:"guide,omitempty"`
 	// ProposedText is the whole new file for a context edit; Source says where it was learned.
-	ProposedText string    `json:"proposedText,omitempty"`
-	Source       string    `json:"source,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ProposedText string `json:"proposedText,omitempty"`
+	Source       string `json:"source,omitempty"`
+	// Starter says a context edit is a folder's first: an approved plan, or a draft den made.
+	Starter string `json:"starter,omitempty"`
+	// LinkedPath is the file a link proposes.
+	LinkedPath string `json:"linkedPath,omitempty"`
+	// Rule is the line a laptop rule or a question's yes adds; FilePaths are the laptop files that don't have it yet.
+	Rule      string   `json:"rule,omitempty"`
+	FilePaths []string `json:"filePaths,omitempty"`
+	// Habit names the habit a suggestion comes from, so the answer counts for or against it.
+	Habit     string    `json:"habit,omitempty"`
+	Question  string    `json:"question,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// isSessionKind tells whether a suggestion acts on sessions, so it goes away when its sessions do.
+func isSessionKind(kind SuggestionKind) bool {
+	return kind == SuggestMove || kind == SuggestSubfolder || kind == SuggestCleanup
 }
 
 // RejectionKeys identify what was rejected, per session where it applies,
@@ -49,15 +75,29 @@ func (suggestion Suggestion) RejectionKeys() []string {
 		}
 		return keys
 	case SuggestSubfolder:
-		return []string{"subfolder:" + suggestion.ParentFolderId + ":" + suggestion.Branch}
+		return []string{"subfolder:" + suggestion.ParentFolderId + ":" + suggestion.Branch + suggestion.IssueKey}
 	case SuggestCleanup:
 		var keys []string
 		for _, sessionId := range suggestion.SessionIds {
 			keys = append(keys, "cleanup:"+sessionId)
 		}
 		return keys
+	case SuggestLink:
+		return []string{"link:" + suggestion.FolderId + ":" + suggestion.LinkedPath}
+	case SuggestLaptopRule:
+		return []string{"laptop:" + suggestion.Rule}
+	case SuggestQuestion:
+		return []string{"question:" + suggestion.Habit}
 	}
-	return []string{"context:" + suggestion.FolderId + ":" + suggestion.Guide + ":" + suggestion.ProposedText}
+	if suggestion.Starter == StarterDraft {
+		return []string{"draft:" + suggestion.FolderId}
+	}
+	return []string{"context:" + suggestion.FolderId + ":" + suggestion.ProposedText}
+}
+
+// IsRejected tells whether the user already said no to this suggestion, for every session it names.
+func (repository *Repository) IsRejected(suggestion Suggestion) bool {
+	return repository.isRejected(suggestion)
 }
 
 func (repository *Repository) isRejected(suggestion Suggestion) bool {
@@ -73,9 +113,12 @@ func (repository *Repository) isRejected(suggestion Suggestion) bool {
 // It reports whether the queue changed. Sessions already rejected for this suggestion are left out of it,
 // a session gets at most one filing suggestion, and a cleanup replaces the waiting one, since each covers all finished sessions.
 func (repository *Repository) Offer(suggestion Suggestion) bool {
-	if suggestion.Kind == SuggestContext {
+	if !isSessionKind(suggestion.Kind) {
 		if repository.isRejected(suggestion) {
 			return false
+		}
+		if suggestion.Kind == SuggestLaptopRule {
+			return repository.replaceLaptopRule(suggestion)
 		}
 	} else {
 		suggestion.SessionIds = slices.DeleteFunc(slices.Clone(suggestion.SessionIds), func(sessionId string) bool {
@@ -109,6 +152,9 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 	if suggestion.CreatedAt.IsZero() {
 		suggestion.CreatedAt = time.Now()
 	}
+	if suggestion.Kind == SuggestQuestion {
+		repository.LastQuestionAt = suggestion.CreatedAt
+	}
 	repository.Suggestions = append(repository.Suggestions, suggestion)
 	return true
 }
@@ -141,6 +187,33 @@ func (repository *Repository) replaceCleanup(cleanup Suggestion) bool {
 	return true
 }
 
+// replaceLaptopRule keeps a waiting laptop rule current as the files change: it names the files that still lack it,
+// and goes away once none do.
+func (repository *Repository) replaceLaptopRule(rule Suggestion) bool {
+	pendingIndex := slices.IndexFunc(repository.Suggestions, func(pending Suggestion) bool {
+		return pending.Kind == SuggestLaptopRule && pending.Rule == rule.Rule
+	})
+	if pendingIndex < 0 {
+		if len(rule.FilePaths) == 0 {
+			return false
+		}
+		rule.Id = newId()
+		rule.CreatedAt = time.Now()
+		repository.Suggestions = append(repository.Suggestions, rule)
+		return true
+	}
+	pending := &repository.Suggestions[pendingIndex]
+	if len(rule.FilePaths) == 0 {
+		repository.Dismiss(pending.Id)
+		return true
+	}
+	if slices.Equal(pending.FilePaths, rule.FilePaths) && pending.Reason == rule.Reason {
+		return false
+	}
+	pending.FilePaths, pending.Reason = rule.FilePaths, rule.Reason
+	return true
+}
+
 func (repository *Repository) FindSuggestion(suggestionId string) *Suggestion {
 	for index := range repository.Suggestions {
 		if repository.Suggestions[index].Id == suggestionId {
@@ -157,9 +230,15 @@ func (repository *Repository) Dismiss(suggestionId string) {
 }
 
 // Reject drops the suggestion and remembers it, so it is never offered again.
+// A no to a question retires its habit; a no to a habit's suggestion counts against the habit.
 func (repository *Repository) Reject(suggestionId string) {
 	if suggestion := repository.FindSuggestion(suggestionId); suggestion != nil {
 		repository.RejectedKeys = append(repository.RejectedKeys, suggestion.RejectionKeys()...)
+		if suggestion.Kind == SuggestQuestion {
+			repository.setHabitState(suggestion.Habit, HabitRetired)
+		} else if suggestion.Habit != "" {
+			repository.countHabitAnswer(suggestion.Habit, false)
+		}
 	}
 	repository.Dismiss(suggestionId)
 }
@@ -177,44 +256,94 @@ func (repository *Repository) Accept(suggestionId string) error {
 		repository.moveSessions(suggestion.SessionIds, suggestion.FolderId)
 	case SuggestSubfolder:
 		subfolder := repository.AddFolder(suggestion.FolderName, suggestion.ParentFolderId)
-		repository.FindFolder(subfolder.Id).Branch = suggestion.Branch
+		createdFolder := repository.FindFolder(subfolder.Id)
+		createdFolder.Branch, createdFolder.IssueKey = suggestion.Branch, suggestion.IssueKey
 		repository.moveSessions(suggestion.SessionIds, subfolder.Id)
 	case SuggestCleanup:
 		for _, sessionId := range suggestion.SessionIds {
 			repository.SetArchived(sessionId, true)
 		}
 	case SuggestContext:
-		var err error
-		if suggestion.Guide != "" {
-			err = repository.WriteGuide(suggestion.Guide, suggestion.ProposedText)
-		} else {
-			err = repository.WriteContext(suggestion.FolderId, suggestion.ProposedText)
-		}
-		if err != nil {
+		if err := repository.WriteContext(suggestion.FolderId, suggestion.ProposedText); err != nil {
 			return err
 		}
+		if suggestion.Starter != "" {
+			repository.ForgetFolderStarters(suggestion.FolderId)
+		}
+	case SuggestLink:
+		if folder := repository.FindFolder(suggestion.FolderId); folder != nil {
+			folder.LinkedPath = suggestion.LinkedPath
+		}
+		repository.ForgetFolderStarters(suggestion.FolderId)
+	case SuggestLaptopRule:
+		for _, filePath := range suggestion.FilePaths {
+			if _, err := AppendRule(filePath, suggestion.Rule); err != nil {
+				return err
+			}
+		}
+	case SuggestQuestion:
+		repository.setHabitState(suggestion.Habit, HabitActive)
+		if suggestion.Rule != "" {
+			contextPath, err := repository.ContextPath("")
+			if err != nil {
+				return err
+			}
+			if _, err := AppendRule(contextPath, suggestion.Rule); err != nil {
+				return err
+			}
+		}
+	}
+	if suggestion.Habit != "" && suggestion.Kind != SuggestQuestion {
+		repository.countHabitAnswer(suggestion.Habit, true)
 	}
 	repository.Dismiss(suggestionId)
 	return nil
+}
+
+// Unlink takes a folder's linked file away, which counts as rejecting that link, so den doesn't offer it back.
+func (repository *Repository) Unlink(folderId string) {
+	folder := repository.FindFolder(folderId)
+	if folder == nil || folder.LinkedPath == "" {
+		return
+	}
+	repository.RejectedKeys = append(repository.RejectedKeys, Suggestion{Kind: SuggestLink, FolderId: folderId, LinkedPath: folder.LinkedPath}.RejectionKeys()...)
+	folder.LinkedPath = ""
+}
+
+// ForgetFolderStarters drops what den proposed as a folder's first context, once the folder has one.
+func (repository *Repository) ForgetFolderStarters(folderId string) {
+	repository.Suggestions = slices.DeleteFunc(repository.Suggestions, func(suggestion Suggestion) bool {
+		return suggestion.FolderId == folderId && (suggestion.Kind == SuggestLink || (suggestion.Kind == SuggestContext && suggestion.Starter != ""))
+	})
 }
 
 // PendingFor returns the waiting suggestion that would file or archive this session, if any.
 func (repository *Repository) PendingFor(sessionId string) *Suggestion {
 	for index := range repository.Suggestions {
 		suggestion := &repository.Suggestions[index]
-		if suggestion.Kind != SuggestContext && slices.Contains(suggestion.SessionIds, sessionId) {
+		if isSessionKind(suggestion.Kind) && slices.Contains(suggestion.SessionIds, sessionId) {
 			return suggestion
 		}
 	}
 	return nil
 }
 
-// PendingContextFor returns the waiting edit of a folder's context, or of a guide when guide is set.
-func (repository *Repository) PendingContextFor(folderId string, guide string) *Suggestion {
+// PendingForFolder returns the waiting edit or link of a folder's context, or of the repo's for the top level.
+func (repository *Repository) PendingForFolder(folderId string) *Suggestion {
 	for index := range repository.Suggestions {
 		suggestion := &repository.Suggestions[index]
-		if suggestion.Kind == SuggestContext && suggestion.FolderId == folderId && suggestion.Guide == guide {
+		if (suggestion.Kind == SuggestContext || suggestion.Kind == SuggestLink) && suggestion.FolderId == folderId {
 			return suggestion
+		}
+	}
+	return nil
+}
+
+// PendingOfKind returns the first waiting suggestion of a kind, like the open question.
+func (repository *Repository) PendingOfKind(kind SuggestionKind) *Suggestion {
+	for index := range repository.Suggestions {
+		if repository.Suggestions[index].Kind == kind {
+			return &repository.Suggestions[index]
 		}
 	}
 	return nil
@@ -256,7 +385,7 @@ func (repository *Repository) ForgetSessionSuggestions(sessionId string) {
 		if suggestion.Kind == SuggestSubfolder {
 			return len(suggestion.SessionIds) < 2
 		}
-		return suggestion.Kind != SuggestContext && len(suggestion.SessionIds) == 0
+		return isSessionKind(suggestion.Kind) && len(suggestion.SessionIds) == 0
 	})
 }
 
