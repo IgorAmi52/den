@@ -92,7 +92,7 @@ func (currentModel model) proposalLines(row listRow, width int) []string {
 		return nil
 	}
 	theme := currentModel.theme
-	indent := strings.Repeat("  ", row.depth) + "  "
+	indent := " " + strings.Repeat("  ", row.depth) + "  "
 	textWidth := width - len(indent) - 1
 	var lines []string
 	for _, line := range wrapText("✦ "+currentModel.proposalTitle(*suggestion), textWidth) {

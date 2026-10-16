@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -13,11 +14,13 @@ import (
 const folderPickerWidth = 36
 
 // folderPicker is the overlay that asks which folder something goes to.
+// topLevelLabel names the top level: the Inbox for sessions, the top of the tree for folders.
 type folderPicker struct {
-	title     string
-	folderIds []string
-	cursor    int
-	onPick    func(currentModel *model, folderId string)
+	title         string
+	topLevelLabel string
+	folderIds     []string
+	cursor        int
+	onPick        func(currentModel *model, folderId string)
 }
 
 // pickedFolder is a folder in the picker, with its depth in the tree.
@@ -26,25 +29,48 @@ type pickedFolder struct {
 	depth  int
 }
 
-func (currentModel *model) pickFolder(title string, onPick func(currentModel *model, folderId string)) {
-	folderIds := []string{""}
+// pickFolder opens the picker with its cursor on currentFolderId. The folder being moved, if any,
+// is left out with its subfolders, since a folder can't go inside itself.
+func (currentModel *model) pickFolder(title string, topLevelLabel string, currentFolderId string, movingFolderId string, onPick func(currentModel *model, folderId string)) {
+	picker := &folderPicker{title: title, topLevelLabel: topLevelLabel, folderIds: []string{""}, onPick: onPick}
 	for _, entry := range currentModel.allFolders() {
-		folderIds = append(folderIds, entry.folder.Id)
+		isInsideMovingFolder := false
+		for ancestor := entry.folder; ancestor != nil; ancestor = currentModel.repository.FindFolder(ancestor.ParentId) {
+			isInsideMovingFolder = isInsideMovingFolder || ancestor.Id == movingFolderId
+		}
+		if !isInsideMovingFolder {
+			picker.folderIds = append(picker.folderIds, entry.folder.Id)
+		}
 	}
-	currentModel.picker = &folderPicker{title: title, folderIds: folderIds, onPick: onPick}
+	picker.cursor = max(slices.Index(picker.folderIds, currentFolderId), 0)
+	currentModel.picker = picker
 }
 
-// askWhereToMove opens the folder picker for the sessions.
-func (currentModel *model) askWhereToMove(sessionIds []string) {
-	title := "Move " + countedSessions(len(sessionIds)) + " to"
-	if len(sessionIds) == 1 {
-		title = "Move " + truncate(currentModel.repository.FindSession(sessionIds[0]).Title, 24) + " to"
+// askWhereToMove opens the picker for the selected session, new agent or folder.
+func (currentModel *model) askWhereToMove(row listRow) {
+	switch row.kind {
+	case sessionRow:
+		sessionId := row.session.SessionId
+		currentModel.pickFolder("Move "+truncate(row.session.Title, 24)+" to", "Inbox", row.session.FolderId, "", func(currentModel *model, folderId string) {
+			currentModel.moveSessionToFolder(sessionId, folderId)
+		})
+	case newAgentRow:
+		paneId := row.open.paneId
+		currentModel.pickFolder("Move new "+row.open.tool+" to", "Inbox", row.open.folderId, "", func(currentModel *model, folderId string) {
+			for agentIndex := range currentModel.openAgents {
+				if currentModel.openAgents[agentIndex].paneId == paneId {
+					currentModel.moveRowToFolder(listRow{kind: newAgentRow, open: &currentModel.openAgents[agentIndex]}, folderId)
+				}
+			}
+		})
+	case folderRow:
+		folderId := row.folder.Id
+		currentModel.pickFolder("Move "+truncate(row.folder.Name, 24)+" into", "top level", row.folder.ParentId, folderId, func(currentModel *model, parentId string) {
+			currentModel.moveFolder(folderId, parentId)
+		})
+	default:
+		currentModel.setStatus("only sessions and folders move")
 	}
-	currentModel.pickFolder(title, func(currentModel *model, folderId string) {
-		currentModel.moveSessionsToFolder(sessionIds, folderId)
-		currentModel.selected = map[string]bool{}
-		currentModel.clampCursor()
-	})
 }
 
 // allFolders lists every folder in tree order, collapsed or not.
@@ -92,7 +118,11 @@ func (currentModel model) folderPickerBox() string {
 		if folder := currentModel.repository.FindFolder(folderId); folder != nil && folder.Branch != "" {
 			prefix += "⎇ "
 		}
-		left := []segment{{text: prefix + currentModel.repository.FolderName(folderId), style: theme.text}}
+		name := currentModel.repository.FolderName(folderId)
+		if folderId == "" {
+			name = picker.topLevelLabel
+		}
+		left := []segment{{text: prefix + name, style: theme.folder}}
 		var right []segment
 		if _, hasContext := currentModel.contextTokens[folderId]; hasContext && folderId != "" {
 			right = []segment{{text: "◆", style: theme.accent}}

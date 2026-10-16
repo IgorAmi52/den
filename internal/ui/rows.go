@@ -44,7 +44,7 @@ func (row listRow) folderId() string {
 	return ""
 }
 
-// isMovable tells whether the row is something that can be carried into a folder.
+// isMovable tells whether the row is a session or new agent, which can be dragged into a folder.
 func (row listRow) isMovable() bool {
 	return row.kind == sessionRow || row.kind == newAgentRow
 }
@@ -208,20 +208,6 @@ func (currentModel model) folderForNewItems() string {
 		return selected.folderId()
 	}
 	return ""
-}
-
-// moveTargets lists where a carried session can go, in screen order: the Inbox, then every visible folder.
-func (currentModel model) moveTargets() []string {
-	var targets []string
-	for _, row := range currentModel.rows() {
-		switch row.kind {
-		case inboxRow:
-			targets = append(targets, "")
-		case folderRow:
-			targets = append(targets, row.folder.Id)
-		}
-	}
-	return targets
 }
 
 // sameItemAs matches the row showing the same folder, session or pane, even after the list was rebuilt.

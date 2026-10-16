@@ -158,7 +158,7 @@ func (currentModel *model) editCard(card *store.Suggestion) tea.Cmd {
 	suggestionId := card.Id
 	switch card.Kind {
 	case store.SuggestMove:
-		currentModel.pickFolder("File it in", func(currentModel *model, folderId string) {
+		currentModel.pickFolder("File it in", "Inbox", card.FolderId, "", func(currentModel *model, folderId string) {
 			if suggestion := currentModel.repository.FindSuggestion(suggestionId); suggestion != nil {
 				suggestion.FolderId = folderId
 				currentModel.acceptSuggestion(suggestionId)

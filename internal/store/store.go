@@ -130,6 +130,20 @@ func (repository *Repository) AddFolder(name string, parentId string) Folder {
 	return folder
 }
 
+// MoveFolder puts a folder, with everything in it, inside another folder or at the top level.
+// A folder can't go inside itself or one of its own subfolders.
+func (repository *Repository) MoveFolder(folderId string, parentId string) error {
+	for ancestor := repository.FindFolder(parentId); ancestor != nil; ancestor = repository.FindFolder(ancestor.ParentId) {
+		if ancestor.Id == folderId {
+			return errors.New("a folder can't go inside itself")
+		}
+	}
+	if folder := repository.FindFolder(folderId); folder != nil {
+		folder.ParentId = parentId
+	}
+	return nil
+}
+
 // DeleteFolder removes only the folder: its subfolders and sessions move up to its parent.
 func (repository *Repository) DeleteFolder(folderId string) {
 	folder := repository.FindFolder(folderId)

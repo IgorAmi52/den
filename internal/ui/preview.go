@@ -41,16 +41,6 @@ func (currentModel model) previewColumnLines(width int, height int) []string {
 
 func (currentModel model) rowPreview(width int) (string, []string) {
 	theme := currentModel.theme
-	if count := len(currentModel.selected); count > 0 {
-		lines := []string{theme.accentBold.Render(countedSessions(count) + " selected"), ""}
-		for _, session := range currentModel.repository.Sessions {
-			if currentModel.selected[session.SessionId] {
-				lines = append(lines, theme.text.Render("✓ "+truncate(session.Title, width-2)))
-			}
-		}
-		lines = append(lines, "", theme.dim.Render("⇥ says yes to what den proposes for them, m moves them, a archives them, d deletes them, esc clears the selection."))
-		return "SELECTION", wrapAll(lines, width)
-	}
 	row, exists := currentModel.selectedRow()
 	if !exists {
 		return "", nil

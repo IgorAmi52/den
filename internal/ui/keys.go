@@ -18,7 +18,7 @@ type keyMap struct {
 	move, archive, editContext key.Binding
 	wide, review, chat         key.Binding
 	help, jump, quit, filter   key.Binding
-	selectRow, scrollPreview   key.Binding
+	scrollPreview              key.Binding
 	back, yes, no, edit, skip  key.Binding
 	toggle, ask, done          key.Binding
 	send, scrollChat           key.Binding
@@ -53,7 +53,6 @@ func newKeyMap() keyMap {
 		jump:          binding([]string{"1", "2", "3", "4"}, "1-4", "jump to agent"),
 		quit:          binding([]string{"q", "ctrl+c"}, "q", "quit"),
 		filter:        binding([]string{"/"}, "/", "filter"),
-		selectRow:     binding([]string{"space"}, "space", "select"),
 		scrollPreview: binding([]string{"pgdown", "pgup", "J", "K"}, "J/K", "scroll preview"),
 		back:          binding([]string{"esc"}, "esc", "back"),
 		yes:           binding([]string{"enter"}, "↵", "yes"),

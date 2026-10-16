@@ -122,11 +122,9 @@ type model struct {
 	// listOffset is the first tree line on screen, counting the lines that explain a proposal.
 	listOffset    int
 	previewOffset int
-	// selected holds the sessions picked with space, which move, archive or delete together.
-	selected  map[string]bool
-	filter    textinput.Model
-	filtering bool
-	picker    *folderPicker
+	filter        textinput.Model
+	filtering     bool
+	picker        *folderPicker
 	// repositoryExpanded, inboxCollapsed and archiveExpanded fold the built-in sections of the tree.
 	repositoryExpanded bool
 	inboxCollapsed     bool
@@ -140,10 +138,6 @@ type model struct {
 	prompt                   *textPrompt
 	statusMessage            string
 	statusIsError            bool
-	// grabbed matches the session being carried with the arrows; grabbedFromFolderId restores it on esc.
-	grabbed             func(listRow) bool
-	grabbedFromFolderId string
-	grabbedWasArchived  bool
 	// dragging matches the session held with the mouse, dropTargetRow the row under the mouse, or -1.
 	dragging      func(listRow) bool
 	dropTargetRow int
@@ -214,7 +208,6 @@ func Run() error {
 		digests:          map[string]agent.Digest{},
 		mergedBranches:   map[string]bool{},
 		contextTokens:    map[string]int{},
-		selected:         map[string]bool{},
 		filter:           newFilterInput(),
 		review:           newReviewState(),
 		chat:             newChatState(),

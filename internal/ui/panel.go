@@ -178,21 +178,25 @@ func (currentModel model) waitingAlert(waiting []openAgent) string {
 // treeLayout lays out every row, with the selected row's proposal explained under it.
 func (currentModel model) treeLayout(width int) []treeLine {
 	rows := currentModel.rows()
-	isAnswering := currentModel.prompt != nil || currentModel.confirming != nil || currentModel.grabbed != nil
+	isAnswering := currentModel.prompt != nil || currentModel.confirming != nil
 	var layout []treeLine
 	for rowIndex, row := range rows {
+		// A blank line before each top-level group keeps folders apart from the sessions above them.
+		if row.depth == 0 && rowIndex > 0 {
+			layout = append(layout, treeLine{rowIndex: -1})
+		}
 		layout = append(layout, treeLine{text: currentModel.treeRowLine(row, rowIndex, width), rowIndex: rowIndex})
-		if rowIndex == currentModel.listCursor && !isAnswering && len(currentModel.selected) == 0 {
+		if rowIndex == currentModel.listCursor && !isAnswering {
 			for _, line := range currentModel.proposalLines(row, width) {
 				layout = append(layout, treeLine{text: line, rowIndex: -1})
 			}
 		}
 		if row.kind == inboxRow && len(currentModel.repository.Sessions) == 0 && len(currentModel.openAgents) == 0 {
-			layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("  no sessions yet · n starts one", width)), rowIndex: -1})
+			layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("    no sessions yet · n starts one", width)), rowIndex: -1})
 		}
 	}
 	if len(rows) == 0 {
-		layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("  no session matches", width)), rowIndex: -1})
+		layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("   no session matches", width)), rowIndex: -1})
 	}
 	return layout
 }
@@ -248,25 +252,23 @@ func (currentModel model) rowAtLine(screenLine int) (int, bool) {
 
 func (currentModel model) treeRowLine(row listRow, rowIndex int, width int) string {
 	theme := currentModel.theme
-	isCarried := (currentModel.grabbed != nil && currentModel.grabbed(row)) || (currentModel.dragging != nil && currentModel.dragging(row))
-	isSelected := rowIndex == currentModel.listCursor || isCarried
+	isDragged := currentModel.dragging != nil && currentModel.dragging(row)
+	isSelected := rowIndex == currentModel.listCursor || isDragged
+	indent := strings.Repeat("  ", row.depth)
 	if currentModel.prompt != nil && currentModel.prompt.inlineRow != nil && currentModel.prompt.inlineRow(row) {
-		indent := strings.Repeat("  ", row.depth)
 		input := currentModel.prompt.input
-		input.SetWidth(width - len(indent) - len(input.Prompt) - 1)
-		return padRight(indent+input.View(), width)
+		input.SetWidth(width - 1 - len(indent) - len(input.Prompt) - 1)
+		return padRight(theme.accentBold.Render("▌")+indent+input.View(), width)
 	}
-	indent := segment{text: strings.Repeat("  ", row.depth), style: theme.text}
+	gutter := segment{text: " ", style: theme.text}
 	switch {
-	case isCarried:
-		indent = segment{text: "▸" + strings.Repeat(" ", max(row.depth*2-1, 1)), style: theme.accentBold}
-	case rowIndex == currentModel.dropTargetRow:
-		indent = segment{text: "→" + strings.Repeat(" ", max(row.depth*2-1, 1)), style: theme.dropTarget}
-	case row.kind == sessionRow && currentModel.selected[row.session.SessionId]:
-		indent = segment{text: strings.Repeat(" ", max(row.depth*2-1, 0)) + "✓", style: theme.accentBold}
+	case rowIndex == currentModel.dropTargetRow && !isDragged:
+		gutter = segment{text: "→", style: theme.dropTarget}
+	case isSelected:
+		gutter = segment{text: "▌", style: theme.accentBold}
 	}
 	left, right := currentModel.rowSegments(row, width)
-	return currentModel.layoutRow(append([]segment{indent}, left...), right, width, isSelected)
+	return currentModel.layoutRow(append([]segment{gutter, {text: indent, style: theme.text}}, left...), right, width, isSelected)
 }
 
 // rowSegments builds a tree row without its indent: the folder arrow or the session's pane number and status,
@@ -281,12 +283,11 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 	}
 	switch row.kind {
 	case repositoryRow:
-		left = []segment{{text: folderArrow(!currentModel.repositoryExpanded) + " ", style: theme.dim}, {text: "◆ ", style: theme.accent},
-			{text: currentModel.repositoryName(), style: theme.bold}, {text: " · context & guides", style: theme.dim}}
-		right = proposalMark()
+		left = []segment{{text: "◆ ", style: theme.accent}, {text: "context & guides", style: theme.accent}}
+		right = append(proposalMark(), segment{text: folderArrow(!currentModel.repositoryExpanded), style: theme.dim})
 	case contextFileRow:
 		name, _, tokens := currentModel.contextFileDetails(row.guide)
-		left = []segment{{text: name, style: theme.text}}
+		left = []segment{{text: name, style: theme.dim}}
 		right = proposalMark()
 		if tokens > 0 {
 			right = append(right, segment{text: fmt.Sprintf("~%d", tokens), style: theme.dim})
@@ -294,26 +295,21 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 			right = append(right, segment{text: "empty", style: theme.faint})
 		}
 	case inboxRow:
-		left = []segment{{text: folderArrow(currentModel.inboxCollapsed) + " Inbox", style: theme.bold}}
-		if count := len(currentModel.sessionsIn("")); count > 0 {
-			right = []segment{{text: fmt.Sprint(count), style: theme.dim}}
-		}
+		left = []segment{{text: folderArrow(currentModel.inboxCollapsed) + " ", style: theme.faint}, {text: "Inbox", style: theme.folder}}
+		right = []segment{{text: fmt.Sprint(len(currentModel.sessionsIn(""))), style: theme.dim}}
 	case folderRow:
-		left = []segment{{text: folderArrow(row.folder.Collapsed) + " ", style: theme.bold}}
+		left = []segment{{text: folderArrow(row.folder.Collapsed) + " ", style: theme.faint}}
 		if row.folder.Branch != "" {
-			left = append(left, segment{text: "⎇ ", style: theme.dim}, segment{text: row.folder.Name, style: theme.text})
-		} else {
-			left = append(left, segment{text: row.folder.Name, style: theme.bold})
+			left = append(left, segment{text: "⎇ ", style: theme.folder})
 		}
+		left = append(left, segment{text: row.folder.Name, style: theme.folder})
 		right = proposalMark()
 		if _, hasContext := currentModel.contextTokens[row.folder.Id]; hasContext {
-			right = append(right, segment{text: "◆", style: theme.accent})
+			right = append(right, segment{text: "◆ ", style: theme.accent})
 		}
-		if count := currentModel.repository.SessionCount(row.folder.Id); row.folder.Collapsed && count > 0 {
-			right = append(right, segment{text: " " + fmt.Sprint(count), style: theme.dim})
-		}
+		right = append(right, segment{text: fmt.Sprint(currentModel.repository.SessionCount(row.folder.Id)), style: theme.dim})
 	case archiveRow:
-		left = []segment{{text: folderArrow(!currentModel.archiveExpanded) + " Archive", style: theme.dim}}
+		left = []segment{{text: folderArrow(!currentModel.archiveExpanded) + " ", style: theme.faint}, {text: "Archive", style: theme.dim}}
 		right = []segment{{text: fmt.Sprint(currentModel.repository.ArchivedCount()), style: theme.dim}}
 	case newAgentRow:
 		left = append(currentModel.paneMarker(row.open), segment{text: " new " + row.open.tool, style: theme.dim})
@@ -332,10 +328,10 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 	return left, right
 }
 
-// paneMarker is two cells: the pane number of an open agent and its status glyph, or a faint dot when not open.
+// paneMarker is two cells: the pane number of an open agent and its status glyph, or blank when not open.
 func (currentModel model) paneMarker(open *openAgent) []segment {
 	if open == nil {
-		return []segment{{text: " ·", style: currentModel.theme.faint}}
+		return []segment{{text: "  ", style: currentModel.theme.text}}
 	}
 	return []segment{{text: fmt.Sprint(open.number), style: currentModel.theme.accentBold}, currentModel.statusGlyph(open.status)}
 }
@@ -371,11 +367,6 @@ func (currentModel model) footer(width int) []string {
 		lines = append([]string{currentModel.pickerLine(width)}, hints(relabeled(keys.open, "start"), relabeled(keys.back, "cancel"))...)
 	case currentModel.picker != nil:
 		lines = hints(relabeled(keys.down, "folder"), relabeled(keys.open, "move here"), relabeled(keys.back, "cancel"))
-	case currentModel.grabbed != nil:
-		lines = append([]string{theme.dim.Render("carry it to a folder")}, hints(relabeled(keys.down, "folder"), relabeled(keys.open, "drop"), relabeled(keys.back, "cancel"))...)
-	case len(currentModel.selected) > 0:
-		lines = append([]string{theme.accent.Render(countedSessions(len(currentModel.selected)) + " selected")},
-			currentModel.hintLinesEndingWith([]key.Binding{relabeled(keys.accept, "yes to all"), keys.move, keys.archive, keys.delete, relabeled(keys.back, "clear")}, keys.help, width, 1)...)
 	case currentModel.statusMessage != "":
 		style := theme.dim
 		if currentModel.statusIsError {
@@ -403,7 +394,7 @@ func (currentModel model) rowHints() []key.Binding {
 			if selected.open != nil {
 				enterAction = "focus"
 			}
-			bindings = append(bindings, relabeled(keys.open, enterAction), keys.rename, keys.move, keys.selectRow)
+			bindings = append(bindings, relabeled(keys.open, enterAction), keys.move, keys.rename)
 			if selected.session.Archived {
 				bindings = append(bindings, relabeled(keys.archive, "unarchive"))
 			} else {
@@ -413,7 +404,7 @@ func (currentModel model) rowHints() []key.Binding {
 		case newAgentRow:
 			bindings = append(bindings, relabeled(keys.open, "focus"), keys.move, relabeled(keys.delete, "close"))
 		case folderRow:
-			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.editContext, keys.rename, relabeled(keys.newFolder, "subfolder"), keys.delete)
+			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.rename, relabeled(keys.newFolder, "subfolder"), keys.delete)
 		case repositoryRow:
 			bindings = append(bindings, relabeled(keys.open, "show files"), relabeled(keys.editContext, "repo context"))
 		case contextFileRow:

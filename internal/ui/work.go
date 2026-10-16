@@ -39,7 +39,7 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keys := currentModel.keys
 	if key.Matches(keyPress, keys.newFromAgent) && currentModel.prompt == nil && !currentModel.filtering {
-		currentModel.confirming, currentModel.picker, currentModel.grabbed = nil, nil, nil
+		currentModel.confirming, currentModel.picker = nil, nil
 		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false)
 	}
 	switch {
@@ -53,8 +53,6 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		return currentModel.updatePicker(keyPress)
 	case currentModel.picker != nil:
 		return currentModel.updateFolderPicker(keyPress)
-	case currentModel.grabbed != nil:
-		return currentModel.updateGrab(keyPress)
 	}
 	currentModel.clearStatus()
 	selected, exists := currentModel.selectedRow()
@@ -97,7 +95,6 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		return currentModel, focusCommand
 	case key.Matches(keyPress, keys.newFolder):
 		return currentModel, currentModel.askForNewFolder(currentModel.folderForNewItems())
-	case len(currentModel.selected) > 0 && currentModel.updateSelection(keyPress):
 	case !exists:
 	case key.Matches(keyPress, keys.open):
 		return currentModel, currentModel.openRow(selected)
@@ -105,18 +102,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		currentModel.acceptProposal(selected)
 	case key.Matches(keyPress, keys.reject):
 		currentModel.rejectProposal(selected)
-	case key.Matches(keyPress, keys.selectRow):
-		if selected.kind == sessionRow {
-			currentModel.selected[selected.session.SessionId] = true
-			currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
-		}
 	case key.Matches(keyPress, keys.move):
-		currentModel.startGrab()
-	// Shortcuts for terminals that send Shift+arrows; Terminal.app sends them as plain arrows, so grab mode is the main way.
-	case keyPress.String() == "shift+down":
-		currentModel.moveSelected(1)
-	case keyPress.String() == "shift+up":
-		currentModel.moveSelected(-1)
+		currentModel.askWhereToMove(selected)
 	case key.Matches(keyPress, keys.rename):
 		return currentModel, currentModel.askForRename(selected, true)
 	case key.Matches(keyPress, keys.archive):
@@ -134,55 +121,9 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 	return currentModel, nil
 }
 
-// updateSelection handles the keys that act on every selected session, and tells whether the key was one of them.
-func (currentModel *model) updateSelection(keyPress tea.KeyPressMsg) bool {
-	keys := currentModel.keys
-	selected, exists := currentModel.selectedRow()
-	var sessionIds []string
-	for _, session := range currentModel.repository.Sessions {
-		if currentModel.selected[session.SessionId] {
-			sessionIds = append(sessionIds, session.SessionId)
-		}
-	}
-	switch {
-	case key.Matches(keyPress, keys.selectRow):
-		if exists && selected.kind == sessionRow {
-			sessionId := selected.session.SessionId
-			if currentModel.selected[sessionId] {
-				delete(currentModel.selected, sessionId)
-			} else {
-				currentModel.selected[sessionId] = true
-			}
-			currentModel.listCursor = min(currentModel.listCursor+1, len(currentModel.rows())-1)
-		}
-	case key.Matches(keyPress, keys.accept):
-		accepted := 0
-		for _, sessionId := range sessionIds {
-			if session := currentModel.repository.FindSession(sessionId); session != nil && currentModel.repository.PendingFor(sessionId) != nil {
-				currentModel.acceptProposal(listRow{kind: sessionRow, session: session})
-				accepted++
-			}
-		}
-		currentModel.selected = map[string]bool{}
-		currentModel.setStatus(fmt.Sprintf("said yes to %d proposals", accepted))
-	case key.Matches(keyPress, keys.move):
-		currentModel.askWhereToMove(sessionIds)
-	case key.Matches(keyPress, keys.archive):
-		currentModel.setArchived(sessionIds, !currentModel.repository.FindSession(sessionIds[0]).Archived)
-		currentModel.selected = map[string]bool{}
-	case key.Matches(keyPress, keys.delete):
-		currentModel.askToDeleteSessions(sessionIds)
-	default:
-		return false
-	}
-	return true
-}
-
-// stepBack undoes one layer: the selection, then the filter, then the wide view.
+// stepBack undoes one layer: the filter, then the wide view.
 func (currentModel *model) stepBack() {
 	switch {
-	case len(currentModel.selected) > 0:
-		currentModel.selected = map[string]bool{}
 	case currentModel.filter.Value() != "":
 		currentModel.filter.SetValue("")
 		currentModel.listCursor, currentModel.listOffset = 0, 0
@@ -357,7 +298,6 @@ func (currentModel *model) askToDeleteSessions(sessionIds []string) {
 		currentModel.saveRepository()
 		currentModel.reportError(currentModel.refreshAgents())
 		currentModel.clampCursor()
-		currentModel.selected = map[string]bool{}
 		return nil
 	}}
 }

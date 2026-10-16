@@ -29,7 +29,7 @@ func (currentModel model) helpGroups() []helpGroup {
 		}},
 		{title: "SESSIONS", bindings: []key.Binding{
 			relabeled(keys.open, "resume, focus, open"), relabeled(keys.newSession, "new, with context"), keys.newWithout,
-			keys.jump, relabeled(keys.move, "carry to a folder"), relabeled(keys.selectRow, "select several"),
+			keys.jump, relabeled(keys.move, "move a session or folder"),
 			keys.rename, keys.archive, keys.delete, keys.filter,
 		}},
 		{title: "FOLDERS AND DEN", bindings: []key.Binding{

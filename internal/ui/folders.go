@@ -123,21 +123,6 @@ func (currentModel *model) expandFolder(folderId string) {
 	}
 }
 
-// moveSelected moves the selected session into the next or previous folder on screen.
-func (currentModel *model) moveSelected(direction int) {
-	selected, exists := currentModel.selectedRow()
-	if !exists || !selected.isMovable() {
-		return
-	}
-	targets := currentModel.moveTargets()
-	currentIndex := slices.Index(targets, selected.folderId())
-	targetIndex := currentIndex + direction
-	if currentIndex < 0 || targetIndex < 0 || targetIndex >= len(targets) {
-		return
-	}
-	currentModel.moveRowToFolder(selected, targets[targetIndex])
-}
-
 // moveRowToFolder puts a session, or a new agent without a first prompt yet, into a folder and keeps it selected.
 func (currentModel *model) moveRowToFolder(row listRow, folderId string) {
 	if !row.isMovable() || (row.folderId() == folderId && !(row.session != nil && row.session.Archived)) {
@@ -156,66 +141,38 @@ func (currentModel *model) moveRowToFolder(row listRow, folderId string) {
 	currentModel.cursorTo(matchesRow)
 }
 
-// moveSessionsToFolder files several sessions at once, as the organize view's move does.
-func (currentModel *model) moveSessionsToFolder(sessionIds []string, folderId string) {
-	for _, sessionId := range sessionIds {
-		fromFolderId := currentModel.repository.FindSession(sessionId).FolderId
-		currentModel.repository.MoveByHand(sessionId, folderId)
-		currentModel.repository.RememberMovedOut(sessionId, fromFolderId)
-	}
+// moveSessionToFolder files a session where the user picked. Taking it out of a folder counts as rejecting that folder.
+func (currentModel *model) moveSessionToFolder(sessionId string, folderId string) {
+	fromFolderId := currentModel.repository.FindSession(sessionId).FolderId
+	currentModel.repository.MoveByHand(sessionId, folderId)
+	currentModel.repository.RememberMovedOut(sessionId, fromFolderId)
 	currentModel.expandFolder(folderId)
 	currentModel.saveRepository()
 	currentModel.updatePaneFolders()
-	currentModel.setStatus("moved " + countedSessions(len(sessionIds)) + " to " + currentModel.repository.FolderName(folderId))
+	currentModel.cursorTo(func(row listRow) bool { return row.kind == sessionRow && row.session.SessionId == sessionId })
+	currentModel.setStatus("moved to " + currentModel.repository.FolderName(folderId))
 }
 
-// startGrab picks up the selected session, so plain arrows carry it through the folders until it is dropped.
-func (currentModel *model) startGrab() {
-	selected, exists := currentModel.selectedRow()
-	if !exists || !selected.isMovable() {
+// moveFolder puts a folder, with everything in it, under another folder or at the top level, and keeps it selected.
+func (currentModel *model) moveFolder(folderId string, parentId string) {
+	if currentModel.reportError(currentModel.repository.MoveFolder(folderId, parentId)) {
 		return
 	}
-	currentModel.grabbed = sameItemAs(selected)
-	currentModel.grabbedFromFolderId = selected.folderId()
-	currentModel.grabbedWasArchived = selected.kind == sessionRow && selected.session.Archived
-}
-
-func (currentModel model) updateGrab(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	keys := currentModel.keys
-	switch {
-	case key.Matches(keyPress, keys.up), keyPress.String() == "shift+up" || keyPress.String() == "K":
-		currentModel.moveSelected(-1)
-	case key.Matches(keyPress, keys.down), keyPress.String() == "shift+down" || keyPress.String() == "J":
-		currentModel.moveSelected(1)
-	case key.Matches(keyPress, keys.back):
-		if selected, exists := currentModel.selectedRow(); exists {
-			// Moving sorts the sessions, so the id is read before the row's pointer goes stale.
-			carriedSessionId := ""
-			if selected.kind == sessionRow {
-				carriedSessionId = selected.session.SessionId
-			}
-			currentModel.moveRowToFolder(selected, currentModel.grabbedFromFolderId)
-			if currentModel.grabbedWasArchived && carriedSessionId != "" {
-				currentModel.setArchived([]string{carriedSessionId}, true)
-				currentModel.clearStatus()
-			}
-		}
-		currentModel.grabbed = nil
-	case key.Matches(keyPress, keys.open), key.Matches(keyPress, keys.move):
-		if selected, exists := currentModel.selectedRow(); exists && selected.kind == sessionRow {
-			currentModel.repository.RememberMovedOut(selected.session.SessionId, currentModel.grabbedFromFolderId)
-			currentModel.saveRepository()
-		}
-		currentModel.grabbed = nil
+	currentModel.expandFolder(parentId)
+	currentModel.saveRepository()
+	currentModel.cursorTo(func(row listRow) bool { return row.kind == folderRow && row.folder.Id == folderId })
+	if parentId == "" {
+		currentModel.setStatus("moved to the top level")
+	} else {
+		currentModel.setStatus("moved into " + currentModel.repository.FolderName(parentId))
 	}
-	return currentModel, nil
 }
 
 // updateMouse selects the clicked row and moves a session dragged onto another row into that row's folder.
 // A click on the ✦ badge opens the review queue.
 func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := message.Mouse()
-	if mouse.Button != tea.MouseLeft || currentModel.grabbed != nil {
+	if mouse.Button != tea.MouseLeft {
 		return currentModel, nil
 	}
 	if _, isClick := message.(tea.MouseClickMsg); isClick && mouse.Y == 0 && mouse.X >= currentModel.panelWidth()-4 {

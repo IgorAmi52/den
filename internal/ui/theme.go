@@ -25,6 +25,8 @@ var (
 	waitingColor    = paletteColor{"#ffaf00", 214}
 	suggestionColor = paletteColor{"#d7afff", 183}
 	removedColor    = paletteColor{"#ff8787", 210}
+	// folderColor is a manila tan, so folders never read as sessions and don't compete with the accent or the amber of waiting.
+	folderColor = paletteColor{"#d7af87", 180}
 )
 
 // Backgrounds only work on one kind of terminal background, so each has a dark and a light variant.
@@ -45,6 +47,7 @@ var (
 type theme struct {
 	text           lipgloss.Style
 	bold           lipgloss.Style
+	folder         lipgloss.Style
 	accent         lipgloss.Style
 	accentBold     lipgloss.Style
 	dim            lipgloss.Style
@@ -93,6 +96,7 @@ func newTheme(isDark bool, profile colorprofile.Profile) theme {
 	return theme{
 		text:           base,
 		bold:           base.Bold(true),
+		folder:         base.Foreground(pick(folderColor)).Bold(true),
 		accent:         base.Foreground(accent),
 		accentBold:     base.Foreground(accent).Bold(true),
 		dim:            base.Foreground(dim),
