@@ -34,17 +34,20 @@ const (
 	reviewJob jobKind = iota
 	chatJob
 	draftJob
+	// reviseJob answers what the user told den about one of its suggestions in the dock.
+	reviseJob
 )
 
 func (kind jobKind) String() string {
-	return [...]string{"review", "chat", "draft"}[kind]
+	return [...]string{"review", "chat", "draft", "revise"}[kind]
 }
 
 // job is one model call. Its input is built when it starts, so it sees the latest state.
 type job struct {
-	kind      jobKind
-	sessionId string
-	folderId  string
+	kind         jobKind
+	sessionId    string
+	folderId     string
+	suggestionId string
 }
 
 type jobDoneMessage struct {
@@ -77,7 +80,7 @@ func (currentModel *model) queueJob(next job) {
 			return
 		}
 	}
-	if next.kind == chatJob {
+	if next.kind == chatJob || next.kind == reviseJob {
 		currentModel.jobQueue = append([]job{next}, currentModel.jobQueue...)
 		return
 	}
@@ -134,6 +137,13 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 	case chatJob:
 		input := currentModel.chatInput()
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
+	case reviseJob:
+		input, exists := currentModel.reviseInput()
+		if !exists {
+			currentModel.dock.thinking = false
+			return nil
+		}
+		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
 	case draftJob:
 		parentNotes := repository.ReadContext("")
 		if folder := repository.FindFolder(next.folderId); folder != nil && folder.ParentId != "" {
@@ -149,9 +159,13 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	currentModel.runningJob = nil
 	if done.err != nil {
 		currentModel.helperFailures++
-		if done.job.kind == chatJob {
+		switch done.job.kind {
+		case chatJob:
 			currentModel.chat.thinking = false
 			currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()})
+		case reviseJob:
+			currentModel.dock.thinking = false
+			currentModel.dock.reply = &brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()}
 		}
 		if done.job.kind == reviewJob {
 			if session := currentModel.repository.FindSession(done.job.sessionId); session != nil {
@@ -173,7 +187,11 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	case *brain.ReviewAnswer:
 		currentModel.keepingSelection(func() { currentModel.applyReview(done.job.sessionId, done.promptCount, *answer) })
 	case *brain.ChatAnswer:
-		currentModel.applyChatAnswer(*answer, done.chatInput)
+		if done.job.kind == reviseJob {
+			currentModel.applyReviseAnswer(done.job, *answer, done.chatInput)
+		} else {
+			currentModel.applyChatAnswer(*answer, done.chatInput)
+		}
 	case *brain.DraftAnswer:
 		currentModel.applyDraft(done.job.folderId, *answer)
 	}
@@ -242,6 +260,9 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 		return
 	}
 	session.ReviewedAtPrompt, session.TitledAtPrompt = promptCount, promptCount
+	if summary := strings.TrimSpace(answer.Summary); summary != "" {
+		session.Summary = summary
+	}
 	logDecision := func(action string, detail string, outcome string) {
 		currentModel.reportError(repository.LogDecision(store.Decision{Job: "review", SessionId: sessionId, FolderId: session.FolderId, Action: action, Detail: detail, Outcome: outcome}))
 	}
@@ -366,7 +387,7 @@ func (currentModel *model) applyDraft(folderId string, answer brain.DraftAnswer)
 			suggestion.ByModel = true
 			if notes := strings.TrimSpace(answer.Notes); notes != "" {
 				suggestion.ProposedText = notes + "\n"
-				suggestion.Reason = "den drafted these from the folder's sessions. Saved, every new session in " + currentModel.repository.FolderName(folderId) + " starts with them; e edits them any time."
+				suggestion.Reason = "New sessions in " + currentModel.repository.FolderName(folderId) + " will start with these."
 			}
 		}
 	}

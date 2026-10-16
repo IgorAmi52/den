@@ -37,6 +37,8 @@ type Session struct {
 	TitledAtPrompt int `json:"titledAtPrompt,omitempty"`
 	// ReviewedAtPrompt is the prompt count when den's model last reviewed the session.
 	ReviewedAtPrompt int `json:"reviewedAtPrompt,omitempty"`
+	// Summary is den's one sentence on what the session is doing and where it stands.
+	Summary string `json:"summary,omitempty"`
 	// FiledByHand is set when the user put the session in a folder, so den never proposes another folder for it.
 	FiledByHand bool `json:"filedByHand,omitempty"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.

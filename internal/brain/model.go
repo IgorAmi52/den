@@ -41,13 +41,20 @@ const reviewSystem = "You are den. You organize a developer's AI coding agent se
 	"At most 3 short lines, each with evidence quoting the user. Return none for a session in the Inbox.\n\n" +
 	"rules: only from a clear correction by the user about how agents should work, like \"don't add comments\" or \"always run the tests with X\". " +
 	"target folder for a rule about one area of work, repo for the whole repo, laptop for a personal preference that holds in any repo. " +
-	"Evidence quotes the user. Usually there are none."
+	"Evidence quotes the user. Usually there are none.\n\n" +
+	"summary: one plain sentence, at most 15 words, on what the session is doing and where it stands, " +
+	"like \"Coupons no longer apply twice; tests pass, case handling is next.\""
 
 const chatSystem = "You are den. You organize a developer's AI coding agent sessions into folders, with notes per folder that every new " +
 	"session in the folder starts with. You chat with the developer about the sessions, folders and notes of one repo. " +
 	"Answer briefly and plainly, in at most 5 sentences of plain text with no markdown, from the facts given; when they don't say, " +
-	"say you don't know. Call sessions by their title, never by their id. " +
+	"say you don't know. Call sessions by their title, never by their id. Never explain how to confirm; den shows that. " +
 	"You never run code and never touch the repo.\n\n" +
+	"How context works: a folder's context is its linked file, when it has one, plus den's notes for it. A session starts with the repo's notes, " +
+	"then the context of each folder above it, then its own folder's. Linking a file adds it next to den's notes; it never replaces them. " +
+	"FOLDERS says where each folder's context comes from.\n\n" +
+	"When the chat is about one of den's suggestions, the user's message answers it: do it as is (acceptSuggestion), do something else " +
+	"instead (the actions that do what they want), or just answer a question about it, with no actions.\n\n" +
 	"When the user asks for a change, put it in actions; den lists them and the user confirms with enter. Only include actions the user asked for. " +
 	"Use folder names and session ids exactly as listed, and leave unused fields empty. Action types:\n" +
 	"- link: use a markdown file as a folder's context (folder, file)\n" +
@@ -57,13 +64,17 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"- renameFolder: (folder, name)\n" +
 	"- createFolder: a new folder (name; folder is its parent, or empty for the top level)\n" +
 	"- archive: (session)\n" +
-	"- addRule: a rule for agents (target folder, repo or laptop; folder when the target is folder; rule)"
+	"- addRule: a rule for agents (target folder, repo or laptop; folder when the target is folder; rule)\n" +
+	"- moveNotes: move den's notes, and a linked file, from one folder into another (from, folder)\n" +
+	"- editNotes: rewrite den's notes for a folder, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
+	"- acceptSuggestion: do den's suggestion the chat is about, as it is"
 
 const draftSystem = "You write the first notes for a folder of AI coding sessions. Every new session in the folder starts with them, " +
 	"so they say what someone picking up this work needs: what it is and why, decisions the user made, status, open questions, " +
 	"and pointers to key files. Use only facts from the sessions given; never invent. Markdown, starting with \"# <folder name>\", " +
 	"with a section only when you have something for it (## Goal, ## Decisions, ## Status, ## Open questions, ## Pointers). " +
-	"Status says only what the sessions show was done. Open questions are only questions the user asked that weren't answered; " +
+	"Status says in one short line per piece of work what the sessions show was done, without retelling the conversation. " +
+	"Open questions are only questions the user asked that weren't answered; " +
 	"never add your own. Under 200 words. No implementation steps."
 
 const firstRunSystem = "You group a developer's past AI coding sessions in one repo into a few folders, the way the developer would: " +
@@ -85,8 +96,9 @@ type ReviewInput struct {
 }
 
 type ReviewAnswer struct {
-	Title string `json:"title"`
-	Move  struct {
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	Move    struct {
 		Folder     string  `json:"folder"`
 		Confidence float64 `json:"confidence"`
 		Reason     string  `json:"reason"`
@@ -138,10 +150,11 @@ func ReviewRequest(input ReviewInput) helper.Request {
 		System: reviewSystem,
 		Prompt: prompt.String(),
 		Schema: objectSchema(map[string]any{
-			"title": stringSchema(),
-			"move":  objectSchema(map[string]any{"folder": stringSchema(), "confidence": map[string]any{"type": "number"}, "reason": stringSchema()}),
-			"notes": arraySchema(objectSchema(map[string]any{"section": enumSchema(NotesSections...), "line": stringSchema(), "evidence": stringSchema()})),
-			"rules": arraySchema(objectSchema(map[string]any{"target": enumSchema("folder", "repo", "laptop"), "rule": stringSchema(), "evidence": stringSchema()})),
+			"title":   stringSchema(),
+			"summary": stringSchema(),
+			"move":    objectSchema(map[string]any{"folder": stringSchema(), "confidence": map[string]any{"type": "number"}, "reason": stringSchema()}),
+			"notes":   arraySchema(objectSchema(map[string]any{"section": enumSchema(NotesSections...), "line": stringSchema(), "evidence": stringSchema()})),
+			"rules":   arraySchema(objectSchema(map[string]any{"target": enumSchema("folder", "repo", "laptop"), "rule": stringSchema(), "evidence": stringSchema()})),
 		}),
 	}
 }
@@ -168,6 +181,8 @@ type ChatAnswer struct {
 		Name    string `json:"name"`
 		Target  string `json:"target"`
 		Rule    string `json:"rule"`
+		From    string `json:"from"`
+		Text    string `json:"text"`
 	} `json:"actions"`
 }
 
@@ -232,7 +247,10 @@ func ChatRequest(input ChatInput) helper.Request {
 		Schema: objectSchema(map[string]any{
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{
-				"type":    enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive", "addRule"),
+				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive", "addRule",
+					"moveNotes", "editNotes", "acceptSuggestion"),
+				"from":    stringSchema(),
+				"text":    stringSchema(),
 				"folder":  stringSchema(),
 				"session": stringSchema(),
 				"file":    stringSchema(),
@@ -318,15 +336,16 @@ func folderOverview(repository *store.Repository) string {
 				titles = append(titles, session.Title)
 			}
 		}
-		head := ""
-		for _, filePath := range repository.ContextFilePaths(folder.Id) {
-			if text := strings.TrimSpace(store.ReadText(filePath)); text != "" && head == "" {
-				head = startOfText(text, contextHeadLength)
-			}
-		}
 		fmt.Fprintf(&overview, "- %s (%d sessions)", name, repository.SessionCount(folder.Id))
-		if head != "" {
-			fmt.Fprintf(&overview, " notes: %s", head)
+		if folder.LinkedPath != "" {
+			fmt.Fprintf(&overview, " | linked file: %s, starts: %s", relativeTo(repository.RepositoryPath, folder.LinkedPath),
+				startOfText(store.ReadText(folder.LinkedPath), contextHeadLength))
+		}
+		if notes := strings.TrimSpace(repository.ReadContext(folder.Id)); notes != "" {
+			fmt.Fprintf(&overview, " | den's notes: %s", startOfText(notes, contextHeadLength))
+		}
+		if folder.LinkedPath == "" && strings.TrimSpace(repository.ReadContext(folder.Id)) == "" {
+			overview.WriteString(" | no context")
 		}
 		if len(titles) > 0 {
 			fmt.Fprintf(&overview, " | sessions: %s", strings.Join(titles, "; "))

@@ -170,15 +170,14 @@ func (currentModel *model) moveFolder(folderId string, parentId string) {
 }
 
 // updateMouse selects the clicked row and moves a session dragged onto another row into that row's folder.
-// A click on the ✦ badge opens the review queue.
+// A click on the ✦ badge opens the suggestion dock.
 func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mouse := message.Mouse()
 	if mouse.Button != tea.MouseLeft {
 		return currentModel, nil
 	}
 	if _, isClick := message.(tea.MouseClickMsg); isClick && mouse.Y == 0 && mouse.X >= currentModel.panelWidth()-4 {
-		currentModel.openReview()
-		return currentModel, nil
+		return currentModel, currentModel.focusDock()
 	}
 	rows := currentModel.rows()
 	rowIndex, isOverRow := currentModel.rowAtLine(mouse.Y)

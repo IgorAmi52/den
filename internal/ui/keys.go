@@ -8,21 +8,21 @@ import (
 )
 
 // keyMap holds every binding. The same bindings drive the handlers and the key hints, so the two can't drift apart.
-// One meaning per key everywhere: enter says yes, backspace says no, esc steps back, tab moves on, space ticks.
+// One meaning per key everywhere: enter says yes, backspace says no, esc steps back, tab goes to den's suggestions, space ticks.
 type keyMap struct {
 	up, down                   key.Binding
-	open, accept, reject       key.Binding
+	open, accept               key.Binding
 	newSession, newWithout     key.Binding
 	newFromAgent               key.Binding
 	newFolder, newSubfolder    key.Binding
 	rename, delete             key.Binding
 	move, archive, editContext key.Binding
 	undo                       key.Binding
-	wide, review, chat         key.Binding
+	wide, chat                 key.Binding
 	help, jump, quit, filter   key.Binding
 	scrollPreview              key.Binding
-	back, yes, no, edit, skip  key.Binding
-	toggle, ask, done          key.Binding
+	back, yes, no, edit        key.Binding
+	toggle                     key.Binding
 	send, scrollChat           key.Binding
 	pickPrevious, pickNext     key.Binding
 	confirmYes, confirmNo      key.Binding
@@ -37,8 +37,7 @@ func newKeyMap() keyMap {
 		up:            binding([]string{"up", "k"}, "↑", "up"),
 		down:          binding([]string{"down", "j"}, "↓", "down"),
 		open:          binding([]string{"enter"}, "↵", "open"),
-		accept:        binding([]string{"tab"}, "⇥", "yes"),
-		reject:        binding([]string{"backspace"}, "⌫", "no"),
+		accept:        binding([]string{"tab"}, "⇥", "answer den"),
 		newSession:    binding([]string{"n"}, "n", "new"),
 		newWithout:    binding([]string{"N"}, "N", "new without context"),
 		newFromAgent:  binding([]string{"alt+n"}, "⌥N", "new agent"),
@@ -51,7 +50,6 @@ func newKeyMap() keyMap {
 		editContext:   binding([]string{"e"}, "e", "context"),
 		undo:          binding([]string{"u"}, "u", "undo den's note"),
 		wide:          binding([]string{"z"}, "z", "wide"),
-		review:        binding([]string{"v"}, "v", "review"),
 		chat:          binding([]string{"c"}, "c", "ask den"),
 		help:          binding([]string{"?"}, "?", "keys"),
 		jump:          binding([]string{"1", "2", "3", "4"}, "1-4", "jump to agent"),
@@ -62,10 +60,7 @@ func newKeyMap() keyMap {
 		yes:           binding([]string{"enter"}, "↵", "yes"),
 		no:            binding([]string{"backspace"}, "⌫", "no"),
 		edit:          binding([]string{"e"}, "e", "edit"),
-		skip:          binding([]string{"tab"}, "⇥", "skip"),
 		toggle:        binding([]string{"space"}, "space", "tick"),
-		ask:           binding([]string{"c"}, "c", "ask den"),
-		done:          binding([]string{"esc", "q"}, "esc", "done"),
 		send:          binding([]string{"enter"}, "↵", "send"),
 		scrollChat:    binding([]string{"pgup", "pgdown"}, "pgup/pgdn", "scroll"),
 		pickPrevious:  binding([]string{"left", "h", "up", "k"}, "←", "pick"),

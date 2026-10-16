@@ -40,6 +40,8 @@ var (
 	removedDark     = paletteColor{"#2f1e1e", 235}
 	removedLight    = paletteColor{"#f8e4e4", 224}
 	waitingBarDark  = paletteColor{"#3a2c00", 236}
+	badgeTextDark   = paletteColor{"#1c1c1c", 234}
+	badgeTextLight  = paletteColor{"#1c1c1c", 234}
 	waitingBarLight = paletteColor{"#fff0d0", 230}
 )
 
@@ -59,9 +61,11 @@ type theme struct {
 	waitingBar     lipgloss.Style
 	suggestion     lipgloss.Style
 	suggestionBold lipgloss.Style
-	ghost          lipgloss.Style
-	errorText      lipgloss.Style
-	link           lipgloss.Style
+	// badge marks a suggestion's type, like MOVE, so its kind reads first.
+	badge     lipgloss.Style
+	ghost     lipgloss.Style
+	errorText lipgloss.Style
+	link      lipgloss.Style
 	// selectedRow paints the full-width bar under the selected row.
 	selectedRow  lipgloss.Style
 	dropTarget   lipgloss.Style
@@ -109,6 +113,7 @@ func newTheme(isDark bool, profile colorprofile.Profile) theme {
 		waitingBar:     base.Foreground(pick(waitingColor)).Background(pickBackground(waitingBarLight, waitingBarDark)).Bold(true),
 		suggestion:     base.Foreground(suggestion),
 		suggestionBold: base.Foreground(suggestion).Bold(true),
+		badge:          base.Foreground(pickBackground(badgeTextLight, badgeTextDark)).Background(suggestion).Bold(true),
 		ghost:          base.Foreground(suggestion).Faint(true),
 		errorText:      base.Foreground(pick(removedColor)),
 		link:           base.Foreground(accent).Underline(true),

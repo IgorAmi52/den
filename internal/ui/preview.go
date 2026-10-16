@@ -42,7 +42,7 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 	var proposal []string
 	if suggestion := currentModel.proposalFor(row); suggestion != nil && row.kind != sessionRow {
 		proposal = append([]string{theme.suggestionBold.Render("✦ " + currentModel.proposalTitle(*suggestion))}, currentModel.suggestionBody(*suggestion, width)...)
-		proposal = append(proposal, theme.key.Render("⇥")+theme.action.Render(" yes  ")+theme.key.Render("⌫")+theme.action.Render(" no"), "", theme.border.Render(strings.Repeat("─", width)), "")
+		proposal = append(proposal, theme.key.Render("⇥")+theme.action.Render(" answer it below"), "", theme.border.Render(strings.Repeat("─", width)), "")
 	}
 	switch row.kind {
 	case repositoryRow:
@@ -53,7 +53,7 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 		return "CONTEXT", append(proposal, currentModel.folderContextPreview(row.folder, width)...)
 	case inboxRow:
 		return "INBOX", wrapAll([]string{
-			theme.dim.Render("Sessions that aren't filed yet. When den knows where one belongs, the row says so in faint text, and ⇥ files it."),
+			theme.dim.Render("Sessions that aren't filed yet. When den knows where one belongs, the row says so in faint text, and ⇥ answers it."),
 			"",
 			theme.dim.Render("Sessions here start with the repo's context only."),
 		}, width)
@@ -194,6 +194,10 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 	theme := currentModel.theme
 	digest := currentModel.digests[session.SessionId]
 	lines := []string{theme.bold.Render(session.Title)}
+	if session.Summary != "" {
+		lines = append(lines, theme.text.Render(session.Summary))
+	}
+	lines = append(lines, "")
 	details := session.Tool + " · " + relativeAge(session.LastActivityAt) + " ago · " + currentModel.repository.FolderName(session.FolderId)
 	if session.Archived {
 		details += fmt.Sprintf(" · archived, %dd left", int(session.ArchiveTimeLeft(time.Now()).Hours()/24)+1)
@@ -219,11 +223,8 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 	} else {
 		lines = append(lines, theme.faint.Render("· not open · ↵ resumes it"))
 	}
-	if digest.FirstPrompt != "" {
-		lines = append(lines, "", theme.columnHeader.Render("FIRST PROMPT"), truncate(digest.FirstPrompt, width*4))
-	}
 	if digest.LastPrompt != "" && digest.LastPrompt != digest.FirstPrompt {
-		lines = append(lines, "", theme.columnHeader.Render(fmt.Sprintf("LATEST OF %d PROMPTS", digest.PromptCount)), truncate(digest.LastPrompt, width*3))
+		lines = append(lines, "", theme.columnHeader.Render(fmt.Sprintf("YOU LAST SAID · %d PROMPTS IN ALL", digest.PromptCount)), theme.text.Render(truncate(digest.LastPrompt, width*2)))
 	}
 	if len(digest.TouchedFiles) > 0 {
 		lines = append(lines, "", theme.columnHeader.Render(fmt.Sprintf("EDITED · %d FILES", len(digest.TouchedFiles))))
@@ -233,6 +234,9 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 		if len(digest.TouchedFiles) > 8 {
 			lines = append(lines, theme.faint.Render(fmt.Sprintf("and %d more", len(digest.TouchedFiles)-8)))
 		}
+	}
+	if digest.FirstPrompt != "" {
+		lines = append(lines, "", theme.columnHeader.Render("IT STARTED WITH"), theme.dim.Render(truncate(digest.FirstPrompt, width*3)))
 	}
 	if len(digest.PullRequests) > 0 {
 		lines = append(lines, "", theme.columnHeader.Render("PULL REQUESTS"))

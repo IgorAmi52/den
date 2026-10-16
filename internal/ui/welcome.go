@@ -535,7 +535,7 @@ func (currentModel model) welcomeKeysBody(width int) []string {
 		keyLine("⌥N", "start a new agent"),
 		keyLine("click", "focus any pane"),
 		"", theme.columnHeader.Render("IN DEN"),
-		keyLine("⇥  ⌫", "yes or no to what den proposes on a row"),
+		keyLine("⇥", "den's suggestions: ↵ yes, ⌫ no, or type to tell den"),
 		keyLine("↵", "open, or yes when den asks"),
 		keyLine("esc", "back out without changing anything"),
 		keyLine("?", "every key"),

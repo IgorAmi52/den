@@ -32,8 +32,6 @@ func (currentModel model) View() tea.View {
 	switch currentModel.currentScreen() {
 	case welcomeScreen:
 		content = currentModel.welcomeView()
-	case reviewScreen:
-		content = currentModel.reviewView()
 	case chatScreen:
 		content = currentModel.chatView()
 	case helpScreen:
@@ -77,7 +75,7 @@ func (currentModel model) treeTop() int {
 }
 
 func (currentModel model) treeHeight() int {
-	return max(currentModel.height-currentModel.treeTop()-footerHeight, 1)
+	return max(currentModel.height-currentModel.treeTop()-footerHeight-len(currentModel.dockLines(currentModel.panelWidth())), 1)
 }
 
 func (currentModel model) treeView() string {
@@ -100,6 +98,7 @@ func (currentModel model) treeView() string {
 		lines = append(lines, currentModel.panelHeader(width), "")
 		lines = append(lines, currentModel.treeLines(width, currentModel.treeHeight())...)
 	}
+	lines = append(lines, currentModel.dockLines(width)...)
 	lines = append(lines, theme.border.Render(strings.Repeat("─", width)))
 	lines = append(lines, padLines(currentModel.footer(width), currentModel.footerMargin())...)
 	content := strings.Join(lines, "\n")
@@ -127,7 +126,7 @@ func (currentModel model) headerBadge() []segment {
 	if filterText := currentModel.filter.Value(); filterText != "" && !currentModel.filtering {
 		return []segment{{text: "/" + truncate(filterText, 10), style: currentModel.theme.accent}}
 	}
-	if pending := len(currentModel.repository.Suggestions); pending > 0 {
+	if pending := len(currentModel.dockItems()); pending > 0 {
 		return []segment{{text: fmt.Sprintf("✦ %d", pending), style: currentModel.theme.suggestion}}
 	}
 	return nil
@@ -189,7 +188,6 @@ func (currentModel model) waitingAlert(waiting []openAgent) string {
 // treeLayout lays out every row, with the selected row's proposal explained under it.
 func (currentModel model) treeLayout(width int) []treeLine {
 	rows := currentModel.rows()
-	isAnswering := currentModel.prompt != nil || currentModel.confirming != nil
 	var layout []treeLine
 	for rowIndex, row := range rows {
 		// A blank line before each top-level group keeps folders apart from the sessions above them.
@@ -197,11 +195,6 @@ func (currentModel model) treeLayout(width int) []treeLine {
 			layout = append(layout, treeLine{rowIndex: -1})
 		}
 		layout = append(layout, treeLine{text: currentModel.treeRowLine(row, rowIndex, width), rowIndex: rowIndex})
-		if rowIndex == currentModel.listCursor && !isAnswering {
-			for _, line := range currentModel.proposalLines(row, width) {
-				layout = append(layout, treeLine{text: line, rowIndex: -1})
-			}
-		}
 		if row.kind == inboxRow && len(currentModel.repository.Sessions) == 0 && len(currentModel.openAgents) == 0 {
 			layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("    no sessions yet · n starts one", width)), rowIndex: -1})
 		}
@@ -367,6 +360,8 @@ func (currentModel model) footer(width int) []string {
 	}
 	var lines []string
 	switch {
+	case currentModel.dock.focused:
+		lines = hints(currentModel.dockHints()...)
 	case currentModel.filtering:
 		lines = append([]string{currentModel.filter.View()}, hints(relabeled(keys.open, "keep"), relabeled(keys.back, "clear"))...)
 	case currentModel.prompt != nil && currentModel.prompt.inlineRow == nil:
@@ -433,7 +428,7 @@ func (currentModel model) rowHints() []key.Binding {
 	}
 	bindings = append(bindings, keys.newFolder)
 	if len(currentModel.repository.Suggestions) > 0 {
-		bindings = append(bindings, keys.review)
+		bindings = append([]key.Binding{relabeled(keys.accept, "answer den")}, bindings...)
 	}
 	if !currentModel.isWide() {
 		return append(bindings, keys.wide)

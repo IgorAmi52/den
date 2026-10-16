@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/key"
-
 	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
 )
@@ -136,26 +134,6 @@ func (currentModel model) proposalReason(suggestion store.Suggestion, row listRo
 	return suggestion.Reason
 }
 
-// proposalLines explain the selected row's proposal right under it: what it is, why, and the keys.
-func (currentModel model) proposalLines(row listRow, width int) []string {
-	suggestion := currentModel.proposalFor(row)
-	if suggestion == nil {
-		return nil
-	}
-	theme := currentModel.theme
-	indent := " " + strings.Repeat("  ", row.depth) + "  "
-	textWidth := width - len(indent) - 1
-	var lines []string
-	for _, line := range wrapText("✦ "+currentModel.proposalTitle(*suggestion), textWidth) {
-		lines = append(lines, indent+theme.suggestionBold.Render(line))
-	}
-	for _, line := range wrapText(currentModel.proposalReason(*suggestion, row), textWidth) {
-		lines = append(lines, indent+theme.dim.Render(line))
-	}
-	hints := []key.Binding{currentModel.keys.accept, currentModel.keys.reject}
-	return append(lines, indent+strings.Join(currentModel.hintLines(hints, textWidth, 1), ""))
-}
-
 // suggestionSummary is a suggestion's kind and one line about it, for lists and the chat.
 func (currentModel model) suggestionSummary(suggestion store.Suggestion) (label string, summary string) {
 	switch suggestion.Kind {
@@ -183,38 +161,4 @@ func (currentModel model) suggestionSummary(suggestion store.Suggestion) (label 
 	}
 	added, removed := diffCounts(lineDiff(currentModel.currentContextText(suggestion), suggestion.ProposedText))
 	return "Context", fmt.Sprintf("%s  +%d −%d", currentModel.contextFileName(suggestion), added, removed)
-}
-
-// acceptProposal says yes to the row's proposal; for a cleanup, only this row's session is archived.
-func (currentModel *model) acceptProposal(row listRow) {
-	suggestion := currentModel.proposalFor(row)
-	if suggestion == nil {
-		currentModel.setStatus("nothing proposed here")
-		return
-	}
-	if suggestion.Kind == store.SuggestCleanup && row.kind == sessionRow {
-		if currentModel.reportError(currentModel.repository.AcceptFor(suggestion.Id, row.session.SessionId)) {
-			return
-		}
-		currentModel.saveRepository()
-		currentModel.setStatus("archived, still resumable")
-		return
-	}
-	currentModel.acceptSuggestion(suggestion.Id)
-}
-
-// rejectProposal says no to the row's proposal, so den won't offer it again.
-func (currentModel *model) rejectProposal(row listRow) {
-	suggestion := currentModel.proposalFor(row)
-	if suggestion == nil {
-		currentModel.setStatus("nothing proposed here")
-		return
-	}
-	if suggestion.Kind == store.SuggestCleanup && row.kind == sessionRow {
-		currentModel.repository.RejectFor(suggestion.Id, row.session.SessionId)
-		currentModel.saveRepository()
-		currentModel.setStatus("kept · den won't offer that again")
-		return
-	}
-	currentModel.rejectSuggestion(suggestion.Id)
 }

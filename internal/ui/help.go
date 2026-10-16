@@ -24,8 +24,8 @@ func (currentModel model) helpGroups() []helpGroup {
 			keys.newFromAgent, optionKey("click", "focus any pane"),
 		}},
 		{title: "YES AND NO", bindings: []key.Binding{
-			relabeled(keys.accept, "yes to what den proposes"), relabeled(keys.reject, "no, and don't offer it again"),
-			relabeled(keys.back, "back out, change nothing"), relabeled(keys.yes, "yes, in reviews and questions"),
+			relabeled(keys.accept, "answer den's suggestions"), relabeled(keys.yes, "yes, there and when den asks"),
+			relabeled(keys.no, "no, and don't offer it again"), relabeled(keys.back, "back out, change nothing"),
 		}},
 		{title: "SESSIONS", bindings: []key.Binding{
 			relabeled(keys.open, "resume, focus, open"), relabeled(keys.newSession, "new, with context"), keys.newWithout,
@@ -34,7 +34,7 @@ func (currentModel model) helpGroups() []helpGroup {
 		}},
 		{title: "FOLDERS AND DEN", bindings: []key.Binding{
 			keys.newFolder, relabeled(keys.newSubfolder, "subfolder of the selected folder"), relabeled(keys.editContext, "edit context"),
-			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview, relabeled(keys.review, "review proposals"),
+			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview,
 			relabeled(keys.chat, "ask den"), keys.quit,
 		}},
 	}

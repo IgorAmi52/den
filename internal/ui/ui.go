@@ -67,7 +67,6 @@ type screen int
 const (
 	workScreen screen = iota
 	welcomeScreen
-	reviewScreen
 	chatScreen
 	helpScreen
 )
@@ -147,7 +146,7 @@ type model struct {
 	dragging      func(listRow) bool
 	dropTargetRow int
 
-	review  reviewState
+	dock    dockState
 	welcome *welcomeState
 	chat    chatState
 
@@ -243,7 +242,7 @@ func Run() error {
 		retitles:         map[string]retitleAnimation{},
 		helperCaller:     helperCaller,
 		filter:           newFilterInput(),
-		review:           newReviewState(),
+		dock:             newDockState(),
 		chat:             newChatState(),
 	}
 	if err := initialModel.refreshAgents(); err != nil {
@@ -318,8 +317,6 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch currentModel.currentScreen() {
 	case welcomeScreen:
 		return currentModel.updateWelcome(message)
-	case reviewScreen:
-		return currentModel.updateReview(message)
 	case chatScreen:
 		return currentModel.updateChat(message)
 	case helpScreen:
@@ -677,6 +674,12 @@ func (currentModel *model) runRules() bool {
 		before := len(currentModel.repository.Suggestions)
 		currentModel.repository.ForgetFolderStarters(folderId)
 		changed = changed || len(currentModel.repository.Suggestions) != before
+	}
+	if len(currentModel.digests) > 0 {
+		for _, folderId := range brain.StaleDrafts(observation) {
+			currentModel.repository.ForgetFolderStarters(folderId)
+			changed = true
+		}
 	}
 	for _, habit := range brain.NoticeHabits(observation) {
 		if currentModel.repository.NoteHabit(habit.Name, habit.Description, habit.Seen) {

@@ -38,9 +38,12 @@ type ChatAction struct {
 	// Name is the new name, or for a move into a folder the same answer creates, that folder's name.
 	Name string
 	// Target is folder, repo or laptop, for a rule.
-	Target      string
-	Rule        string
-	Description string
+	Target string
+	Rule   string
+	// FromFolderId is where notes move from; Text is a folder's whole new notes.
+	FromFolderId string
+	Text         string
+	Description  string
 }
 
 // ChatContext is what den reads to answer without a model.
@@ -216,6 +219,26 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 		case "archive":
 			if session != nil && !session.Archived {
 				actions = append(actions, ChatAction{Kind: "archive", SessionId: session.SessionId, Description: "archive \"" + session.Title + "\""})
+			}
+		case "acceptSuggestion":
+			if input.About != "" {
+				actions = append(actions, ChatAction{Kind: "acceptSuggestion", Description: "do what den suggested"})
+			}
+		case "moveNotes":
+			from := findFolder(proposed.From)
+			if from != nil && folder != nil && from.Id != folder.Id {
+				actions = append(actions, ChatAction{Kind: "moveNotes", FromFolderId: from.Id, FolderId: folder.Id,
+					Description: "move the notes of " + from.Name + " into " + folder.Name})
+			}
+		case "editNotes":
+			text := strings.TrimSpace(proposed.Text)
+			isRepository := strings.EqualFold(strings.TrimSpace(proposed.Folder), "repo")
+			if text != "" && (folder != nil || isRepository) {
+				action := ChatAction{Kind: "editNotes", Text: text + "\n", Description: "rewrite the repo's context"}
+				if folder != nil {
+					action.FolderId, action.Description = folder.Id, "rewrite the notes of "+folder.Name
+				}
+				actions = append(actions, action)
 			}
 		case "addRule":
 			rule := strings.TrimSpace(proposed.Rule)

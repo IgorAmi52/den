@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 
@@ -183,6 +184,13 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 
 // applyChatActions makes the changes the user asked for in the chat and confirmed with enter.
 func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
+	done := currentModel.doChatActions(actions)
+	currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: "Done: " + strings.Join(done, "; ") + "."})
+}
+
+// doChatActions makes changes the user confirmed, in the chat or the dock, and says what each did.
+// Folders are made first, so a move into a new folder finds it.
+func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 	repository := &currentModel.repository
 	var done []string
 	slices.SortStableFunc(actions, func(first brain.ChatAction, second brain.ChatAction) int {
@@ -231,6 +239,10 @@ func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
 			}
 		case "addRule":
 			currentModel.addRuleNow(action)
+		case "moveNotes":
+			currentModel.moveNotes(action.FromFolderId, action.FolderId)
+		case "editNotes":
+			currentModel.reportError(repository.WriteContext(action.FolderId, action.Text))
 		}
 		done = append(done, action.Description)
 		currentModel.reportError(repository.LogDecision(store.Decision{Job: "chat", SessionId: action.SessionId, FolderId: action.FolderId, Action: action.Kind, Detail: action.Description, Outcome: "applied"}))
@@ -238,7 +250,30 @@ func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
 	currentModel.updatePaneFolders()
 	currentModel.refreshContextTokens()
 	currentModel.saveRepository()
-	currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: "Done: " + strings.Join(done, "; ") + "."})
+	return done
+}
+
+// moveNotes puts one folder's den notes at the end of another's and empties the first.
+// A linked file moves too, when the receiving folder has none.
+func (currentModel *model) moveNotes(fromFolderId string, toFolderId string) {
+	repository := &currentModel.repository
+	moved := strings.TrimSpace(repository.ReadContext(fromFolderId))
+	if moved != "" {
+		receiving := strings.TrimRight(repository.ReadContext(toFolderId), "\n")
+		if strings.TrimSpace(receiving) != "" {
+			moved = receiving + "\n\n" + moved
+		}
+		if currentModel.reportError(repository.WriteContext(toFolderId, moved)) {
+			return
+		}
+		if contextPath, err := repository.ContextPath(fromFolderId); err == nil {
+			os.Remove(contextPath)
+		}
+	}
+	from, to := repository.FindFolder(fromFolderId), repository.FindFolder(toFolderId)
+	if from != nil && to != nil && from.LinkedPath != "" && to.LinkedPath == "" {
+		to.LinkedPath, from.LinkedPath = from.LinkedPath, ""
+	}
 }
 
 func boolOrder(value bool) int {

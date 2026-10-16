@@ -67,6 +67,11 @@ func fitLines(text string, width int, height int) []string {
 	return lines
 }
 
+// truncateStyled cuts styled text to width by display width, keeping its styling.
+func truncateStyled(text string, width int) string {
+	return ansi.Truncate(text, width, "…")
+}
+
 func padRight(text string, width int) string {
 	return text + strings.Repeat(" ", max(width-ansi.StringWidth(text), 0))
 }

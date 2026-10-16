@@ -54,6 +54,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		return currentModel.updatePicker(keyPress)
 	case currentModel.picker != nil:
 		return currentModel.updateFolderPicker(keyPress)
+	case currentModel.dock.focused:
+		return currentModel.updateDock(keyPress)
 	}
 	currentModel.clearStatus()
 	selected, exists := currentModel.selectedRow()
@@ -82,8 +84,6 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		currentModel.jumpToAgent(keyPress.String())
 	case key.Matches(keyPress, keys.wide):
 		currentModel.toggleWide()
-	case key.Matches(keyPress, keys.review):
-		currentModel.openReview()
 	case key.Matches(keyPress, keys.chat):
 		return currentModel, currentModel.openChatAbout(selected, exists)
 	case key.Matches(keyPress, keys.help):
@@ -96,6 +96,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		return currentModel, focusCommand
 	case key.Matches(keyPress, keys.undo):
 		currentModel.undoAutomaticChange()
+	case key.Matches(keyPress, keys.accept):
+		return currentModel, currentModel.focusDock()
 	case key.Matches(keyPress, keys.newFolder):
 		return currentModel, currentModel.askForNewFolder("")
 	case key.Matches(keyPress, keys.newSubfolder):
@@ -106,10 +108,6 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 	case !exists:
 	case key.Matches(keyPress, keys.open):
 		return currentModel, currentModel.openRow(selected)
-	case key.Matches(keyPress, keys.accept):
-		currentModel.acceptProposal(selected)
-	case key.Matches(keyPress, keys.reject):
-		currentModel.rejectProposal(selected)
 	case key.Matches(keyPress, keys.move):
 		currentModel.askWhereToMove(selected)
 	case key.Matches(keyPress, keys.rename):

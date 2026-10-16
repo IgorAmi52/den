@@ -49,6 +49,27 @@ func folderNotes(observation Observation) []store.Suggestion {
 	return suggestions
 }
 
+// StaleDrafts are the folders with a waiting draft that no longer has enough real sessions for one,
+// because sessions moved out or were archived since.
+func StaleDrafts(observation Observation) []string {
+	var folderIds []string
+	for _, suggestion := range observation.Repository.Suggestions {
+		if suggestion.Kind != store.SuggestContext || suggestion.Starter != store.StarterDraft {
+			continue
+		}
+		worked := 0
+		for _, session := range observation.Repository.Sessions {
+			if session.FolderId == suggestion.FolderId && !session.Archived && observation.Digests[session.SessionId].PromptCount >= draftAfterPrompts {
+				worked++
+			}
+		}
+		if worked < draftAfterSessions {
+			folderIds = append(folderIds, suggestion.FolderId)
+		}
+	}
+	return folderIds
+}
+
 // writtenNotes finds the latest markdown file of real size an agent wrote in one of the folder's sessions.
 func writtenNotes(observation Observation, folder store.Folder, sessions []store.Session) (store.Suggestion, bool) {
 	for _, session := range sessions {
@@ -118,7 +139,7 @@ func draftNotes(observation Observation, folder store.Folder, sessions []store.S
 		Starter:      store.StarterDraft,
 		FolderId:     folder.Id,
 		ProposedText: draft.String(),
-		Reason:       fmt.Sprintf("%s here and no notes yet. Saved, every new session in %s starts with them; e edits them any time.", countedSessions(len(worked), "session"), folder.Name),
+		Reason:       fmt.Sprintf("%s here and no notes yet. New sessions in %s will start with these.", countedSessions(len(worked), "session"), folder.Name),
 	}, true
 }
 
