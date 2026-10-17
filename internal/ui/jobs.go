@@ -16,16 +16,13 @@ import (
 
 const (
 	// reviewEvery is how many new prompts make a session worth another look while its agent is open.
-	reviewEvery = 5
+	reviewEvery = 3
 	// baselineAfter is how old a session's last activity is for den to start counting from now instead of reviewing it.
 	baselineAfter = time.Hour
 	// maximumTitleLength drops titles that ignored the naming rules.
 	maximumTitleLength = 40
 	// maximumHelperFailures turns the model off for the rest of the run, so a broken login doesn't fail every 20 seconds.
 	maximumHelperFailures = 3
-	maximumNotesPerReview = 3
-	maximumRulesPerReview = 2
-	minimumMoveConfidence = 0.75
 )
 
 type jobKind int
@@ -33,20 +30,18 @@ type jobKind int
 const (
 	reviewJob jobKind = iota
 	chatJob
-	draftJob
 	// reviseJob answers what the user told den about one of its suggestions in the dock.
 	reviseJob
 )
 
 func (kind jobKind) String() string {
-	return [...]string{"review", "chat", "draft", "revise"}[kind]
+	return [...]string{"review", "chat", "revise"}[kind]
 }
 
 // job is one model call. Its input is built when it starts, so it sees the latest state.
 type job struct {
 	kind         jobKind
 	sessionId    string
-	folderId     string
 	suggestionId string
 }
 
@@ -58,13 +53,6 @@ type jobDoneMessage struct {
 	chatInput   brain.ChatInput
 	usage       helper.Usage
 	err         error
-}
-
-// automaticChange is the last note den added on its own, which u undoes.
-type automaticChange struct {
-	filePath     string
-	previousText string
-	folderName   string
 }
 
 // queueJob adds a job unless the same one is waiting or running. Chats go first, since someone is waiting for them.
@@ -144,12 +132,6 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 			return nil
 		}
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
-	case draftJob:
-		parentNotes := repository.ReadContext("")
-		if folder := repository.FindFolder(next.folderId); folder != nil && folder.ParentId != "" {
-			parentNotes += "\n" + currentModel.folderNotesText(folder.ParentId)
-		}
-		return run(brain.DraftRequest(repository, next.folderId, currentModel.digests, parentNotes), &brain.DraftAnswer{}, jobDoneMessage{job: next})
 	}
 	return nil
 }
@@ -192,19 +174,8 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		} else {
 			currentModel.applyChatAnswer(*answer, done.chatInput)
 		}
-	case *brain.DraftAnswer:
-		currentModel.applyDraft(done.job.folderId, *answer)
 	}
 	return tea.Batch(currentModel.animateRetitles(), currentModel.startNextJob())
-}
-
-// quotedEvidence is the user's words from a review's evidence, without the speaker or quotes the model puts around them.
-func quotedEvidence(evidence string) string {
-	evidence = strings.TrimSpace(evidence)
-	if speaker, words, found := strings.Cut(evidence, ":"); found && strings.EqualFold(strings.TrimSpace(speaker), "user") {
-		evidence = strings.TrimSpace(words)
-	}
-	return strings.Trim(evidence, "\"'“”")
 }
 
 // isRewording tells whether a new title mostly repeats the words of the current one, which isn't worth a rename.
@@ -242,17 +213,7 @@ func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent
 	return false
 }
 
-// queueDrafts asks the model to write the drafts den proposed from facts only.
-func (currentModel *model) queueDrafts() {
-	for _, suggestion := range currentModel.repository.Suggestions {
-		if suggestion.Kind == store.SuggestContext && suggestion.Starter == store.StarterDraft && !suggestion.ByModel {
-			currentModel.queueJob(job{kind: draftJob, folderId: suggestion.FolderId})
-		}
-	}
-}
-
-// applyReview carries out a review: a new name right away, notes into den's own notes with undo,
-// and a move or rules as proposals. Everything is logged.
+// applyReview carries out a review: a new name right away, and what's worth keeping as a suggestion. Everything is logged.
 func (currentModel *model) applyReview(sessionId string, promptCount int, answer brain.ReviewAnswer) {
 	repository := &currentModel.repository
 	session := repository.FindSession(sessionId)
@@ -280,134 +241,14 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 			currentModel.retitle(session, title)
 		}
 	}
-	if folderName := strings.TrimSpace(answer.Move.Folder); folderName != "" {
-		folder := currentModel.folderNamed(folderName)
-		switch {
-		case session.FolderId != "" || session.FiledByHand:
-			logDecision("move", folderName, "dropped: already filed")
-		case brain.OnlyAskedQuestions(currentModel.digests, sessionId):
-			logDecision("move", folderName, "dropped: it only asked questions, so it's for the archive")
-		case folder == "" || answer.Move.Confidence < minimumMoveConfidence:
-			logDecision("move", fmt.Sprintf("%s (%.2f)", folderName, answer.Move.Confidence), "withheld")
-		default:
-			repository.Offer(store.Suggestion{Kind: store.SuggestMove, SessionIds: []string{sessionId}, FolderId: folder, Reason: answer.Move.Reason})
-			logDecision("move", folderName, "proposed")
+	if answer.Keep.Kind != "" && answer.Keep.Kind != "none" {
+		suggestion, outcome := brain.KeepSuggestion(answer.Keep, *session, currentModel.digests[sessionId], repository)
+		if outcome == "proposed" && !repository.Offer(suggestion) {
+			outcome = "withheld: already rejected, or enough waiting"
 		}
-	}
-	currentModel.addReviewNotes(session, answer, logDecision)
-	for _, proposed := range answer.Rules[:min(len(answer.Rules), maximumRulesPerReview)] {
-		rule := strings.TrimSpace(proposed.Rule)
-		if rule == "" {
-			continue
-		}
-		reason := "You said: \"" + quotedEvidence(proposed.Evidence) + "\""
-		switch {
-		case proposed.Target == "laptop":
-			currentModel.offerLaptopRule(rule, reason+".")
-		case proposed.Target == "folder" && session.FolderId != "":
-			currentModel.offerRule(session.FolderId, rule, reason+".", session.Title)
-		default:
-			currentModel.offerRule("", rule, reason+".", session.Title)
-		}
-		logDecision("addRule", proposed.Target+": "+rule, "proposed")
+		logDecision("keep "+answer.Keep.Kind, fmt.Sprintf("%s (%.2f)", answer.Keep.Reason, answer.Keep.Confidence), outcome)
 	}
 	currentModel.saveRepository()
-}
-
-// addReviewNotes writes a review's notes into den's notes for the session's folder, only when that file already exists:
-// den keeps notes it has, but starting them is a draft the user approves.
-func (currentModel *model) addReviewNotes(session *store.Session, answer brain.ReviewAnswer, logDecision func(string, string, string)) {
-	if session.FolderId == "" || len(answer.Notes) == 0 {
-		return
-	}
-	notesPath, err := currentModel.repository.ContextPath(session.FolderId)
-	if currentModel.reportError(err) {
-		return
-	}
-	previousText := store.ReadText(notesPath)
-	if strings.TrimSpace(previousText) == "" {
-		for _, note := range answer.Notes {
-			logDecision("notesAdd", note.Line, "withheld: the folder has no notes of den's")
-		}
-		return
-	}
-	text, added := previousText, 0
-	for _, note := range answer.Notes[:min(len(answer.Notes), maximumNotesPerReview)] {
-		line := strings.TrimSpace(note.Line)
-		if line == "" || store.HasRule(text, line) {
-			continue
-		}
-		text = store.AddToSection(text, note.Section, line)
-		added++
-		logDecision("notesAdd", note.Section+": "+line, "applied")
-	}
-	if added == 0 || currentModel.reportError(currentModel.repository.WriteContext(session.FolderId, text)) {
-		return
-	}
-	folderName := currentModel.repository.FolderName(session.FolderId)
-	currentModel.lastAutomaticChange = &automaticChange{filePath: notesPath, previousText: previousText, folderName: folderName}
-	currentModel.refreshContextTokens()
-	lines := "a line"
-	if added > 1 {
-		lines = fmt.Sprintf("%d lines", added)
-	}
-	currentModel.setStatus("den added " + lines + " to " + folderName + "'s notes · u undoes it")
-}
-
-// offerRule proposes a rule for a folder's notes or, with no folder, the repo's context.
-func (currentModel *model) offerRule(folderId string, rule string, reason string, source string) {
-	current := currentModel.repository.ReadContext(folderId)
-	if store.HasRule(current, rule) {
-		return
-	}
-	if strings.TrimSpace(current) == "" {
-		current = "# " + currentModel.contextHeading(folderId) + "\n"
-	}
-	currentModel.repository.Offer(store.Suggestion{Kind: store.SuggestContext, FolderId: folderId, ProposedText: store.AddToSection(current, "Rules", rule), Source: source, Reason: reason})
-}
-
-// offerLaptopRule proposes a rule for the laptop files that don't have it yet.
-func (currentModel *model) offerLaptopRule(rule string, reason string) {
-	var filePaths []string
-	for _, laptopFile := range currentModel.laptopFiles {
-		if (laptopFile.Exists || laptopFile.Installed) && !store.HasRule(laptopFile.Text, rule) {
-			filePaths = append(filePaths, laptopFile.Path)
-		}
-	}
-	if len(filePaths) > 0 {
-		currentModel.repository.Offer(store.Suggestion{Kind: store.SuggestLaptopRule, Rule: rule, FilePaths: filePaths, Reason: reason})
-	}
-}
-
-// applyDraft puts the model's draft into the waiting proposal, which keeps its place and its rejection key.
-func (currentModel *model) applyDraft(folderId string, answer brain.DraftAnswer) {
-	for index := range currentModel.repository.Suggestions {
-		suggestion := &currentModel.repository.Suggestions[index]
-		if suggestion.Kind == store.SuggestContext && suggestion.Starter == store.StarterDraft && suggestion.FolderId == folderId {
-			suggestion.ByModel = true
-			if notes := strings.TrimSpace(answer.Notes); notes != "" {
-				suggestion.ProposedText = notes + "\n"
-				suggestion.Reason = "Drafted from its sessions."
-			}
-		}
-	}
-	currentModel.saveRepository()
-}
-
-// undoAutomaticChange puts back the notes den last changed on its own.
-func (currentModel *model) undoAutomaticChange() {
-	change := currentModel.lastAutomaticChange
-	if change == nil {
-		currentModel.setStatus("nothing den did on its own to undo")
-		return
-	}
-	currentModel.lastAutomaticChange = nil
-	if currentModel.reportError(store.WriteText(change.filePath, change.previousText)) {
-		return
-	}
-	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "review", Action: "notesAdd", Detail: change.folderName, Outcome: "undone"}))
-	currentModel.refreshContextTokens()
-	currentModel.setStatus("undone · " + change.folderName + "'s notes are back as they were")
 }
 
 // folderNotesText is everything a folder's context says: its linked file, then den's notes.

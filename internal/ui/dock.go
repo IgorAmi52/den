@@ -22,10 +22,9 @@ const (
 	dockNotesPreviewLines = 8
 )
 
-// dockItem is one decision in the dock: a suggestion, or one session of a cleanup, since each session is archived on its own.
+// dockItem is one decision in the dock: one suggestion.
 type dockItem struct {
 	suggestionId string
-	sessionId    string
 }
 
 // dockState is the suggestion dock at the bottom of the panel. Focused with tab, enter says yes, backspace says no,
@@ -53,12 +52,6 @@ func newDockState() dockState {
 func (currentModel model) dockItems() []dockItem {
 	var items []dockItem
 	for _, suggestion := range currentModel.repository.Suggestions {
-		if suggestion.Kind == store.SuggestCleanup {
-			for _, sessionId := range suggestion.SessionIds {
-				items = append(items, dockItem{suggestionId: suggestion.Id, sessionId: sessionId})
-			}
-			continue
-		}
 		items = append(items, dockItem{suggestionId: suggestion.Id})
 	}
 	rows := currentModel.treeRows(true)
@@ -74,17 +67,16 @@ func (currentModel model) dockItems() []dockItem {
 	return items
 }
 
-// itemRow matches the tree row an item is about: its session, its folder, or the repo row for the rest.
+// itemRow matches the tree row an item is about: the session a new folder takes in, the folder whose context changes,
+// or the repo row for the repo's context.
 func (currentModel model) itemRow(item dockItem) func(listRow) bool {
 	suggestion := currentModel.repository.FindSuggestion(item.suggestionId)
-	sessionId := item.sessionId
-	if suggestion != nil && sessionId == "" && len(suggestion.SessionIds) > 0 {
-		sessionId = suggestion.SessionIds[0]
-	}
 	switch {
-	case sessionId != "":
+	case suggestion == nil:
+	case suggestion.Kind == store.SuggestFolder && len(suggestion.SessionIds) > 0:
+		sessionId := suggestion.SessionIds[0]
 		return func(row listRow) bool { return row.kind == sessionRow && row.session.SessionId == sessionId }
-	case suggestion != nil && suggestion.FolderId != "" && (suggestion.Kind == store.SuggestContext || suggestion.Kind == store.SuggestLink):
+	case suggestion.FolderId != "":
 		folderId := suggestion.FolderId
 		return func(row listRow) bool { return row.kind == folderRow && row.folder.Id == folderId }
 	}
@@ -142,12 +134,8 @@ func (currentModel *model) followDockItem() {
 	if !exists {
 		return
 	}
-	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil {
-		sessionId := item.sessionId
-		if sessionId == "" && len(suggestion.SessionIds) > 0 {
-			sessionId = suggestion.SessionIds[0]
-		}
-		if session := currentModel.repository.FindSession(sessionId); session != nil {
+	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil && suggestion.Kind == store.SuggestFolder {
+		if session := currentModel.repository.FindSession(suggestion.SessionIds[0]); session != nil {
 			currentModel.expandFolder(session.FolderId)
 			if session.Archived {
 				currentModel.archiveExpanded = true
@@ -183,7 +171,7 @@ func (currentModel model) updateDock(keyPress tea.KeyPressMsg) (tea.Model, tea.C
 		state.item, _ = currentModel.currentDockItem()
 		state.input.SetValue("")
 		state.reply, state.thinking = nil, true
-		currentModel.queueJob(job{kind: reviseJob, suggestionId: state.item.suggestionId, sessionId: state.item.sessionId})
+		currentModel.queueJob(job{kind: reviseJob, suggestionId: state.item.suggestionId})
 		return currentModel, currentModel.startNextJob()
 	case key.Matches(keyPress, keys.yes) && isEmpty && !state.thinking:
 		item, exists := currentModel.currentDockItem()
@@ -213,34 +201,23 @@ func (currentModel model) updateDock(keyPress tea.KeyPressMsg) (tea.Model, tea.C
 	return currentModel, command
 }
 
-// answerDockItem says yes or no to an item; for a cleanup, only to its one session.
+// answerDockItem says yes or no to an item.
 func (currentModel *model) answerDockItem(item dockItem, accepted bool) {
 	suggestion := currentModel.repository.FindSuggestion(item.suggestionId)
 	if suggestion == nil {
 		return
 	}
-	isCleanupSession := suggestion.Kind == store.SuggestCleanup && item.sessionId != ""
-	switch {
-	case accepted && isCleanupSession:
-		if currentModel.reportError(currentModel.repository.AcceptFor(suggestion.Id, item.sessionId)) {
-			return
-		}
-		currentModel.saveRepository()
-		currentModel.setStatus(fmt.Sprintf("archived, still resumable for %d days", archiveKeepDays()))
-	case accepted:
+	logged := store.Decision{Job: "dock", FolderId: suggestion.FolderId, Action: string(suggestion.Kind), Detail: suggestion.Reason, Outcome: "rejected"}
+	if len(suggestion.SessionIds) > 0 {
+		logged.SessionId = suggestion.SessionIds[0]
+	}
+	if accepted {
+		logged.Outcome = "accepted"
 		currentModel.acceptSuggestion(suggestion.Id)
-	case isCleanupSession:
-		currentModel.repository.RejectFor(suggestion.Id, item.sessionId)
-		currentModel.saveRepository()
-		currentModel.setStatus("kept · den won't offer that again")
-	default:
+	} else {
 		currentModel.rejectSuggestion(suggestion.Id)
 	}
-	outcome := "rejected"
-	if accepted {
-		outcome = "accepted"
-	}
-	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "dock", SessionId: item.sessionId, FolderId: suggestion.FolderId, Action: string(suggestion.Kind), Outcome: outcome}))
+	currentModel.reportError(currentModel.repository.LogDecision(logged))
 }
 
 // applyDockReply makes the changes den proposed after the user told it something about a suggestion.
@@ -275,7 +252,7 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 	if why != "" {
 		about += "\nwhy: " + why
 	}
-	if suggestion.Kind == store.SuggestContext {
+	if suggestion.ProposedText != "" {
 		about += "\nthe whole proposed text:\n" + suggestion.ProposedText
 	}
 	input := brain.ChatInput{
@@ -284,15 +261,15 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 		Digests:         currentModel.digests,
 		About:           about,
 		RepositoryNotes: currentModel.repository.ReadContext(""),
-		SubjectSession:  state.item.sessionId,
 	}
 	if suggestion.FolderId != "" {
 		input.SubjectFolder = suggestion.FolderId
 		input.SubjectNotes = currentModel.folderNotesText(suggestion.FolderId)
 	}
-	if input.SubjectSession == "" && len(suggestion.SessionIds) == 1 {
+	if len(suggestion.SessionIds) == 1 {
 		input.SubjectSession = suggestion.SessionIds[0]
 	}
+	input.Transcripts = currentModel.chatTranscripts(input.SubjectFolder, input.SubjectSession)
 	return input, true
 }
 
@@ -300,7 +277,7 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 func (currentModel *model) applyReviseAnswer(done job, answer brain.ChatAnswer, input brain.ChatInput) {
 	state := &currentModel.dock
 	state.thinking = false
-	if state.item.suggestionId != done.suggestionId || state.item.sessionId != done.sessionId {
+	if state.item.suggestionId != done.suggestionId {
 		return
 	}
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
@@ -318,7 +295,7 @@ func (currentModel *model) applyReviseAnswer(done job, answer brain.ChatAnswer, 
 		}
 	}
 	state.reply = &brain.ChatMessage{FromDen: true, Text: text, Actions: actions}
-	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", SessionId: done.sessionId, Action: "reply",
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", Action: "reply",
 		Detail: state.asked, Outcome: fmt.Sprintf("%d actions", len(actions))}))
 }
 
@@ -384,8 +361,8 @@ func (currentModel model) dockLines(width int) []string {
 	return lines[:min(len(lines), max(currentModel.height/maximumDockShare, 4))]
 }
 
-// describeDockItem says what a suggestion does in a fixed shape: a type tag, the things it changes in the tree's
-// own colors, details, and why den suggests it.
+// describeDockItem says what a suggestion does in a fixed shape: a type tag, one sentence of what yes does
+// in the tree's own colors, details, and why den suggests it.
 func (currentModel model) describeDockItem(item dockItem) (tag string, subject string, details []string, why string) {
 	theme := currentModel.theme
 	repository := &currentModel.repository
@@ -393,129 +370,53 @@ func (currentModel model) describeDockItem(item dockItem) (tag string, subject s
 	if suggestion == nil {
 		return "", "", nil, ""
 	}
-	sessionName := func(sessionId string) string {
-		if session := repository.FindSession(sessionId); session != nil {
-			return theme.bold.Render("\"" + session.Title + "\"")
-		}
-		return theme.dim.Render("a session")
-	}
-	folderName := func(folderId string) string {
-		if folderId == "" {
-			return theme.folder.Render("Inbox")
-		}
-		return theme.folder.Render(repository.FolderName(folderId))
-	}
-	arrow := theme.dim.Render(" → ")
-	listed := func(sessionIds []string) []string {
+	tag, why = suggestionTag(*suggestion), suggestion.Reason
+	contextName := theme.folder.Render("◆ " + currentModel.contextHeading(suggestion.FolderId))
+	previewDetails := func(text string) []string {
 		var lines []string
-		for _, sessionId := range sessionIds[:min(len(sessionIds), 3)] {
-			lines = append(lines, theme.dim.Render("  · ")+sessionName(sessionId))
-		}
-		if len(sessionIds) > 3 {
-			lines = append(lines, theme.faint.Render(fmt.Sprintf("  and %d more", len(sessionIds)-3)))
+		for _, line := range contextPreview(text, 2) {
+			lines = append(lines, theme.faint.Render("  "+line))
 		}
 		return lines
 	}
-	why = suggestion.Reason
 	switch suggestion.Kind {
-	case store.SuggestMove:
-		tag = "MOVE"
-		if len(suggestion.SessionIds) == 1 {
-			subject = sessionName(suggestion.SessionIds[0]) + arrow + folderName(suggestion.FolderId)
-		} else {
-			subject = theme.bold.Render(countedSessions(len(suggestion.SessionIds))) + arrow + folderName(suggestion.FolderId)
-			details = listed(suggestion.SessionIds)
-		}
-	case store.SuggestSubfolder:
-		tag = "GROUP"
-		newFolder := theme.folder.Render(subfolderLabel(*suggestion)) + theme.dim.Render(" (new, in ") + folderName(suggestion.ParentFolderId) + theme.dim.Render(")")
-		subject = theme.bold.Render(countedSessions(len(suggestion.SessionIds))) + arrow + newFolder
-		details = listed(suggestion.SessionIds)
-		if suggestion.LinkedPath != "" {
-			details = append(details, theme.dim.Render("  with ")+theme.link.Render(filepath.Base(suggestion.LinkedPath))+theme.dim.Render(" as its context"))
-		}
-	case store.SuggestCleanup:
-		tag = "ARCHIVE"
-		subject = sessionName(item.sessionId) + arrow + theme.archive.Render("Archive")
-		if session := repository.FindSession(item.sessionId); session != nil {
-			why = currentModel.proposalReason(*suggestion, listRow{kind: sessionRow, session: session})
+	case store.SuggestContext:
+		current := currentModel.currentContextText(*suggestion)
+		added := addedLines(current, suggestion.ProposedText)
+		switch {
+		case strings.TrimSpace(current) == "":
+			subject = theme.text.Render("Start ") + contextName + theme.text.Render(fmt.Sprintf("'s notes, %d lines", len(added)))
+			details = previewDetails(suggestion.ProposedText)
+		case len(added) == 1:
+			subject = theme.text.Render("Add to ") + contextName + theme.text.Render(": ") + theme.bold.Render(strings.TrimPrefix(added[0], "- "))
+		default:
+			subject = theme.text.Render(fmt.Sprintf("Add %d lines to ", len(added))) + contextName
+			for _, line := range added[:min(len(added), 3)] {
+				details = append(details, theme.diffAdded.Render("+ "+strings.TrimPrefix(line, "- ")))
+			}
 		}
 	case store.SuggestLink:
-		tag = "LINK"
-		subject = theme.link.Render(currentModel.relativeToRepository(suggestion.LinkedPath, "")) + arrow + theme.dim.Render("context of ") + folderName(suggestion.FolderId)
-	case store.SuggestLaptopRule:
-		tag = "RULE"
-		subject = theme.bold.Render("\""+suggestion.Rule+"\"") + arrow + theme.link.Render(laptopFileNames(suggestion.FilePaths))
-		why = strings.TrimPrefix(suggestion.Reason, "\""+suggestion.Rule+"\" ")
-	case store.SuggestQuestion:
-		tag = "ASK"
-		subject = theme.bold.Render(suggestion.Question)
-		if suggestion.Rule != "" {
-			details = []string{theme.dim.Render("  yes adds: ") + theme.text.Render(suggestion.Rule)}
+		subject = theme.text.Render("Use ") + theme.link.Render(currentModel.relativeToRepository(suggestion.LinkedPath, "")) +
+			theme.text.Render(" as ") + contextName + theme.text.Render("'s context")
+	case store.SuggestFolder:
+		verb, joiner := "New folder ", " for "
+		if suggestion.Skill {
+			verb, joiner = "New skill folder ", " from "
 		}
-	case store.SuggestContext:
-		tag, subject, details = currentModel.describeContextChange(*suggestion)
+		subject = theme.text.Render(verb) + theme.folder.Render("▸ "+suggestion.FolderName)
+		if session := repository.FindSession(suggestion.SessionIds[0]); session != nil {
+			subject += theme.dim.Render(joiner) + theme.bold.Render("\""+session.Title+"\"")
+		}
+		if suggestion.ParentFolderId != "" {
+			details = append(details, theme.dim.Render("  inside ")+theme.folder.Render(repository.FolderName(suggestion.ParentFolderId)))
+		}
+		if suggestion.LinkedPath != "" {
+			details = append(details, theme.dim.Render("  context: ")+theme.link.Render(filepath.Base(suggestion.LinkedPath)))
+		} else {
+			details = append(details, previewDetails(suggestion.ProposedText)...)
+		}
 	}
 	return tag, subject, details, why
-}
-
-// describeContextChange tells a rule added to notes from other note changes, and a folder's first notes from an edit.
-func (currentModel model) describeContextChange(suggestion store.Suggestion) (tag string, subject string, details []string) {
-	theme := currentModel.theme
-	target := theme.folder.Render("◆ " + currentModel.contextHeading(suggestion.FolderId))
-	if suggestion.FolderId == "" {
-		target = theme.folder.Render("◆ " + currentModel.repositoryName() + " context")
-	}
-	var added []string
-	removedCount := 0
-	for _, line := range lineDiff(currentModel.currentContextText(suggestion), suggestion.ProposedText) {
-		switch {
-		case line.kind == addedLine && strings.TrimSpace(line.text) != "":
-			added = append(added, strings.TrimSpace(line.text))
-		case line.kind == removedLine:
-			removedCount++
-		}
-	}
-	if suggestion.Starter != "" {
-		source := "drafted from its sessions"
-		if suggestion.Starter == store.StarterPlan {
-			source = "the plan you approved"
-		}
-		seeThem := "shown above"
-		if !currentModel.isWide() {
-			seeThem = "→ shows them"
-		}
-		return "NOTES", theme.bold.Render("first notes") + arrowText(theme) + target, []string{theme.dim.Render(fmt.Sprintf("  %s · %d lines · %s", source, len(added), seeThem))}
-	}
-	if removedCount == 0 && len(added) <= 2 && sectionOf(suggestion.ProposedText, added) == "Rules" {
-		rule := strings.TrimPrefix(added[len(added)-1], "- ")
-		return "RULE", theme.bold.Render("\""+rule+"\"") + arrowText(theme) + target, nil
-	}
-	for _, line := range added[:min(len(added), 2)] {
-		details = append(details, theme.diffAdded.Render("+ "+line))
-	}
-	return "NOTES", theme.bold.Render(fmt.Sprintf("+%d −%d lines", len(added), removedCount)) + arrowText(theme) + target, details
-}
-
-func arrowText(theme theme) string {
-	return theme.dim.Render(" → ")
-}
-
-// sectionOf is the "## " heading the last added line sits under in the text.
-func sectionOf(text string, added []string) string {
-	if len(added) == 0 {
-		return ""
-	}
-	section := ""
-	for _, line := range strings.Split(text, "\n") {
-		if heading, isHeading := strings.CutPrefix(line, "## "); isHeading {
-			section = strings.TrimSpace(heading)
-		}
-		if strings.TrimSpace(line) == added[len(added)-1] {
-			return section
-		}
-	}
-	return section
 }
 
 // dockHints are the footer keys while the dock has focus.

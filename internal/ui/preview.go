@@ -40,7 +40,7 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 		return "", nil
 	}
 	var proposal []string
-	if suggestion := currentModel.proposalFor(row); suggestion != nil && row.kind != sessionRow {
+	if suggestion := currentModel.proposalFor(row); suggestion != nil {
 		proposal = append([]string{theme.suggestionBold.Render("✦ " + currentModel.proposalTitle(*suggestion))}, currentModel.suggestionBody(*suggestion, width)...)
 		proposal = append(proposal, theme.key.Render("⇥")+theme.action.Render(" answer it below"), "", theme.border.Render(strings.Repeat("─", width)), "")
 	}
@@ -53,15 +53,15 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 		return "CONTEXT", append(proposal, currentModel.folderContextPreview(row.folder, width)...)
 	case inboxRow:
 		return "INBOX", wrapAll([]string{
-			theme.dim.Render("Sessions that aren't filed yet. When den knows where one belongs, the row says so in faint text, and ⇥ answers it."),
+			theme.dim.Render("Sessions started outside a folder. They start with the repo's context only."),
 			"",
-			theme.dim.Render("Sessions here start with the repo's context only."),
+			theme.dim.Render("When one turns out to start something that will go on, den offers a folder for it; the row says so in faint text, and ⇥ answers it."),
 		}, width)
 	case archiveRow:
 		return "ARCHIVE", wrapAll([]string{
-			theme.dim.Render("Sessions that are done. den proposes the ones that look finished; a or m puts any session here yourself."),
+			theme.dim.Render(fmt.Sprintf("den archives a session %d days after you last used it; a archives one now.", archiveAfterDays())),
 			"",
-			theme.dim.Render(fmt.Sprintf("They stay resumable: ↵ opens one, a or m brings it back. den forgets a session %d days after it was archived; the agent keeps its own history.", archiveKeepDays())),
+			theme.dim.Render(fmt.Sprintf("They stay resumable: ↵ opens one, a brings it back. den forgets a session %d days after it was archived; the agent keeps its own history.", archiveKeepDays())),
 		}, width)
 	case newAgentRow:
 		return "SESSION", wrapAll([]string{
@@ -88,23 +88,9 @@ func (currentModel model) repositoryPreview(width int) []string {
 			lines = append(lines, theme.text.Render(padRight(filepath.Base(laptopFile.Path), 12))+theme.faint.Render(padRight(laptopFile.Tool, 8))+size)
 		}
 	}
-	if habits := currentModel.repository.Habits; len(habits) > 0 {
-		lines = append(lines, "", theme.columnHeader.Render("HABITS"))
-		for _, habit := range habits {
-			counts := fmt.Sprintf("seen %d", habit.Seen)
-			if habit.Accepted+habit.Rejected > 0 {
-				counts += fmt.Sprintf(" · yes %d · no %d", habit.Accepted, habit.Rejected)
-			}
-			description := habit.Description
-			if description == "" {
-				description = habit.Name
-			}
-			lines = append(lines, theme.text.Render(description), theme.dim.Render("  "+string(habit.State)+" · "+counts))
-		}
-	}
 	lines = append(lines, "", theme.columnHeader.Render("MODEL"))
 	if currentModel.helperCaller == nil {
-		lines = append(lines, theme.dim.Render("No agent CLI can make model calls, so den uses its local rules only."))
+		lines = append(lines, theme.dim.Render("No agent CLI can make model calls, so den only names sessions and links the plans agents write."))
 	} else {
 		usage := fmt.Sprintf("%s · %d calls this run", currentModel.helperCaller.Name(), currentModel.helperCalls)
 		if currentModel.helperUsage.CostDollars > 0 {
@@ -130,8 +116,8 @@ func (currentModel model) folderContextPreview(folder *store.Folder, width int) 
 	var lines []string
 	if strings.TrimSpace(notes) == "" && folder.LinkedPath == "" {
 		lines = append(lines, theme.bold.Render(folder.Name), "", theme.dim.Render("No context yet. Sessions here start with the context of "+strings.Join(inherits, " and ")+"."), "")
-		lines = append(lines, theme.dim.Render("When an agent here writes a plan or a spec, den offers to link it. To link one now, tell den in the chat:"))
-		lines = append(lines, theme.text.Render("  link docs/PLAN.md to "+folder.Name), "")
+		lines = append(lines, theme.dim.Render("Ask den to write it: c opens the chat about this folder, then for example:"))
+		lines = append(lines, theme.text.Render("  make the context from the latest session"), theme.text.Render("  link docs/PLAN.md"), "")
 		lines = append(lines, theme.key.Render("e")+theme.action.Render(" writes den's notes for it instead"))
 		return wrapAll(lines, width)
 	}
@@ -170,7 +156,7 @@ func (currentModel model) contextFilePreview(laptopTool string, width int) []str
 	} else {
 		laptopFile, _ := currentModel.laptopFile(laptopTool)
 		filePath, text = laptopFile.Path, laptopFile.Text
-		use = laptopTool + " loads it in every repo, so den never adds it to a session. den only proposes rules for it, ones that hold in more than one repo."
+		use = laptopTool + " loads it in every repo, so den never adds it to a session. It's yours; den only shows it."
 	}
 	size := segment{text: "empty", style: theme.faint}
 	if tokens > 0 {
@@ -204,11 +190,7 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 	}
 	lines = append(lines, theme.dim.Render(details))
 	if session.Branch != "" {
-		branchLine := "⎇ " + session.Branch
-		if currentModel.mergedBranches[session.Branch] {
-			branchLine += " · merged"
-		}
-		lines = append(lines, theme.dim.Render(branchLine))
+		lines = append(lines, theme.dim.Render("⎇ "+session.Branch))
 	}
 	if digest.IssueKey != "" {
 		lines = append(lines, theme.dim.Render("issue "+digest.IssueKey))

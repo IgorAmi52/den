@@ -77,19 +77,6 @@ func diffHunks(lines []diffLine, contextLines int) []diffLine {
 	return hunks
 }
 
-// diffCounts counts added and removed lines.
-func diffCounts(lines []diffLine) (added int, removed int) {
-	for _, line := range lines {
-		switch line.kind {
-		case addedLine:
-			added++
-		case removedLine:
-			removed++
-		}
-	}
-	return added, removed
-}
-
 func splitLines(text string) []string {
 	text = strings.TrimRight(text, "\n")
 	if text == "" {

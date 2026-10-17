@@ -261,6 +261,14 @@ func readCodexDigest(filePath string) Digest {
 		digest.notePullRequests(line)
 		switch event.Payload.Type {
 		case "message":
+			if event.Payload.Role == "assistant" {
+				for _, item := range event.Payload.Content {
+					if strings.TrimSpace(item.Text) != "" {
+						digest.LastAgentMessage = endOf(item.Text, turnTextLength)
+					}
+				}
+				return true
+			}
 			if event.Payload.Role != "user" {
 				return true
 			}

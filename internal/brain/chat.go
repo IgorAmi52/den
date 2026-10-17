@@ -37,10 +37,7 @@ type ChatAction struct {
 	LinkedPath string
 	// Name is the new name, or for a move into a folder the same answer creates, that folder's name.
 	Name string
-	// Target is folder, repo or laptop, for a rule.
-	Target string
-	Rule   string
-	// FromFolderId is where notes move from; Text is a folder's whole new notes.
+	// FromFolderId is where notes move from; Text is a folder's whole new notes, or a new folder's.
 	FromFolderId string
 	Text         string
 	Description  string
@@ -214,6 +211,10 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 				if folder != nil {
 					action.FolderId, action.Description = folder.Id, "make a folder "+name+" in "+folder.Name
 				}
+				if text := strings.TrimSpace(proposed.Text); text != "" {
+					action.Text = text + "\n"
+					action.Description += ", with " + countedSessions(len(strings.Split(text, "\n")), "line") + " of context"
+				}
 				actions = append(actions, action)
 			}
 		case "archive":
@@ -239,20 +240,6 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 					action.FolderId, action.Description = folder.Id, "rewrite the notes of "+folder.Name
 				}
 				actions = append(actions, action)
-			}
-		case "addRule":
-			rule := strings.TrimSpace(proposed.Rule)
-			if folder == nil {
-				folder = repository.FindFolder(input.SubjectFolder)
-			}
-			switch {
-			case rule == "":
-			case proposed.Target == "laptop":
-				actions = append(actions, ChatAction{Kind: "addRule", Target: "laptop", Rule: rule, Description: "add to your laptop files: " + rule})
-			case proposed.Target == "folder" && folder != nil:
-				actions = append(actions, ChatAction{Kind: "addRule", Target: "folder", FolderId: folder.Id, Rule: rule, Description: "add to " + folder.Name + "'s notes: " + rule})
-			default:
-				actions = append(actions, ChatAction{Kind: "addRule", Target: "repo", Rule: rule, Description: "add to " + filepath.Base(repository.RepositoryPath) + "'s context: " + rule})
 			}
 		}
 	}

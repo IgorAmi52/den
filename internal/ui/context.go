@@ -40,19 +40,6 @@ func (currentModel *model) editLaptopFile(tool string) tea.Cmd {
 	return currentModel.editFile(filepath.Base(laptopFile.Path)+" · every repo", laptopFile.Path, "# My rules for every repo\n\n", nil)
 }
 
-// editDraft opens text that isn't saved anywhere yet, like a proposed context, and hands back what the user saved.
-func (currentModel *model) editDraft(title string, text string, onSaved func(currentModel *model, text string)) tea.Cmd {
-	dataDirectory, err := store.DataDirectory()
-	if currentModel.reportError(err) {
-		return nil
-	}
-	draftPath := filepath.Join(dataDirectory, "tmp", "draft.md")
-	if currentModel.reportError(os.MkdirAll(filepath.Dir(draftPath), 0o755)) || currentModel.reportError(os.WriteFile(draftPath, []byte(text), 0o644)) {
-		return nil
-	}
-	return currentModel.editFile(title, draftPath, "", onSaved)
-}
-
 // editFile runs $VISUAL or $EDITOR in a tmux popup and waits for it to exit. Without either, the file opens
 // in the default text editor instead, and den waits until that editor quits. starter is written first when the file doesn't exist,
 // and the file is removed again if it is left unchanged.
@@ -115,11 +102,6 @@ func (currentModel model) contextHeading(folderId string) string {
 		return currentModel.repositoryName()
 	}
 	return currentModel.repository.FolderName(folderId)
-}
-
-// contextFileName names the file a context suggestion changes.
-func (currentModel model) contextFileName(suggestion store.Suggestion) string {
-	return currentModel.contextHeading(suggestion.FolderId) + " context"
 }
 
 // currentContextText is what a context suggestion would replace.

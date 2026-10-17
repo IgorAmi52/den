@@ -134,24 +134,6 @@ func firstSection(text string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-// AppendRule adds a rule as a bullet at the end of a file, creating the file when it's missing,
-// unless the file already says it. It reports whether it added the rule.
-func AppendRule(filePath string, rule string) (bool, error) {
-	text := ReadText(filePath)
-	if HasRule(text, rule) {
-		return false, nil
-	}
-	if trimmedText := strings.TrimRight(text, "\n"); trimmedText != "" {
-		lines := strings.Split(trimmedText, "\n")
-		separator := "\n\n"
-		if strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "- ") {
-			separator = "\n"
-		}
-		text = trimmedText + separator
-	}
-	return true, WriteText(filePath, text+"- "+rule)
-}
-
 // AddToSection adds a bullet under a "## section" heading, at the end of that section,
 // and adds the heading at the end of the text when it's missing.
 func AddToSection(text string, section string, line string) string {

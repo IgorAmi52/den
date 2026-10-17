@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
@@ -15,9 +14,6 @@ const (
 	// minimumNotesFileSize keeps scratch files out: a file worth linking is a real plan or spec.
 	minimumNotesFileSize = 800
 	minimumPlanLength    = 200
-	// draftAfterSessions and draftAfterPrompts are when a folder has enough real work for den to draft its notes.
-	draftAfterSessions = 3
-	draftAfterPrompts  = 3
 )
 
 // notNotesFiles are markdown files every repo has, and the agents' own skill and memory files,
@@ -25,7 +21,7 @@ const (
 var notNotesFiles = toSet("readme.md changelog.md claude.md agents.md license.md contributing.md skill.md memory.md")
 
 // folderNotes offers a first context to each folder that has none: a file an agent wrote there,
-// a plan the user approved there, or a draft once the folder holds real work. Only one at a time per folder.
+// or a plan the user approved there. Only one at a time per folder.
 func folderNotes(observation Observation) []store.Suggestion {
 	repository := observation.Repository
 	var suggestions []store.Suggestion
@@ -39,7 +35,7 @@ func folderNotes(observation Observation) []store.Suggestion {
 				sessions = append(sessions, session)
 			}
 		}
-		for _, propose := range []func(Observation, store.Folder, []store.Session) (store.Suggestion, bool){writtenNotes, approvedPlan, draftNotes} {
+		for _, propose := range []func(Observation, store.Folder, []store.Session) (store.Suggestion, bool){writtenNotes, approvedPlan} {
 			if suggestion, found := propose(observation, folder, sessions); found && !repository.IsRejected(suggestion) {
 				suggestions = append(suggestions, suggestion)
 				break
@@ -49,45 +45,22 @@ func folderNotes(observation Observation) []store.Suggestion {
 	return suggestions
 }
 
-// StaleDrafts are the folders with a waiting draft that no longer has enough real sessions for one,
-// because sessions moved out or were archived since.
-func StaleDrafts(observation Observation) []string {
-	var folderIds []string
-	for _, suggestion := range observation.Repository.Suggestions {
-		if suggestion.Kind != store.SuggestContext || suggestion.Starter != store.StarterDraft {
-			continue
-		}
-		worked := 0
-		for _, session := range observation.Repository.Sessions {
-			if session.FolderId == suggestion.FolderId && !session.Archived && observation.Digests[session.SessionId].PromptCount >= draftAfterPrompts {
-				worked++
-			}
-		}
-		if worked < draftAfterSessions {
-			folderIds = append(folderIds, suggestion.FolderId)
-		}
-	}
-	return folderIds
-}
-
 // writtenNotes finds the latest markdown file of real size an agent wrote in one of the folder's sessions.
 func writtenNotes(observation Observation, folder store.Folder, sessions []store.Session) (store.Suggestion, bool) {
 	for _, session := range sessions {
 		digest := observation.Digests[session.SessionId]
 		for index := len(digest.TouchedFiles) - 1; index >= 0; index-- {
-			filePath := digest.TouchedFiles[index]
-			if !filepath.IsAbs(filePath) {
-				filePath = filepath.Join(digest.WorkingDirectory, filePath)
-			}
+			filePath := absoluteIn(digest.WorkingDirectory, digest.TouchedFiles[index])
 			if !isNotesFile(observation.Repository, filePath) {
 				continue
 			}
 			return store.Suggestion{
 				Kind:       store.SuggestLink,
 				FolderId:   folder.Id,
+				SessionIds: []string{session.SessionId},
 				LinkedPath: filePath,
 				Source:     session.Title,
-				Reason:     fmt.Sprintf("An agent wrote it in \"%s\".", truncateText(session.Title, 40)),
+				Reason:     fmt.Sprintf("An agent wrote it in \"%s\", and the folder has no context yet.", truncateText(session.Title, 40)),
 			}, true
 		}
 	}
@@ -103,43 +76,21 @@ func approvedPlan(observation Observation, folder store.Folder, sessions []store
 		}
 		return store.Suggestion{
 			Kind:         store.SuggestContext,
-			Starter:      store.StarterPlan,
 			FolderId:     folder.Id,
+			SessionIds:   []string{session.SessionId},
 			ProposedText: plan + "\n",
 			Source:       session.Title,
-			Reason:       fmt.Sprintf("You approved it in \"%s\".", truncateText(session.Title, 40)),
+			Reason:       fmt.Sprintf("You approved this plan in \"%s\", and the folder has no context yet.", truncateText(session.Title, 40)),
 		}, true
 	}
 	return store.Suggestion{}, false
 }
 
-// draftNotes drafts notes for a folder with a few real sessions: what they worked on, where the code is, the branches.
-// Until a model is connected, it's a starting point built from facts only.
-func draftNotes(observation Observation, folder store.Folder, sessions []store.Session) (store.Suggestion, bool) {
-	var worked []store.Session
-	var digests []agent.Digest
-	for _, session := range sessions {
-		if digest, found := observation.Digests[session.SessionId]; found && digest.PromptCount >= draftAfterPrompts {
-			worked = append(worked, session)
-			digests = append(digests, digest)
-		}
+func absoluteIn(directory string, filePath string) string {
+	if filepath.IsAbs(filePath) {
+		return filePath
 	}
-	if len(worked) < draftAfterSessions {
-		return store.Suggestion{}, false
-	}
-	var draft strings.Builder
-	fmt.Fprintf(&draft, "# %s\n\n## Work so far\n", folder.Name)
-	for _, session := range worked[:min(8, len(worked))] {
-		fmt.Fprintf(&draft, "- %s\n", session.Title)
-	}
-	writeCodeSections(&draft, digests, observation.Repository.RepositoryPath)
-	return store.Suggestion{
-		Kind:         store.SuggestContext,
-		Starter:      store.StarterDraft,
-		FolderId:     folder.Id,
-		ProposedText: draft.String(),
-		Reason:       fmt.Sprintf("%s here, no notes yet.", countedSessions(len(worked), "session")),
-	}, true
+	return filepath.Join(directory, filePath)
 }
 
 func isNotesFile(repository *store.Repository, filePath string) bool {

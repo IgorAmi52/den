@@ -142,11 +142,9 @@ func (currentModel *model) moveRowToFolder(row listRow, folderId string) {
 	currentModel.cursorTo(matchesRow)
 }
 
-// moveSessionToFolder files a session where the user picked. Taking it out of a folder counts as rejecting that folder.
+// moveSessionToFolder files a session where the user picked.
 func (currentModel *model) moveSessionToFolder(sessionId string, folderId string) {
-	fromFolderId := currentModel.repository.FindSession(sessionId).FolderId
 	currentModel.repository.MoveByHand(sessionId, folderId)
-	currentModel.repository.RememberMovedOut(sessionId, fromFolderId)
 	currentModel.expandFolder(folderId)
 	currentModel.saveRepository()
 	currentModel.updatePaneFolders()
@@ -219,18 +217,7 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 			return currentModel, nil
 		}
 		if sourceIndex >= 0 && sourceIndex != rowIndex {
-			source := rows[sourceIndex]
-			fromFolderId := source.folderId()
-			// Saving sorts the sessions, so the row's pointer can't be trusted after the move.
-			movedSessionId := ""
-			if source.kind == sessionRow {
-				movedSessionId = source.session.SessionId
-			}
-			currentModel.moveRowToFolder(source, target.folderId())
-			if movedSessionId != "" {
-				currentModel.repository.RememberMovedOut(movedSessionId, fromFolderId)
-				currentModel.saveRepository()
-			}
+			currentModel.moveRowToFolder(rows[sourceIndex], target.folderId())
 		}
 	}
 	return currentModel, command

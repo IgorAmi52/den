@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/helper"
@@ -15,39 +16,30 @@ const (
 	maximumTurnsPerReview = 10
 	maximumChatSessions   = 60
 	maximumChatMessages   = 12
-	maximumFirstRunInput  = 300
-	contextHeadLength     = 300
-	notesExcerptLength    = 1500
+	// maximumChatTranscripts and maximumChatTurns are how much of the sessions' conversations a chat reads,
+	// so "make this chat the folder's context" has the chat to work from.
+	maximumChatTranscripts = 3
+	maximumChatTurns       = 12
+	contextHeadLength      = 300
+	notesExcerptLength     = 1500
 )
-
-// NotesSections are where review notes go in a folder's notes.
-var NotesSections = []string{"Decisions", "Status", "Open questions"}
 
 const titleRules = "A title is 2-4 words in sentence case and at most 28 characters, like \"Fix duplicate coupons\". It starts with an imperative verb (Fix, Add, Remove, Refactor, " +
 	"Investigate, Review, Explain, Plan, Write, Design), names the session's goal rather than its latest step, is specific enough " +
 	"to tell apart from other sessions (never \"Fix bug\"), and has no branch names or issue keys."
 
-const reviewSystem = "You are den. You organize a developer's AI coding agent sessions into folders and keep short notes per folder. " +
-	"You look at one session and decide whether anything about it should change. Most of the time nothing should: return empty values. " +
-	"Never invent facts; everything must come from the user's own words in the turns.\n\n" +
+const reviewSystem = "You are den. You watch a developer's AI coding agent sessions in one repo. Sessions sit in folders, and each folder has context: " +
+	"notes every new session started in it begins with. A folder holds either a piece of work, like a feature, or a way of working, like research " +
+	"(a skill). You look at one session and answer three things. Most of the time nothing should change: return empty values and kind none. " +
+	"Never invent facts; everything must come from the session.\n\n" +
 	"title: the session's name in the tree. Return \"\" to keep the current one, which is the normal answer. Rename only when the current " +
 	"title is a raw prompt, too long, or would mislead someone looking for this session. " + titleRules + "\n\n" +
-	"move: only for a session in the Inbox. Name an existing folder exactly as listed when the session clearly belongs there, " +
-	"with your confidence from 0 to 1, and a reason of at most 10 words, like \"It edits src/cart.js, like the others there.\" " +
-	"Otherwise return folder \"\".\n\n" +
-	"notes: lines for the notes of the folder the session is in, only when someone starting a new session on this work next week would need them: " +
-	"a decision the user stated or confirmed, a status change of a piece of work, an open question raised or answered, a change of scope. " +
-	"Never implementation steps, debugging, file edits, things the agent proposed that the user didn't confirm, one-off corrections, " +
-	"or anything the notes already say. A correction about how agents should work is a rule, never also a note. " +
-	"At most 3 short lines, each with evidence quoting the user. Return none for a session in the Inbox.\n\n" +
-	"rules: only from a clear correction by the user about how agents should work, like \"don't add comments\" or \"always run the tests with X\". " +
-	"target folder for a rule about one area of work, repo for the whole repo, laptop for a personal preference that holds in any repo. " +
-	"Evidence quotes the user. Usually there are none.\n\n" +
 	"summary: one plain sentence, at most 15 words, on what the session is doing and where it stands, " +
-	"like \"Coupons no longer apply twice; tests pass, case handling is next.\""
+	"like \"Coupons no longer apply twice; tests pass, case handling is next.\"\n\n" + keepRules
 
-const chatSystem = "You are den. You organize a developer's AI coding agent sessions into folders, with notes per folder that every new " +
-	"session in the folder starts with. You chat with the developer about the sessions, folders and notes of one repo. " +
+const chatSystem = "You are den. You organize a developer's AI coding agent sessions into folders, with context per folder that every new " +
+	"session in the folder starts with. A folder holds a piece of work, like a feature, or a way of working, a skill, like Exploration with " +
+	"subfolders Papers and Reddit for where to search. You chat with the developer about the sessions, folders and context of one repo. " +
 	"Be brief: the user reads you in a narrow terminal panel. Plain text, no markdown, no filler like \"Okay\" or \"Sure\", no apologies. " +
 	"When you propose actions, the reply is one short sentence of at most 12 words, because den lists the actions under it: never repeat them, " +
 	"never explain how to confirm. When you answer a question, use at most 3 short sentences, from the facts given; when they don't say, " +
@@ -56,6 +48,11 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"How context works: a folder's context is its linked file, when it has one, plus den's notes for it. A session starts with the repo's notes, " +
 	"then the context of each folder above it, then its own folder's. Linking a file adds it next to den's notes; it never replaces them. " +
 	"FOLDERS says where each folder's context comes from.\n\n" +
+	"Writing context is your main job: people rarely write it themselves, they ask you to. When asked to make context from a chat or a session, " +
+	"write it from TRANSCRIPTS: what someone continuing the work, or working this way again, needs to know. Markdown starting with \"# <folder name>\", " +
+	"only sections you have facts for (## Goal, ## Findings, ## Decisions, ## Open questions, ## Pointers, or ## How to work for a skill), " +
+	"under 200 words, facts only, no implementation steps. Use editNotes for an existing folder, or createFolder with text for a new one, " +
+	"plus a move when the session belongs in it.\n\n" +
 	"When the chat is about one of den's suggestions, the user's message answers it: do it as is (acceptSuggestion), do something else " +
 	"instead (the actions that do what they want), or just answer a question about it, with no actions.\n\n" +
 	"When the user asks for a change, put it in actions; den lists them and the user confirms with enter. Only include actions the user asked for. " +
@@ -65,27 +62,22 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"- move: put a session in a folder (session, folder; folder \"Inbox\" for none)\n" +
 	"- renameSession: (session, name)\n" +
 	"- renameFolder: (folder, name)\n" +
-	"- createFolder: a new folder (name; folder is its parent, or empty for the top level)\n" +
+	"- createFolder: a new folder (name; folder is its parent, or empty for the top level; text is its notes, or empty)\n" +
 	"- archive: (session)\n" +
-	"- addRule: a rule for agents (target folder, repo or laptop; folder when the target is folder; rule)\n" +
 	"- moveNotes: move den's notes, and a linked file, from one folder into another (from, folder)\n" +
 	"- editNotes: rewrite den's notes for a folder, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
 	"- acceptSuggestion: do den's suggestion the chat is about, as it is"
 
-const draftSystem = "You write the first notes for a folder of AI coding sessions. Every new session in the folder starts with them, " +
-	"so they say what someone picking up this work needs: what it is and why, decisions the user made, status, open questions, " +
-	"and pointers to key files. Use only facts from the sessions given; never invent. Markdown, starting with \"# <folder name>\", " +
-	"with a section only when you have something for it (## Goal, ## Decisions, ## Status, ## Open questions, ## Pointers). " +
-	"Status says in one short line per piece of work what the sessions show was done, without retelling the conversation. " +
-	"Open questions are only questions the user asked that weren't answered; " +
-	"never add your own. Under 200 words. No implementation steps."
-
-const firstRunSystem = "You group a developer's past AI coding sessions in one repo into a few folders, the way the developer would: " +
-	"by feature, area or kind of work. Prefer a few broad folders over many small ones: merge closely related topics into one " +
-	"(coupons and payments both belong in a checkout folder, for example). Propose at most 6 folders, each with at least 2 sessions, " +
-	"and leave out sessions that fit nowhere, like one-off questions. " +
-	"Folder names are 1-3 words, title case, and specific: never Misc, Other, General or similar. " +
-	"The description says in a few words what the folder covers. Also name every session, including the ones in no folder. " + titleRules
+const firstRunSystem = "You are den, opened for the first time in a repo. You look at the developer's most recent AI coding agent sessions " +
+	"there and decide which to bring in. den archives sessions a few days after their last use, so bring in only what's worth returning to. " +
+	"Judge by what each session did and how it ended, never by its branch. For every session:\n" +
+	"verdict: continue when the work isn't done: the agent's latest reply asks the user something, stops partway, or the user said they'd come back. " +
+	"keep when it's done but found or decided something worth having later. done for everything else: finished work, a quick question, " +
+	"nothing worth returning to. Most short sessions are done.\n" +
+	"title: " + titleRules + "\n" +
+	"why: at most 10 words on why it's worth bringing in, or \"\" when done.\n\n" +
+	"No folders exist yet unless FOLDERS lists some; every session is in the Inbox. Fill keep only for a keep verdict, with kind folder or skill, " +
+	"otherwise kind none.\n" + keepRules
 
 // ReviewInput is what a review looks at: one session, the turns since den last looked, and the folders.
 type ReviewInput struct {
@@ -101,21 +93,7 @@ type ReviewInput struct {
 type ReviewAnswer struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
-	Move    struct {
-		Folder     string  `json:"folder"`
-		Confidence float64 `json:"confidence"`
-		Reason     string  `json:"reason"`
-	} `json:"move"`
-	Notes []struct {
-		Section  string `json:"section"`
-		Line     string `json:"line"`
-		Evidence string `json:"evidence"`
-	} `json:"notes"`
-	Rules []struct {
-		Target   string `json:"target"`
-		Rule     string `json:"rule"`
-		Evidence string `json:"evidence"`
-	} `json:"rules"`
+	Keep    Keep   `json:"keep"`
 }
 
 func ReviewRequest(input ReviewInput) helper.Request {
@@ -127,42 +105,97 @@ func ReviewRequest(input ReviewInput) helper.Request {
 		title += " (this is still the raw first prompt, so give the session a real title)"
 	}
 	fmt.Fprintf(&prompt, "title: %s\nfolder: %s\n", title, repository.FolderName(input.Session.FolderId))
-	writeField(&prompt, "branch", input.Session.Branch)
-	writeField(&prompt, "issue", input.Digest.IssueKey)
 	writeField(&prompt, "first prompt", startOfText(input.Digest.FirstPrompt, 600))
 	writeField(&prompt, "files edited", strings.Join(relativePaths(repository.RepositoryPath, input.Digest.TouchedFiles, 15), ", "))
-	writeField(&prompt, "pull requests", strings.Join(input.Digest.PullRequests, ", "))
 	prompt.WriteString("\nTURNS SINCE DEN LAST LOOKED\n")
-	turns := input.Turns
-	firstTurn := input.FirstTurn
-	if len(turns) > maximumTurnsPerReview {
-		firstTurn += len(turns) - maximumTurnsPerReview
-		turns = turns[len(turns)-maximumTurnsPerReview:]
-	}
-	for index, turn := range turns {
-		fmt.Fprintf(&prompt, "turn %d\n", firstTurn+index+1)
-		writeField(&prompt, "agent", turn.Agent)
-		writeField(&prompt, "user", turn.User)
-	}
+	writeTurns(&prompt, input.Turns, input.FirstTurn, maximumTurnsPerReview)
+	writeField(&prompt, "agent's latest reply", input.Digest.LastAgentMessage)
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
 	if input.Session.FolderId != "" {
-		prompt.WriteString("\nTHIS FOLDER'S NOTES\n" + orNone(notesExcerpt(input.FolderNotes)) + "\n")
+		prompt.WriteString("\nTHIS FOLDER'S CONTEXT\n" + orNone(notesExcerpt(input.FolderNotes)) + "\n")
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
 	return helper.Request{
 		System: reviewSystem,
 		Prompt: prompt.String(),
+		Schema: objectSchema(map[string]any{"title": stringSchema(), "summary": stringSchema(), "keep": keepSchema()}),
+	}
+}
+
+// writeTurns writes the last few turns, numbered from the start of the session.
+func writeTurns(prompt *strings.Builder, turns []agent.Turn, firstTurn int, maximum int) {
+	if len(turns) > maximum {
+		firstTurn += len(turns) - maximum
+		turns = turns[len(turns)-maximum:]
+	}
+	for index, turn := range turns {
+		fmt.Fprintf(prompt, "turn %d\n", firstTurn+index+1)
+		writeField(prompt, "agent", turn.Agent)
+		writeField(prompt, "user", turn.User)
+	}
+}
+
+// FirstRunVerdict is what the first run decides about one past session.
+type FirstRunVerdict struct {
+	Session string `json:"session"`
+	Verdict string `json:"verdict"`
+	Title   string `json:"title"`
+	Why     string `json:"why"`
+	Keep    Keep   `json:"keep"`
+}
+
+type FirstRunAnswer struct {
+	Sessions []FirstRunVerdict `json:"sessions"`
+}
+
+// FirstRunRequest asks which recent sessions are worth bringing in; the model names them s1, s2 and so on.
+func FirstRunRequest(digests []agent.Digest, repository *store.Repository, now time.Time) helper.Request {
+	var prompt strings.Builder
+	for index, digest := range digests {
+		fmt.Fprintf(&prompt, "SESSION s%d · last used %s ago · %d prompts\n", index+1, roughAge(now.Sub(digest.LastActivityAt)), digest.PromptCount)
+		writeField(&prompt, "files edited", strings.Join(relativePaths(repository.RepositoryPath, digest.TouchedFiles, 6), ", "))
+		writeField(&prompt, "first prompt", startOfText(digest.FirstPrompt, 400))
+		if digest.LastPrompt != digest.FirstPrompt {
+			writeField(&prompt, "last prompt", startOfText(digest.LastPrompt, 300))
+		}
+		writeField(&prompt, "agent's latest reply", startOfText(digest.LastAgentMessage, 400))
+		prompt.WriteString("\n")
+	}
+	prompt.WriteString("FOLDERS\n" + folderOverview(repository))
+	return helper.Request{
+		System: firstRunSystem,
+		Prompt: prompt.String(),
 		Schema: objectSchema(map[string]any{
-			"title":   stringSchema(),
-			"summary": stringSchema(),
-			"move":    objectSchema(map[string]any{"folder": stringSchema(), "confidence": map[string]any{"type": "number"}, "reason": stringSchema()}),
-			"notes":   arraySchema(objectSchema(map[string]any{"section": enumSchema(NotesSections...), "line": stringSchema(), "evidence": stringSchema()})),
-			"rules":   arraySchema(objectSchema(map[string]any{"target": enumSchema("folder", "repo", "laptop"), "rule": stringSchema(), "evidence": stringSchema()})),
+			"sessions": arraySchema(objectSchema(map[string]any{
+				"session": stringSchema(),
+				"verdict": enumSchema("continue", "keep", "done"),
+				"title":   stringSchema(),
+				"why":     stringSchema(),
+				"keep":    keepSchema(),
+			})),
 		}),
 	}
 }
 
-// ChatInput is what the chat knows: the conversation, what it's about, and the repo's folders and sessions.
+func roughAge(elapsed time.Duration) string {
+	switch {
+	case elapsed < time.Hour:
+		return fmt.Sprintf("%d minutes", int(elapsed.Minutes()))
+	case elapsed < 48*time.Hour:
+		return fmt.Sprintf("%d hours", int(elapsed.Hours()))
+	}
+	return fmt.Sprintf("%d days", int(elapsed.Hours()/24))
+}
+
+// Transcript is the end of one session's conversation, for the chat to read.
+type Transcript struct {
+	SessionId        string
+	Turns            []agent.Turn
+	LastAgentMessage string
+}
+
+// ChatInput is what the chat knows: the conversation, what it's about, the repo's folders and sessions,
+// and the conversations of the sessions it's about.
 type ChatInput struct {
 	Conversation    []ChatMessage
 	Repository      *store.Repository
@@ -172,6 +205,7 @@ type ChatInput struct {
 	About           string
 	SubjectNotes    string
 	RepositoryNotes string
+	Transcripts     []Transcript
 }
 
 type ChatAnswer struct {
@@ -182,8 +216,6 @@ type ChatAnswer struct {
 		Session string `json:"session"`
 		File    string `json:"file"`
 		Name    string `json:"name"`
-		Target  string `json:"target"`
-		Rule    string `json:"rule"`
 		From    string `json:"from"`
 		Text    string `json:"text"`
 	} `json:"actions"`
@@ -206,6 +238,25 @@ func ChatSessionIds(input ChatInput) []string {
 	return sessionIds
 }
 
+// ChatTranscriptSessionIds are the sessions whose conversations the chat reads: the session it's about,
+// the latest sessions of the folder it's about, or for the whole repo the latest session, which "this session" usually means.
+// Sessions are kept newest first.
+func ChatTranscriptSessionIds(repository *store.Repository, subjectFolder string, subjectSession string) []string {
+	if subjectSession != "" {
+		return []string{subjectSession}
+	}
+	var sessionIds []string
+	for _, session := range repository.Sessions {
+		if subjectFolder == "" && !session.Archived {
+			return []string{session.SessionId}
+		}
+		if session.FolderId == subjectFolder && len(sessionIds) < maximumChatTranscripts {
+			sessionIds = append(sessionIds, session.SessionId)
+		}
+	}
+	return sessionIds
+}
+
 func ChatRequest(input ChatInput) helper.Request {
 	repository := input.Repository
 	var prompt strings.Builder
@@ -220,19 +271,29 @@ func ChatRequest(input ChatInput) helper.Request {
 		prompt.WriteString("THE CHAT IS ABOUT THE WHOLE REPO " + filepath.Base(repository.RepositoryPath) + "\n")
 	}
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
-	prompt.WriteString("\nSESSIONS (id | title | folder | branch | files edited | latest prompt)\n")
-	for index, sessionId := range ChatSessionIds(input) {
+	prompt.WriteString("\nSESSIONS (id | title | folder | files edited | latest prompt)\n")
+	sessionIds := ChatSessionIds(input)
+	for index, sessionId := range sessionIds {
 		session := repository.FindSession(sessionId)
 		digest := input.Digests[sessionId]
 		state := ""
 		if session.Archived {
 			state = " (archived)"
 		}
-		fmt.Fprintf(&prompt, "s%d | %s%s | %s | %s | %s | %s\n", index+1, session.Title, state, repository.FolderName(session.FolderId), session.Branch,
+		fmt.Fprintf(&prompt, "s%d | %s%s | %s | %s | %s\n", index+1, session.Title, state, repository.FolderName(session.FolderId),
 			strings.Join(relativePaths(repository.RepositoryPath, digest.TouchedFiles, 5), ", "), startOfText(digest.LastPrompt, 160))
 	}
+	for _, transcript := range input.Transcripts {
+		session := repository.FindSession(transcript.SessionId)
+		if session == nil {
+			continue
+		}
+		fmt.Fprintf(&prompt, "\nTRANSCRIPT OF s%d \"%s\" (its latest turns)\n", slices.Index(sessionIds, transcript.SessionId)+1, session.Title)
+		writeTurns(&prompt, transcript.Turns, 0, maximumChatTurns)
+		writeField(&prompt, "agent's latest reply", transcript.LastAgentMessage)
+	}
 	if input.SubjectNotes != "" {
-		prompt.WriteString("\nNOTES OF THE FOLDER THE CHAT IS ABOUT\n" + notesExcerpt(input.SubjectNotes) + "\n")
+		prompt.WriteString("\nCONTEXT OF THE FOLDER THE CHAT IS ABOUT\n" + notesExcerpt(input.SubjectNotes) + "\n")
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
 	prompt.WriteString("\nCONVERSATION\n")
@@ -250,7 +311,7 @@ func ChatRequest(input ChatInput) helper.Request {
 		Schema: objectSchema(map[string]any{
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{
-				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive", "addRule",
+				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive",
 					"moveNotes", "editNotes", "acceptSuggestion"),
 				"from":    stringSchema(),
 				"text":    stringSchema(),
@@ -258,66 +319,7 @@ func ChatRequest(input ChatInput) helper.Request {
 				"session": stringSchema(),
 				"file":    stringSchema(),
 				"name":    stringSchema(),
-				"target":  enumSchema("", "folder", "repo", "laptop"),
-				"rule":    stringSchema(),
 			})),
-		}),
-	}
-}
-
-type DraftAnswer struct {
-	Notes string `json:"notes"`
-}
-
-// DraftRequest asks for a folder's first notes from what its sessions did.
-func DraftRequest(repository *store.Repository, folderId string, digests map[string]agent.Digest, parentNotes string) helper.Request {
-	var prompt strings.Builder
-	fmt.Fprintf(&prompt, "FOLDER: %s\n\nSESSIONS\n", repository.FolderName(folderId))
-	for _, session := range repository.Sessions {
-		if session.FolderId != folderId || session.Archived {
-			continue
-		}
-		digest := digests[session.SessionId]
-		fmt.Fprintf(&prompt, "- %s\n", session.Title)
-		writeField(&prompt, "  branch", session.Branch)
-		writeField(&prompt, "  first prompt", startOfText(digest.FirstPrompt, 500))
-		if digest.LastPrompt != digest.FirstPrompt {
-			writeField(&prompt, "  latest prompt", startOfText(digest.LastPrompt, 300))
-		}
-		writeField(&prompt, "  files edited", strings.Join(relativePaths(repository.RepositoryPath, digest.TouchedFiles, 8), ", "))
-	}
-	if parentNotes != "" {
-		prompt.WriteString("\nNOTES THE FOLDER ALREADY GETS FROM ABOVE (don't repeat them)\n" + notesExcerpt(parentNotes) + "\n")
-	}
-	return helper.Request{System: draftSystem, Prompt: prompt.String(), Schema: objectSchema(map[string]any{"notes": stringSchema()})}
-}
-
-type FirstRunAnswer struct {
-	Folders []struct {
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		Sessions    []string `json:"sessions"`
-	} `json:"folders"`
-	Titles []struct {
-		Session string `json:"session"`
-		Title   string `json:"title"`
-	} `json:"titles"`
-}
-
-// FirstRunRequest asks how to group past sessions and what to name them; the model names them s1, s2 and so on.
-func FirstRunRequest(digests []agent.Digest, repositoryPath string) helper.Request {
-	var prompt strings.Builder
-	prompt.WriteString("SESSIONS (id | branch | files edited | the agent's own title | first prompt)\n")
-	for index, digest := range digests[:min(len(digests), maximumFirstRunInput)] {
-		fmt.Fprintf(&prompt, "s%d | %s | %s | %s | %s\n", index+1, digest.Branch, strings.Join(relativePaths(repositoryPath, digest.TouchedFiles, 3), ", "),
-			digest.AgentTitle, startOfText(digest.FirstPrompt, 200))
-	}
-	return helper.Request{
-		System: firstRunSystem,
-		Prompt: prompt.String(),
-		Schema: objectSchema(map[string]any{
-			"folders": arraySchema(objectSchema(map[string]any{"name": stringSchema(), "description": stringSchema(), "sessions": arraySchema(stringSchema())})),
-			"titles":  arraySchema(objectSchema(map[string]any{"session": stringSchema(), "title": stringSchema()})),
 		}),
 	}
 }

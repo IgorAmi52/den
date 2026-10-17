@@ -302,11 +302,7 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 		left = []segment{{text: folderArrow(currentModel.inboxCollapsed) + " ", style: theme.faint}, {text: "Inbox", style: theme.folder}}
 		right = []segment{{text: fmt.Sprint(len(currentModel.sessionsIn(""))), style: theme.dim}}
 	case folderRow:
-		left = []segment{{text: folderArrow(row.folder.Collapsed) + " ", style: theme.faint}}
-		if row.folder.Branch != "" {
-			left = append(left, segment{text: "⎇ ", style: theme.folder})
-		}
-		left = append(left, segment{text: row.folder.Name, style: theme.folder})
+		left = []segment{{text: folderArrow(row.folder.Collapsed) + " ", style: theme.faint}, {text: row.folder.Name, style: theme.folder}}
 		right = proposalMark()
 		if _, hasContext := currentModel.contextTokens[row.folder.Id]; hasContext {
 			right = append(right, segment{text: "◆ ", style: theme.accent})
@@ -393,9 +389,6 @@ func (currentModel model) footer(width int) []string {
 func (currentModel model) rowHints() []key.Binding {
 	keys := currentModel.keys
 	var bindings []key.Binding
-	if currentModel.lastAutomaticChange != nil {
-		bindings = append(bindings, keys.undo)
-	}
 	selected, exists := currentModel.selectedRow()
 	if exists {
 		switch selected.kind {

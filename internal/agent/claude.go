@@ -182,6 +182,9 @@ func readClaudeDigest(transcriptPath string) Digest {
 			digest.notePullRequests(line)
 		case "assistant":
 			for _, block := range claudeBlocks(event.Message.Content) {
+				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+					digest.LastAgentMessage = endOf(block.Text, turnTextLength)
+				}
 				if block.Type != "tool_use" {
 					continue
 				}

@@ -94,8 +94,6 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		currentModel.filter.SetWidth(currentModel.panelWidth() - 4)
 		focusCommand := currentModel.filter.Focus()
 		return currentModel, focusCommand
-	case key.Matches(keyPress, keys.undo):
-		currentModel.undoAutomaticChange()
 	case key.Matches(keyPress, keys.accept):
 		return currentModel, currentModel.focusDock()
 	case key.Matches(keyPress, keys.newFolder):
@@ -329,8 +327,8 @@ func (currentModel *model) acceptSuggestion(suggestionId string) {
 		return
 	}
 	done := currentModel.describeDone(*suggestion)
-	destinationFolderId := suggestion.FolderId
-	if currentModel.reportError(currentModel.repository.Accept(suggestionId)) {
+	destinationFolderId, err := currentModel.repository.Accept(suggestionId)
+	if currentModel.reportError(err) {
 		return
 	}
 	currentModel.expandFolder(destinationFolderId)
@@ -348,26 +346,12 @@ func (currentModel *model) rejectSuggestion(suggestionId string) {
 
 func (currentModel model) describeDone(suggestion store.Suggestion) string {
 	switch suggestion.Kind {
-	case store.SuggestMove:
-		return fmt.Sprintf("filed %s in %s", countedSessions(len(suggestion.SessionIds)), currentModel.repository.FolderName(suggestion.FolderId))
-	case store.SuggestSubfolder:
-		return "made " + subfolderLabel(suggestion)
-	case store.SuggestCleanup:
-		return fmt.Sprintf("archived %s, still resumable", countedSessions(len(suggestion.SessionIds)))
 	case store.SuggestLink:
 		return "linked " + filepath.Base(suggestion.LinkedPath) + " · new sessions in " + currentModel.contextHeading(suggestion.FolderId) + " start with it"
-	case store.SuggestLaptopRule:
-		return "added to " + laptopFileNames(suggestion.FilePaths) + " · agents follow it in every repo"
-	case store.SuggestQuestion:
-		if suggestion.Rule != "" {
-			return "noted · added the rule to " + currentModel.repositoryName() + "'s context.md"
-		}
-		return "noted · den suggests it from now on"
+	case store.SuggestFolder:
+		return "made " + suggestion.FolderName + " · new sessions there start with its context"
 	}
-	if suggestion.Starter != "" {
-		return "saved notes for " + currentModel.contextHeading(suggestion.FolderId) + " · new sessions there start with them"
-	}
-	return "updated " + currentModel.contextFileName(suggestion)
+	return "saved to " + currentModel.contextHeading(suggestion.FolderId) + "'s notes · new sessions there start with them"
 }
 
 // updatePaneFolders keeps each open pane's border naming the folder its session is in now.
@@ -381,6 +365,10 @@ func (currentModel *model) updatePaneFolders() {
 		currentModel.reportError(tmux.SetPaneOption(open.paneId, paneFolderNameOption, currentModel.repository.FolderName(session.FolderId)))
 	}
 	currentModel.reportError(currentModel.refreshAgents())
+}
+
+func archiveAfterDays() int {
+	return int(store.ArchiveAfter.Hours() / 24)
 }
 
 func archiveKeepDays() int {

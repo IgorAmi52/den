@@ -8,7 +8,7 @@ import (
 )
 
 // retitleEvery is how many user prompts pass between two looks at a session's name.
-const retitleEvery = 5
+const retitleEvery = 3
 
 // Retitle tells whether a session's name is due for a look: after its first prompt, then every few prompts.
 // title is the better name, or empty to keep the current one, which is the normal answer.

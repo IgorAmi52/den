@@ -4,7 +4,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
@@ -66,8 +65,8 @@ func (currentModel model) treeRows(expandAll bool) []listRow {
 	rows := []listRow{{kind: repositoryRow}}
 	if currentModel.repositoryExpanded && !expandAll {
 		rows = append(rows, listRow{kind: contextFileRow, depth: 1})
-		for _, laptopFile := range currentModel.shownLaptopFiles() {
-			rows = append(rows, listRow{kind: contextFileRow, laptopTool: laptopFile.Tool, depth: 1})
+		for _, file := range currentModel.shownLaptopFiles() {
+			rows = append(rows, listRow{kind: contextFileRow, laptopTool: file.Tool, depth: 1})
 		}
 	}
 	rows = append(rows, listRow{kind: inboxRow})
@@ -181,23 +180,23 @@ func (currentModel model) subfolders(parentId string) []*store.Folder {
 }
 
 // shownLaptopFiles are the laptop files that exist, and those of installed tools, which can be created.
-func (currentModel model) shownLaptopFiles() []brain.LaptopFile {
-	var shown []brain.LaptopFile
-	for _, laptopFile := range currentModel.laptopFiles {
-		if laptopFile.Exists || laptopFile.Installed {
-			shown = append(shown, laptopFile)
+func (currentModel model) shownLaptopFiles() []laptopFile {
+	var shown []laptopFile
+	for _, file := range currentModel.laptopFiles {
+		if file.Exists || file.Installed {
+			shown = append(shown, file)
 		}
 	}
 	return shown
 }
 
-func (currentModel model) laptopFile(tool string) (brain.LaptopFile, bool) {
-	for _, laptopFile := range currentModel.laptopFiles {
-		if laptopFile.Tool == tool {
-			return laptopFile, true
+func (currentModel model) laptopFile(tool string) (laptopFile, bool) {
+	for _, file := range currentModel.laptopFiles {
+		if file.Tool == tool {
+			return file, true
 		}
 	}
-	return brain.LaptopFile{}, false
+	return laptopFile{}, false
 }
 
 func (currentModel model) selectedRow() (listRow, bool) {

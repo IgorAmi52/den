@@ -17,7 +17,6 @@ type keyMap struct {
 	newFolder, newSubfolder    key.Binding
 	rename, delete             key.Binding
 	move, archive, editContext key.Binding
-	undo                       key.Binding
 	wide, chat                 key.Binding
 	help, jump, quit, filter   key.Binding
 	scrollPreview              key.Binding
@@ -48,7 +47,6 @@ func newKeyMap() keyMap {
 		move:          binding([]string{"m"}, "m", "move"),
 		archive:       binding([]string{"a"}, "a", "archive"),
 		editContext:   binding([]string{"e"}, "e", "context"),
-		undo:          binding([]string{"u"}, "u", "undo den's note"),
 		wide:          binding([]string{"z"}, "z", "wide"),
 		chat:          binding([]string{"c"}, "c", "ask den"),
 		help:          binding([]string{"?"}, "?", "keys"),

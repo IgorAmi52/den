@@ -84,14 +84,18 @@ type openAgent struct {
 
 type tickMessage struct{}
 
-// observedMessage carries what den read from transcripts and git in the background.
-// conventionalRepositories is only set the first time, since other repos' commits don't need rereading.
+// observedMessage carries what den read from transcripts in the background.
 type observedMessage struct {
-	digests                  map[string]agent.Digest
-	mergedBranches           map[string]bool
-	commitSubjects           []string
-	conventionalRepositories []string
-	checkedOtherRepositories bool
+	digests map[string]agent.Digest
+}
+
+// laptopFile is one of the user's own rule files, which the tool loads in every repo; den shows it beside the repo's context.
+type laptopFile struct {
+	agent.LaptopFile
+	Text   string
+	Exists bool
+	// Installed tells whether the tool that reads it is installed, so the file may be created when it's missing.
+	Installed bool
 }
 
 // confirmation is a yes/no question shown in the footer while the list stays visible;
@@ -150,15 +154,10 @@ type model struct {
 	welcome *welcomeState
 	chat    chatState
 
-	digests        map[string]agent.Digest
-	mergedBranches map[string]bool
-	commitSubjects []string
-	// conventionalRepositories names the other repos on this machine whose commits are conventional.
-	conventionalRepositories []string
-	checkedOtherRepositories bool
+	digests map[string]agent.Digest
 	// contextTokens holds the size of each folder's context, the top level's under "", with no entry when empty.
 	contextTokens map[string]int
-	laptopFiles   []brain.LaptopFile
+	laptopFiles   []laptopFile
 	lastObserved  time.Time
 	// retitles animates the sessions den just renamed, by session id.
 	retitles  map[string]retitleAnimation
@@ -170,9 +169,8 @@ type model struct {
 	runningJob     *job
 	helperFailures int
 	// helperUsage and helperCalls add up what this run's model calls cost.
-	helperUsage         helper.Usage
-	helperCalls         int
-	lastAutomaticChange *automaticChange
+	helperUsage helper.Usage
+	helperCalls int
 }
 
 func Run() error {
@@ -237,7 +235,6 @@ func Run() error {
 		dropTargetRow:    -1,
 		listCursor:       1,
 		digests:          map[string]agent.Digest{},
-		mergedBranches:   map[string]bool{},
 		contextTokens:    map[string]int{},
 		retitles:         map[string]retitleAnimation{},
 		helperCaller:     helperCaller,
@@ -295,7 +292,6 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			currentModel.reportError(currentModel.trackNewSessions())
 		})
 		currentModel.refreshContextTokens()
-		currentModel.queueDrafts()
 		commands := []tea.Cmd{tick(), currentModel.startNextJob()}
 		if time.Since(currentModel.lastObserved) > observeEvery {
 			currentModel.lastObserved = time.Now()
@@ -571,17 +567,13 @@ func (currentModel *model) trackNewSessions() error {
 	return nil
 }
 
-// observe reads every session's transcript, the merged branches and the user's commits in the background,
-// and the first time, which other repos on this machine have conventional commits.
+// observe reads every session's transcript in the background.
 func (currentModel model) observe() tea.Cmd {
 	type sessionReference struct{ tool, sessionId string }
 	var references []sessionReference
 	for _, session := range currentModel.repository.Sessions {
 		references = append(references, sessionReference{tool: session.Tool, sessionId: session.SessionId})
 	}
-	workingDirectory := currentModel.workingDirectory
-	repositoryPath := currentModel.repository.RepositoryPath
-	checkOtherRepositories := !currentModel.checkedOtherRepositories
 	return func() tea.Msg {
 		digests := map[string]agent.Digest{}
 		for _, reference := range references {
@@ -591,32 +583,14 @@ func (currentModel model) observe() tea.Cmd {
 				}
 			}
 		}
-		observed := observedMessage{
-			digests:        digests,
-			mergedBranches: git.MergedBranches(workingDirectory),
-			commitSubjects: git.RecentCommitSubjects(workingDirectory, recentCommitsCount),
-		}
-		if checkOtherRepositories {
-			observed.checkedOtherRepositories = true
-			for _, otherPath := range store.KnownRepositoryPaths() {
-				if otherPath != repositoryPath && brain.IsConventional(git.RecentCommitSubjects(otherPath, recentCommitsCount)) {
-					observed.conventionalRepositories = append(observed.conventionalRepositories, filepath.Base(otherPath))
-				}
-			}
-		}
-		return observed
+		return observedMessage{digests: digests}
 	}
 }
 
-// applyObservation keeps session details current from their transcripts, renames sessions when due,
-// and runs the suggestion rules.
+// applyObservation keeps session details current from their transcripts, reviews sessions when due,
+// archives the ones left untouched, and runs the suggestion rules.
 func (currentModel *model) applyObservation(observed observedMessage) {
-	currentModel.digests, currentModel.mergedBranches = observed.digests, observed.mergedBranches
-	currentModel.commitSubjects = observed.commitSubjects
-	if observed.checkedOtherRepositories {
-		currentModel.checkedOtherRepositories = true
-		currentModel.conventionalRepositories = observed.conventionalRepositories
-	}
+	currentModel.digests = observed.digests
 	changed := false
 	for index := range currentModel.repository.Sessions {
 		session := &currentModel.repository.Sessions[index]
@@ -642,7 +616,12 @@ func (currentModel *model) applyObservation(observed observedMessage) {
 			}
 		}
 	}
-	if forgotten := currentModel.repository.ForgetExpiredArchive(time.Now()); forgotten > 0 {
+	now := time.Now()
+	if archived := currentModel.repository.ArchiveIdle(now, currentModel.openSessionIds()); archived > 0 {
+		changed = true
+		currentModel.setStatus(fmt.Sprintf("archived %s untouched for %d days · still resumable", countedSessions(archived), archiveAfterDays()))
+	}
+	if forgotten := currentModel.repository.ForgetExpiredArchive(now); forgotten > 0 {
 		changed = true
 		currentModel.setStatus(fmt.Sprintf("forgot %s archived over %d days ago", countedSessions(forgotten), archiveKeepDays()))
 	}
@@ -651,41 +630,23 @@ func (currentModel *model) applyObservation(observed observedMessage) {
 	}
 }
 
-// runRules offers what the local rules find in the current state; it reads nothing from disk, so it runs after every change.
-// It reports whether the queue changed.
-func (currentModel *model) runRules() bool {
+func (currentModel model) openSessionIds() map[string]bool {
 	openSessionIds := map[string]bool{}
 	for _, open := range currentModel.openAgents {
 		openSessionIds[open.sessionId] = true
 	}
+	return openSessionIds
+}
+
+// runRules offers what the local rules find in the current state; it reads nothing from disk, so it runs after every change.
+// It reports whether the queue changed.
+func (currentModel *model) runRules() bool {
 	observation := brain.Observation{
-		Repository:               &currentModel.repository,
-		Digests:                  currentModel.digests,
-		OpenSessionIds:           openSessionIds,
-		MergedBranches:           currentModel.mergedBranches,
-		CommitSubjects:           currentModel.commitSubjects,
-		ContextTokens:            currentModel.contextTokens,
-		LaptopFiles:              currentModel.laptopFiles,
-		ConventionalRepositories: currentModel.conventionalRepositories,
-		Now:                      time.Now(),
+		Repository:    &currentModel.repository,
+		Digests:       currentModel.digests,
+		ContextTokens: currentModel.contextTokens,
 	}
 	changed := false
-	for folderId := range currentModel.contextTokens {
-		before := len(currentModel.repository.Suggestions)
-		currentModel.repository.ForgetFolderStarters(folderId)
-		changed = changed || len(currentModel.repository.Suggestions) != before
-	}
-	if len(currentModel.digests) > 0 {
-		for _, folderId := range brain.StaleDrafts(observation) {
-			currentModel.repository.ForgetFolderStarters(folderId)
-			changed = true
-		}
-	}
-	for _, habit := range brain.NoticeHabits(observation) {
-		if currentModel.repository.NoteHabit(habit.Name, habit.Description, habit.Seen) {
-			changed = true
-		}
-	}
 	for _, suggestion := range brain.Suggest(observation) {
 		if currentModel.repository.Offer(suggestion) {
 			changed = true
@@ -719,11 +680,9 @@ func (currentModel *model) refreshContextTokens() {
 		installed[adapter.Name()] = true
 	}
 	currentModel.laptopFiles = nil
-	for _, laptopFile := range agent.LaptopFiles() {
-		_, err := os.Stat(laptopFile.Path)
-		currentModel.laptopFiles = append(currentModel.laptopFiles, brain.LaptopFile{
-			Tool: laptopFile.Tool, Path: laptopFile.Path, Text: store.ReadText(laptopFile.Path), Exists: err == nil, Installed: installed[laptopFile.Tool],
-		})
+	for _, file := range agent.LaptopFiles() {
+		_, err := os.Stat(file.Path)
+		currentModel.laptopFiles = append(currentModel.laptopFiles, laptopFile{LaptopFile: file, Text: store.ReadText(file.Path), Exists: err == nil, Installed: installed[file.Tool]})
 	}
 }
 

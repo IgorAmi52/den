@@ -130,9 +130,6 @@ func (currentModel model) folderPickerBox() string {
 	}
 	for index, folderId := range picker.folderIds {
 		prefix := strings.Repeat("  ", depthById[folderId])
-		if folder := currentModel.repository.FindFolder(folderId); folder != nil && folder.Branch != "" {
-			prefix += "⎇ "
-		}
 		left := []segment{{text: prefix + currentModel.repository.FolderName(folderId), style: theme.folder}}
 		switch folderId {
 		case "":

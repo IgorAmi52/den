@@ -17,9 +17,6 @@ type Folder struct {
 	Name      string `json:"name"`
 	ParentId  string `json:"parentId,omitempty"`
 	Collapsed bool   `json:"collapsed,omitempty"`
-	// Branch is set on subfolders that group the sessions of one branch or worktree, IssueKey on those of one issue.
-	Branch   string `json:"branch,omitempty"`
-	IssueKey string `json:"issueKey,omitempty"`
 	// LinkedPath is a markdown file the user or an agent wrote, linked as the folder's context. den never writes it.
 	LinkedPath string `json:"linkedPath,omitempty"`
 }
@@ -39,18 +36,22 @@ type Session struct {
 	ReviewedAtPrompt int `json:"reviewedAtPrompt,omitempty"`
 	// Summary is den's one sentence on what the session is doing and where it stands.
 	Summary string `json:"summary,omitempty"`
-	// FiledByHand is set when the user put the session in a folder, so den never proposes another folder for it.
-	FiledByHand bool `json:"filedByHand,omitempty"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
 	WithoutContext bool      `json:"withoutContext,omitempty"`
 	Archived       bool      `json:"archived,omitempty"`
 	ArchivedAt     time.Time `json:"archivedAt,omitzero"`
+	// CreatedAt is when den started tracking the session, so an imported old session gets its days before the archive.
 	CreatedAt      time.Time `json:"createdAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
 }
 
-// ArchiveKeepsFor is how long a session stays in the archive before den forgets it. The agent keeps its own history.
-const ArchiveKeepsFor = 30 * 24 * time.Hour
+const (
+	// ArchiveAfter is how long a session sits untouched before den archives it on its own.
+	ArchiveAfter = 3 * 24 * time.Hour
+	// ArchiveKeepsFor is how long a session stays in the archive before den forgets it. Together with ArchiveAfter
+	// it stays under the 30 days after which Claude Code deletes transcripts. The agent keeps its own history.
+	ArchiveKeepsFor = 25 * 24 * time.Hour
+)
 
 type Repository struct {
 	RepositoryPath string `json:"repoPath"`
@@ -61,9 +62,6 @@ type Repository struct {
 	Suggestions []Suggestion `json:"suggestions,omitempty"`
 	// RejectedKeys remembers rejected suggestions, so the same one is never offered again.
 	RejectedKeys []string `json:"rejectedKeys,omitempty"`
-	Habits       []Habit  `json:"habits,omitempty"`
-	// LastQuestionAt keeps den to one new question a day.
-	LastQuestionAt time.Time `json:"lastQuestionAt,omitzero"`
 }
 
 // DataDirectory is ~/.den, or DEN_HOME when set.
@@ -200,7 +198,7 @@ func (repository *Repository) DeleteFolder(folderId string) {
 		return candidate.Id == folderId
 	})
 	repository.Suggestions = slices.DeleteFunc(repository.Suggestions, func(suggestion Suggestion) bool {
-		return suggestion.FolderId == folderId || suggestion.ParentFolderId == folderId
+		return suggestion.FolderId == folderId || (suggestion.Kind == SuggestFolder && suggestion.ParentFolderId == folderId)
 	})
 }
 
@@ -220,7 +218,7 @@ func (repository *Repository) SessionCount(folderId string) int {
 	return count
 }
 
-// SetArchived archives a session, or brings it back, and drops what den proposed for it.
+// SetArchived archives a session, or brings it back. What den proposed from it stays, since a finding outlives its session.
 func (repository *Repository) SetArchived(sessionId string, archived bool) {
 	session := repository.FindSession(sessionId)
 	if session == nil {
@@ -231,7 +229,25 @@ func (repository *Repository) SetArchived(sessionId string, archived bool) {
 	if archived {
 		session.ArchivedAt = time.Now()
 	}
-	repository.ForgetSessionSuggestions(sessionId)
+}
+
+// ArchiveIdle archives the sessions untouched for ArchiveAfter, counted from when den started tracking them at the earliest,
+// leaving out the ones open in a pane. It tells how many it archived.
+func (repository *Repository) ArchiveIdle(now time.Time, openSessionIds map[string]bool) int {
+	archived := 0
+	for index := range repository.Sessions {
+		session := &repository.Sessions[index]
+		lastTouched := session.LastActivityAt
+		if session.CreatedAt.After(lastTouched) {
+			lastTouched = session.CreatedAt
+		}
+		if session.Archived || openSessionIds[session.SessionId] || now.Sub(lastTouched) < ArchiveAfter {
+			continue
+		}
+		repository.SetArchived(session.SessionId, true)
+		archived++
+	}
+	return archived
 }
 
 // ForgetExpiredArchive drops sessions archived longer than ArchiveKeepsFor and tells how many went.

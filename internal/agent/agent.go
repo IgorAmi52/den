@@ -64,6 +64,8 @@ type Digest struct {
 	Branch           string
 	FirstPrompt      string
 	LastPrompt       string
+	// LastAgentMessage is the end of the agent's latest reply, which says whether the work is done or waits on the user.
+	LastAgentMessage string
 	PromptCount      int
 	// TouchedFiles are the files the agent edited, in the order it first touched them.
 	TouchedFiles []string

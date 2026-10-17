@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -20,43 +19,37 @@ import (
 )
 
 const (
-	welcomeCardWidth   = 78
-	recentCommitsCount = 40
-	draftPreviewLines  = 9
+	welcomeCardWidth  = 78
+	draftPreviewLines = 9
 )
 
 type welcomeStep int
 
 const (
 	scanningStep welcomeStep = iota
-	foldersStep
-	contextsStep
+	sessionsStep
 	// keysStep teaches the keys and offers to turn on Terminal.app's Option key, which den's ⌥ keys need.
 	keysStep
 )
 
-// welcomeState is the first-run review: den reads the repo's past sessions and commits,
-// then proposes folders and their contexts, and the user picks what to keep.
+// welcomeState is the first run: den reads the repo's newest past sessions, says which look worth returning to,
+// and the user picks which to bring in. Nothing else from the past is imported.
 type welcomeState struct {
 	step     welcomeStep
 	spinner  spinner.Model
-	proposal brain.Welcome
+	arrivals []brain.Arrival
+	accepted []bool
 	cursor   int
-	// folderNames and contextTexts start as den's drafts and change when the user edits them.
-	folderAccepted  []bool
-	folderNames     []string
-	contextAccepted []bool
-	contextTexts    []string
 	// optionKeyProfile is Terminal.app's profile for new windows, when den runs in Terminal.app.
 	optionKeyProfile string
 	optionKeyEnabled bool
 }
 
 type pastSessionsMessage struct {
-	proposal         brain.Welcome
+	arrivals         []brain.Arrival
 	optionKeyProfile string
 	optionKeyEnabled bool
-	// modelError says why den's model couldn't group the sessions, so the local rules did.
+	// modelError says why den's model couldn't judge the sessions, so the local rule did.
 	modelError string
 }
 
@@ -64,35 +57,34 @@ func newWelcomeState() *welcomeState {
 	return &welcomeState{spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot))}
 }
 
-// scanPastSessions digests every session the installed agents recorded in this repo's worktrees,
-// leaving out the ones den already tracks.
+// scanPastSessions reads the newest sessions the installed agents recorded in this repo's worktrees,
+// leaving out the ones den already tracks, and asks den's model which are worth bringing in.
 func (currentModel model) scanPastSessions() tea.Cmd {
-	repositoryPath := currentModel.repository.RepositoryPath
+	repository := currentModel.repository
 	installedAgents := currentModel.installedAgents
 	helperCaller := currentModel.helperCaller
 	tracked := map[string]bool{}
-	for _, session := range currentModel.repository.Sessions {
+	for _, session := range repository.Sessions {
 		tracked[session.SessionId] = true
 	}
 	return func() tea.Msg {
-		worktrees := git.Worktrees(repositoryPath)
 		var digests []agent.Digest
 		for _, adapter := range installedAgents {
-			pastSessions, _ := adapter.PastSessions(worktrees)
+			pastSessions, _ := adapter.PastSessions(git.Worktrees(repository.RepositoryPath))
 			for _, digest := range pastSessions {
-				if !tracked[digest.SessionId] {
+				if !tracked[digest.SessionId] && digest.PromptCount > 0 {
 					digests = append(digests, digest)
 				}
 			}
 		}
-		commitSubjects := git.RecentCommitSubjects(repositoryPath, recentCommitsCount)
-		scanned := pastSessionsMessage{proposal: brain.FirstRun(digests, commitSubjects, repositoryPath)}
-		if helperCaller != nil && len(digests) > 0 {
+		newest := brain.NewestSessions(digests)
+		scanned := pastSessionsMessage{arrivals: brain.ArrivalsWithoutModel(newest)}
+		if helperCaller != nil && len(newest) > 0 {
 			var answer brain.FirstRunAnswer
-			if _, err := helperCaller.Call(brain.FirstRunRequest(digests, repositoryPath), &answer); err != nil {
+			if _, err := helperCaller.Call(brain.FirstRunRequest(newest, &repository, time.Now()), &answer); err != nil {
 				scanned.modelError = err.Error()
 			} else {
-				scanned.proposal = brain.FirstRunFromModel(answer, digests, commitSubjects, repositoryPath)
+				scanned.arrivals = brain.ArrivalsFromModel(answer, newest, &repository)
 			}
 		}
 		if isAppleTerminal() {
@@ -117,26 +109,20 @@ func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Mo
 	if state == nil {
 		return currentModel, nil
 	}
-	state.proposal = scanned.proposal
+	state.arrivals = scanned.arrivals
 	state.optionKeyProfile, state.optionKeyEnabled = scanned.optionKeyProfile, scanned.optionKeyEnabled
 	if scanned.modelError != "" {
-		currentModel.setError("den's model couldn't group them (" + scanned.modelError + "), so these come from local rules")
+		currentModel.setError("den's model couldn't judge them (" + scanned.modelError + "), so these come from a local rule")
 	}
-	state.step = foldersStep
-	for _, folder := range scanned.proposal.Folders {
-		state.folderAccepted = append(state.folderAccepted, true)
-		state.folderNames = append(state.folderNames, folder.Name)
-		state.contextAccepted = append(state.contextAccepted, true)
-		state.contextTexts = append(state.contextTexts, folder.Context)
+	for _, arrival := range scanned.arrivals {
+		state.accepted = append(state.accepted, arrival.Verdict != brain.VerdictDone)
 	}
+	state.step = sessionsStep
 	return currentModel, nil
 }
 
 func (currentModel model) updateWelcome(message tea.Msg) (tea.Model, tea.Cmd) {
 	state := currentModel.welcome
-	if currentModel.prompt != nil {
-		return currentModel.updatePrompt(message)
-	}
 	if state.step == scanningStep {
 		var command tea.Cmd
 		state.spinner, command = state.spinner.Update(message)
@@ -151,75 +137,24 @@ func (currentModel model) updateWelcome(message tea.Msg) (tea.Model, tea.Cmd) {
 	if state.step == keysStep {
 		return currentModel.updateWelcomeKeysStep(keyPress)
 	}
-	indexes := currentModel.welcomeIndexes()
 	switch {
 	case key.Matches(keyPress, keys.up):
 		state.cursor = max(state.cursor-1, 0)
 	case key.Matches(keyPress, keys.down):
-		state.cursor = min(state.cursor+1, max(len(indexes)-1, 0))
-	case key.Matches(keyPress, keys.toggle) && len(indexes) > 0:
-		accepted := currentModel.welcomeAccepted()
-		accepted[indexes[state.cursor]] = !accepted[indexes[state.cursor]]
-	case key.Matches(keyPress, keys.edit) && len(indexes) > 0:
-		return currentModel, currentModel.editWelcomeItem(indexes[state.cursor])
+		state.cursor = min(state.cursor+1, max(len(state.arrivals)-1, 0))
+	case key.Matches(keyPress, keys.toggle) && len(state.arrivals) > 0:
+		state.accepted[state.cursor] = !state.accepted[state.cursor]
 	case key.Matches(keyPress, keys.yes):
-		currentModel.advanceWelcome()
+		state.step, state.cursor = keysStep, 0
 	case key.Matches(keyPress, keys.no):
-		if state.step == foldersStep {
-			for index := range state.folderAccepted {
-				state.folderAccepted[index] = false
-			}
-		} else {
-			accepted := currentModel.welcomeAccepted()
-			for index := range accepted {
-				accepted[index] = false
-			}
+		for index := range state.accepted {
+			state.accepted[index] = false
 		}
-		currentModel.advanceWelcome()
+		state.step, state.cursor = keysStep, 0
 	case key.Matches(keyPress, keys.back):
 		currentModel.finishWelcome(false)
 	}
 	return currentModel, nil
-}
-
-// welcomeIndexes are the rows of the current step: every proposed folder, or the drafts of the accepted ones.
-func (currentModel model) welcomeIndexes() []int {
-	state := currentModel.welcome
-	var indexes []int
-	switch state.step {
-	case foldersStep:
-		for index := range state.folderNames {
-			indexes = append(indexes, index)
-		}
-	case contextsStep:
-		for index, accepted := range state.folderAccepted {
-			if accepted {
-				indexes = append(indexes, index)
-			}
-		}
-	}
-	return indexes
-}
-
-func (currentModel model) welcomeAccepted() []bool {
-	if currentModel.welcome.step == foldersStep {
-		return currentModel.welcome.folderAccepted
-	}
-	return currentModel.welcome.contextAccepted
-}
-
-func (currentModel *model) advanceWelcome() {
-	state := currentModel.welcome
-	state.cursor = 0
-	switch state.step {
-	case foldersStep:
-		state.step = keysStep
-		if slices.Contains(state.folderAccepted, true) {
-			state.step = contextsStep
-		}
-	case contextsStep:
-		state.step = keysStep
-	}
 }
 
 // updateWelcomeKeysStep finishes the setup; enter also turns on Terminal.app's Option key when it is off.
@@ -244,23 +179,7 @@ func (currentModel model) needsOptionKey() bool {
 	return currentModel.welcome.optionKeyProfile != "" && !currentModel.welcome.optionKeyEnabled
 }
 
-func (currentModel *model) editWelcomeItem(index int) tea.Cmd {
-	state := currentModel.welcome
-	switch state.step {
-	case foldersStep:
-		return currentModel.askForText("Folder name", state.folderNames[index], func(currentModel *model, name string) {
-			currentModel.welcome.folderNames[index] = name
-		})
-	}
-	return currentModel.editDraft("◆ "+state.folderNames[index]+" · draft context", state.contextTexts[index], func(currentModel *model, text string) {
-		currentModel.welcome.contextTexts[index] = text
-		currentModel.welcome.contextAccepted[index] = true
-		currentModel.setStatus("draft updated")
-	})
-}
-
-// finishWelcome saves what was accepted: the folders with the past sessions filed in them,
-// recent leftovers in the Inbox and older ones in the archive, and the contexts.
+// finishWelcome brings in the sessions the user kept, in the Inbox, and offers what den found worth keeping in them.
 // Without apply, nothing is imported, and the welcome still won't show again.
 func (currentModel *model) finishWelcome(apply bool) {
 	state := currentModel.welcome
@@ -277,66 +196,34 @@ func (currentModel *model) finishWelcome(apply bool) {
 	}
 }
 
+// applyWelcome adds the kept sessions. Each gets its days before the archive from now, so it shows long enough to be seen.
 func (currentModel *model) applyWelcome() {
 	state := currentModel.welcome
 	now := time.Now()
-	filedIn := map[string]string{}
-	for index, folder := range state.proposal.Folders {
-		if !state.folderAccepted[index] {
+	for index, arrival := range state.arrivals {
+		digest := arrival.Digest
+		if !state.accepted[index] || currentModel.repository.FindSession(digest.SessionId) != nil {
 			continue
-		}
-		folderId := currentModel.folderNamed(state.folderNames[index])
-		if folderId == "" {
-			folderId = currentModel.repository.AddFolder(state.folderNames[index], "").Id
-		}
-		for _, digest := range folder.Sessions {
-			filedIn[digest.SessionId] = folderId
-		}
-		if state.contextAccepted[index] && currentModel.repository.ReadContext(folderId) == "" {
-			currentModel.reportError(currentModel.repository.WriteContext(folderId, state.contextTexts[index]))
-		}
-	}
-	var pastSessions []agent.Digest
-	for _, folder := range state.proposal.Folders {
-		pastSessions = append(pastSessions, folder.Sessions...)
-	}
-	for _, digest := range append(pastSessions, state.proposal.Unfiled...) {
-		if currentModel.repository.FindSession(digest.SessionId) != nil {
-			continue
-		}
-		folderId, isFiled := filedIn[digest.SessionId]
-		title := state.proposal.Titles[digest.SessionId]
-		if title == "" {
-			title = digest.AgentTitle
-		}
-		if title == "" {
-			title = truncate(digest.FirstPrompt, 120)
 		}
 		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
 			Tool:             digest.Tool,
 			SessionId:        digest.SessionId,
-			FolderId:         folderId,
 			WorkingDirectory: digest.WorkingDirectory,
 			Branch:           digest.Branch,
-			Title:            title,
+			Title:            arrival.Title,
 			TitledAtPrompt:   digest.PromptCount,
 			ReviewedAtPrompt: digest.PromptCount,
-			Archived:         !isFiled && !brain.IsRecent(digest, now),
-			ArchivedAt:       archivedAt(!isFiled && !brain.IsRecent(digest, now), now),
-			CreatedAt:        digest.StartedAt,
+			Summary:          arrival.Why,
+			CreatedAt:        now,
 			LastActivityAt:   digest.LastActivityAt,
 		})
+		if arrival.Suggestion != nil {
+			currentModel.repository.Offer(*arrival.Suggestion)
+		}
 	}
 }
 
-func archivedAt(archived bool, now time.Time) time.Time {
-	if archived {
-		return now
-	}
-	return time.Time{}
-}
-
-// folderNamed finds a top-level folder by name, ignoring case, so the welcome adds to folders that already exist.
+// folderNamed finds a top-level folder by name, ignoring case.
 func (currentModel model) folderNamed(name string) string {
 	for _, folder := range currentModel.repository.Folders {
 		if folder.ParentId == "" && strings.EqualFold(folder.Name, name) {
@@ -359,21 +246,17 @@ func (currentModel model) welcomeView() string {
 		body = []string{
 			theme.suggestionBold.Render("✦ Welcome to den"),
 			"",
-			state.spinner.View() + theme.dim.Render(" reading your past sessions in "+currentModel.repositoryName()+"…"),
+			state.spinner.View() + theme.dim.Render(fmt.Sprintf(" reading your last %d sessions in %s…", brain.FirstRunSessions, currentModel.repositoryName())),
 			"",
 			theme.faint.Render(currentModel.scanningNote()),
 		}
-	case foldersStep:
-		body = currentModel.welcomeFoldersBody(innerWidth)
-	case contextsStep:
-		body = currentModel.welcomeContextsBody(innerWidth)
+	case sessionsStep:
+		body = currentModel.welcomeSessionsBody(innerWidth)
 	case keysStep:
 		body = currentModel.welcomeKeysBody(innerWidth)
 	}
 	lines = append(lines, centered(theme.card.Width(cardWidth).Render(strings.Join(body, "\n")), width)...)
-	if currentModel.prompt != nil {
-		lines = append(append(lines, ""), centered(theme.dim.Render(currentModel.prompt.question+"  ")+currentModel.prompt.input.View(), width)...)
-	} else if currentModel.statusMessage != "" {
+	if currentModel.statusMessage != "" {
 		lines = append(lines, centered(theme.dim.Render(currentModel.statusMessage), width)...)
 	} else if state.step != scanningStep {
 		lines = append(lines, centered(theme.faint.Render("esc skips the setup · nothing changes until you press enter"), width)...)
@@ -387,127 +270,62 @@ func (currentModel model) welcomeTopBar(width int) string {
 	return currentModel.layoutRow(left, nil, width, false)
 }
 
-// welcomeStepCount is three steps, or two when no folder is proposed or kept, since there are no contexts to draft then.
-func (currentModel model) welcomeStepCount() int {
-	if slices.Contains(currentModel.welcome.folderAccepted, true) {
-		return 3
-	}
-	return 2
-}
-
 func (currentModel model) welcomeCardHeader(title string, step int, width int) string {
 	return currentModel.layoutRow([]segment{{text: "✦ " + title, style: currentModel.theme.suggestionBold}},
-		[]segment{{text: fmt.Sprintf("%d of %d", step, currentModel.welcomeStepCount()), style: currentModel.theme.dim}}, width, false)
+		[]segment{{text: fmt.Sprintf("%d of 2", step), style: currentModel.theme.dim}}, width, false)
 }
 
-func (currentModel model) welcomeFoldersBody(width int) []string {
+// welcomeSessionsBody lists the newest past sessions with den's verdict on each, checked when worth bringing in.
+func (currentModel model) welcomeSessionsBody(width int) []string {
 	theme := currentModel.theme
 	state := currentModel.welcome
-	proposal := state.proposal
 	lines := []string{currentModel.welcomeCardHeader("Welcome to den · "+currentModel.repositoryName(), 1, width), ""}
-	if proposal.PastSessionCount == 0 {
+	if len(state.arrivals) == 0 {
 		lines = append(lines, wrapAll([]string{
-			theme.text.Render("No past sessions here yet, so there's nothing to file."),
+			theme.text.Render("No past sessions here yet, so there's nothing to bring in."),
 			"",
-			theme.dim.Render("den learns as you work. It files new sessions into folders, offers ⎇ subfolders when sessions share a branch, and keeps private notes per folder that every agent there starts with. It only suggests: you confirm every change."),
+			theme.dim.Render("Start sessions in folders, and each starts with its folder's context. When a session finds something worth keeping, den offers to save it. It only suggests: you confirm every change."),
 		}, width)...)
-		lines = append(lines, "", strings.Join(currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "continue"), relabeled(currentModel.keys.back, "skip setup")}, width, 1), ""))
-		return lines
+		return append(lines, "", strings.Join(currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "continue"), relabeled(currentModel.keys.back, "skip setup")}, width, 1), ""))
 	}
-	readWith := "No model call, nothing left this Mac."
-	if proposal.ByModel {
-		readWith = "den's model grouped and named them, from those details only."
-	}
-	lines = append(lines, wrapAll([]string{theme.text.Render(fmt.Sprintf("I read %s in this repo: their branches, the files they edited and their first prompts. %s",
-		countedSessions(proposal.PastSessionCount), readWith))}, width)...)
-	lines = append(lines, "", theme.columnHeader.Render("PROPOSED FOLDERS"))
-	if len(proposal.Folders) == 0 {
-		lines = append(lines, theme.dim.Render("No clear topics yet; everything goes to the Inbox, and den files as it learns."))
-	}
-	leftovers := len(proposal.Unfiled)
-	for index, folder := range proposal.Folders {
-		if !state.folderAccepted[index] {
-			leftovers += len(folder.Sessions)
-		}
+	lines = append(lines, wrapAll([]string{theme.text.Render(fmt.Sprintf("These are your %d newest sessions here. den archives a session %d days after you last use it, so bring in only the ones worth returning to.",
+		len(state.arrivals), archiveAfterDays()))}, width)...)
+	lines = append(lines, "")
+	offered := 0
+	for index, arrival := range state.arrivals {
 		checkbox := segment{text: "[x] ", style: theme.accent}
-		if !state.folderAccepted[index] {
+		if !state.accepted[index] {
 			checkbox = segment{text: "[ ] ", style: theme.faint}
 		}
-		covers := folder.Description
-		if covers == "" {
-			covers = strings.Join(folder.Keywords, ", ")
+		verdict := map[string]segment{
+			brain.VerdictContinue: {text: "unfinished", style: theme.waiting},
+			brain.VerdictKeep:     {text: "worth keeping", style: theme.suggestion},
+			brain.VerdictDone:     {text: "done", style: theme.faint},
+		}[arrival.Verdict]
+		right := []segment{verdict, {text: fmt.Sprintf("%5s", relativeAge(arrival.Digest.LastActivityAt)), style: theme.dim}}
+		lines = append(lines, currentModel.layoutRow([]segment{checkbox, {text: arrival.Title, style: theme.text}}, right, width, index == state.cursor))
+		if arrival.Why != "" && arrival.Verdict != brain.VerdictDone {
+			lines = append(lines, theme.faint.Render(truncate("    "+arrival.Why, width)))
 		}
-		left := []segment{checkbox, {text: padRight(truncate(state.folderNames[index], 18), 19), style: theme.bold},
-			{text: fmt.Sprintf("%4d  ", len(folder.Sessions)), style: theme.dim}, {text: covers, style: theme.dim}}
-		lines = append(lines, currentModel.layoutRow(left, nil, width, index == state.cursor))
+		if arrival.Suggestion != nil && state.accepted[index] {
+			offered++
+		}
 	}
-	if leftovers > 0 {
-		recent := 0
-		now := time.Now()
-		for _, digest := range currentModel.leftoverSessions() {
-			if brain.IsRecent(digest, now) {
-				recent++
-			}
-		}
-		lines = append(lines, currentModel.layoutRow([]segment{{text: "    ", style: theme.text}, {text: padRight("Everything else", 19), style: theme.dim},
-			{text: fmt.Sprintf("%4d  ", leftovers), style: theme.dim}, {text: fmt.Sprintf("%d recent → Inbox, %d older → Archive", recent, leftovers-recent), style: theme.faint}}, nil, width, false))
-	}
-	if len(proposal.Noticed) > 0 {
-		lines = append(lines, "", theme.columnHeader.Render("NOTICED"))
-		for _, noticed := range proposal.Noticed {
-			lines = append(lines, theme.dim.Render("· "+noticed))
-		}
+	if offered > 0 {
+		lines = append(lines, "", theme.suggestion.Render(fmt.Sprintf("✦ den will also suggest what to keep from %s, in the dock below the tree.", countedSessions(offered))))
 	}
 	lines = append(lines, "")
-	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "create"), currentModel.keys.toggle,
-		relabeled(currentModel.keys.edit, "rename"), relabeled(currentModel.keys.no, "none of them")}, width, 2)...)
+	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "bring them in"), currentModel.keys.toggle,
+		relabeled(currentModel.keys.no, "none of them")}, width, 2)...)
 	return lines
 }
 
-// scanningNote says what the first run reads, and whether a model groups it.
+// scanningNote says what the first run reads, and whether a model judges it.
 func (currentModel model) scanningNote() string {
 	if currentModel.helperCaller == nil {
-		return "Only branch names, edited files and first prompts, read on this Mac."
+		return "Their prompts and edited files, read on this Mac; sessions with real work come in."
 	}
-	return "Branch names, edited files and first prompts; " + currentModel.helperCaller.Name() + " groups and names them."
-}
-
-// leftoverSessions are the past sessions no accepted folder takes.
-func (currentModel model) leftoverSessions() []agent.Digest {
-	state := currentModel.welcome
-	leftovers := append([]agent.Digest{}, state.proposal.Unfiled...)
-	for index, folder := range state.proposal.Folders {
-		if !state.folderAccepted[index] {
-			leftovers = append(leftovers, folder.Sessions...)
-		}
-	}
-	return leftovers
-}
-
-func (currentModel model) welcomeContextsBody(width int) []string {
-	theme := currentModel.theme
-	state := currentModel.welcome
-	lines := []string{currentModel.welcomeCardHeader("Draft contexts", 2, width), ""}
-	lines = append(lines, wrapAll([]string{theme.text.Render("A context.md per folder, drafted from where its sessions worked. Every agent you start in a folder gets its context first. They stay private, outside the repo.")}, width)...)
-	lines = append(lines, "")
-	indexes := currentModel.welcomeIndexes()
-	for row, index := range indexes {
-		checkbox := segment{text: "[x] ", style: theme.accent}
-		if !state.contextAccepted[index] {
-			checkbox = segment{text: "[ ] ", style: theme.faint}
-		}
-		left := []segment{checkbox, {text: "◆ ", style: theme.accent}, {text: state.folderNames[index], style: theme.bold}}
-		right := []segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(state.contextTexts[index])), style: theme.dim}}
-		lines = append(lines, currentModel.layoutRow(left, right, width, row == state.cursor))
-	}
-	if len(indexes) > 0 {
-		lines = append(lines, "")
-		lines = append(lines, currentModel.draftPreview(state.contextTexts[indexes[min(state.cursor, len(indexes)-1)]], width)...)
-	}
-	lines = append(lines, "")
-	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "save drafts"), currentModel.keys.toggle,
-		currentModel.keys.edit, relabeled(currentModel.keys.no, "skip")}, width, 2)...)
-	return lines
+	return "Their prompts, edited files and how they ended; " + currentModel.helperCaller.Name() + " judges which are worth returning to."
 }
 
 // draftPreview shows the start of a draft behind a bar in the suggestion color.
@@ -527,7 +345,7 @@ func (currentModel model) welcomeKeysBody(width int) []string {
 	keyLine := func(keyLabel string, description string) string {
 		return theme.key.Render(padRight(keyLabel, 8)) + theme.text.Render(description)
 	}
-	lines := []string{currentModel.welcomeCardHeader("Getting around", currentModel.welcomeStepCount(), width), ""}
+	lines := []string{currentModel.welcomeCardHeader("Getting around", 2, width), ""}
 	lines = append(lines, wrapAll([]string{theme.text.Render("den is the column on the left, and your agents sit beside it. Every key in den is a plain key; these work from anywhere in the window:")}, width)...)
 	lines = append(lines, "",
 		keyLine("⌥1–⌥4", "jump to that agent"),

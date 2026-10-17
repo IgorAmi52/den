@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
 	"github.com/IgorAmi52/den/internal/tmux"
@@ -159,7 +160,24 @@ func (currentModel model) chatInput() brain.ChatInput {
 	if state.subject.folderId != "" {
 		input.SubjectNotes = currentModel.folderNotesText(state.subject.folderId)
 	}
+	input.Transcripts = currentModel.chatTranscripts(state.subject.folderId, state.subject.sessionId)
 	return input
+}
+
+// chatTranscripts reads the latest turns of the sessions a chat is about, so den can write context from them.
+func (currentModel model) chatTranscripts(folderId string, sessionId string) []brain.Transcript {
+	var transcripts []brain.Transcript
+	for _, transcriptSessionId := range brain.ChatTranscriptSessionIds(&currentModel.repository, folderId, sessionId) {
+		session := currentModel.repository.FindSession(transcriptSessionId)
+		adapter, known := agent.ByName(session.Tool)
+		if !known {
+			continue
+		}
+		if turns, err := adapter.Turns(session.SessionId); err == nil && len(turns) > 0 {
+			transcripts = append(transcripts, brain.Transcript{SessionId: session.SessionId, Turns: turns, LastAgentMessage: currentModel.digests[session.SessionId].LastAgentMessage})
+		}
+	}
+	return transcripts
 }
 
 // applyChatAnswer shows the model's reply, with the changes it proposes listed under it, waiting for enter.
@@ -172,6 +190,11 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 		var listed []string
 		for _, action := range actions {
 			listed = append(listed, "· "+action.Description)
+			if action.Text != "" {
+				for _, line := range strings.Split(strings.TrimSpace(action.Text), "\n") {
+					listed = append(listed, "    "+line)
+				}
+			}
 		}
 		text += "\n\n" + strings.Join(listed, "\n") + "\n↵ does it"
 	}
@@ -202,7 +225,6 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 		case "link":
 			if folder != nil {
 				folder.LinkedPath = action.LinkedPath
-				repository.ForgetFolderStarters(folder.Id)
 			}
 		case "unlink":
 			if folder != nil {
@@ -214,9 +236,7 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 				if action.Name != "" {
 					folderId = currentModel.folderNamed(action.Name)
 				}
-				fromFolderId := session.FolderId
 				repository.MoveByHand(session.SessionId, folderId)
-				repository.RememberMovedOut(session.SessionId, fromFolderId)
 			}
 		case "renameSession":
 			if session != nil {
@@ -232,13 +252,14 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 				currentModel.updatePaneFolderNames(folder.Id, action.Name)
 			}
 		case "createFolder":
-			repository.AddFolder(action.Name, action.FolderId)
+			created := repository.AddFolder(action.Name, action.FolderId)
+			if action.Text != "" {
+				currentModel.reportError(repository.WriteContext(created.Id, action.Text))
+			}
 		case "archive":
 			if session != nil {
 				repository.SetArchived(session.SessionId, true)
 			}
-		case "addRule":
-			currentModel.addRuleNow(action)
 		case "moveNotes":
 			currentModel.moveNotes(action.FromFolderId, action.FolderId)
 		case "editNotes":
@@ -298,28 +319,6 @@ func boolOrder(value bool) int {
 	return 0
 }
 
-// addRuleNow writes a rule the user asked for: to a folder's notes, the repo's context, or the laptop files that lack it.
-func (currentModel *model) addRuleNow(action brain.ChatAction) {
-	switch action.Target {
-	case "laptop":
-		for _, laptopFile := range currentModel.laptopFiles {
-			if laptopFile.Exists || laptopFile.Installed {
-				_, err := store.AppendRule(laptopFile.Path, action.Rule)
-				currentModel.reportError(err)
-			}
-		}
-	default:
-		current := currentModel.repository.ReadContext(action.FolderId)
-		if store.HasRule(current, action.Rule) {
-			return
-		}
-		if strings.TrimSpace(current) == "" {
-			current = "# " + currentModel.contextHeading(action.FolderId) + "\n"
-		}
-		currentModel.reportError(currentModel.repository.WriteContext(action.FolderId, store.AddToSection(current, "Rules", action.Rule)))
-	}
-}
-
 func (currentModel model) chatView() string {
 	theme := currentModel.theme
 	width := currentModel.width
@@ -375,14 +374,14 @@ func (currentModel model) conversationLines(width int) []string {
 			theme.dim.Render("den answers and proposes. It never touches your repo, never runs anything, and every change it proposes waits for your yes."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
-		examples := []string{"link docs/PLAN.md to Eval", "which sessions worked on the eval loader?", "what does Eval's context say about pagination?"}
+		examples := []string{"make an Exploration skill folder: research only, no code changes", "which sessions worked on the eval loader?", "link docs/PLAN.md to Eval"}
 		switch {
 		case currentModel.chat.about != nil:
-			examples = []string{"put it in Agent API instead", "why do you think it belongs there?"}
+			examples = []string{"call the folder Eval pagination instead", "why do you think it's worth keeping?"}
 		case currentModel.chat.subject.sessionId != "":
-			examples = []string{"link docs/PLAN.md to its folder", "what did this session decide?"}
+			examples = []string{"make a folder for this with its findings as context", "add what this session decided to its folder's notes"}
 		case currentModel.chat.subject.folderId != "":
-			examples = []string{"link docs/PLAN.md", "what did sessions here decide?"}
+			examples = []string{"make the context from the latest session", "link docs/PLAN.md"}
 		}
 		for _, example := range examples {
 			lines = append(lines, theme.dim.Render("  "+example))
