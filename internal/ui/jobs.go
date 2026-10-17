@@ -16,7 +16,7 @@ import (
 
 const (
 	// reviewEvery is how many new prompts make a session worth another look while its agent is open.
-	reviewEvery = 3
+	reviewEvery = 2
 	// baselineAfter is how old a session's last activity is for den to start counting from now instead of reviewing it.
 	baselineAfter = time.Hour
 	// maximumTitleLength drops titles that ignored the naming rules.
@@ -202,8 +202,8 @@ func isRewording(currentTitle string, newTitle string) bool {
 	return shared*2 >= max(len(currentWords), len(newWords))
 }
 
-// queueReviewIfDue reviews a session after its first prompt, then every few prompts while its agent is open,
-// and once more when it closes with prompts not looked at. A running agent is left alone until it stops.
+// queueReviewIfDue reviews a session after its first prompt, even while its agent runs, so it gets a name right away,
+// then every few prompts while its agent waits, and once more when it closes with prompts not looked at.
 // It reports whether it changed the session.
 func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent.Digest) bool {
 	unreviewed := digest.PromptCount - session.ReviewedAtPrompt
@@ -215,7 +215,7 @@ func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent
 		session.ReviewedAtPrompt = digest.PromptCount
 		return true
 	}
-	if open != nil && open.status == "running" {
+	if session.ReviewedAtPrompt > 0 && open != nil && open.status == "running" {
 		return false
 	}
 	if session.ReviewedAtPrompt == 0 || unreviewed >= reviewEvery || open == nil {
@@ -231,6 +231,7 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 	if session == nil {
 		return
 	}
+	wasTitled := session.TitledAtPrompt > 0
 	session.ReviewedAtPrompt, session.TitledAtPrompt = promptCount, promptCount
 	if summary := strings.TrimSpace(answer.Summary); summary != "" {
 		session.Summary = summary
@@ -245,7 +246,7 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 			logDecision("retitle", title, "dropped: pinned")
 		case len([]rune(title)) > maximumTitleLength:
 			logDecision("retitle", title, "dropped: too long")
-		case session.TitledAtPrompt > 0 && isRewording(session.Title, title):
+		case wasTitled && isRewording(session.Title, title):
 			logDecision("retitle", session.Title+" → "+title, "dropped: same name, reworded")
 		default:
 			logDecision("retitle", session.Title+" → "+title, "applied")

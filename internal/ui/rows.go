@@ -119,8 +119,8 @@ func (currentModel model) filteredRows(filterText string) []listRow {
 	return rows
 }
 
-// rowsInFolder lists one folder's contents: new agents first, then subfolders by name with their contents
-// unless collapsed, then sessions newest first. The top level's subfolders are listed by rows, beside the Inbox.
+// rowsInFolder lists one folder's contents: new agents first, then sessions newest first,
+// then subfolders by name with their contents unless collapsed. The top level's subfolders are listed by rows, beside the Inbox.
 func (currentModel model) rowsInFolder(folderId string, depth int, expandAll bool) []listRow {
 	var rows []listRow
 	for agentIndex := range currentModel.openAgents {
@@ -130,6 +130,9 @@ func (currentModel model) rowsInFolder(folderId string, depth int, expandAll boo
 			rows = append(rows, listRow{kind: newAgentRow, open: open, depth: depth})
 		}
 	}
+	for _, session := range currentModel.sessionsIn(folderId) {
+		rows = append(rows, listRow{kind: sessionRow, session: session, open: currentModel.openAgentFor(session.SessionId), depth: depth})
+	}
 	if folderId != "" {
 		for _, folder := range currentModel.subfolders(folderId) {
 			rows = append(rows, listRow{kind: folderRow, folder: folder, depth: depth})
@@ -137,9 +140,6 @@ func (currentModel model) rowsInFolder(folderId string, depth int, expandAll boo
 				rows = append(rows, currentModel.rowsInFolder(folder.Id, depth+1, expandAll)...)
 			}
 		}
-	}
-	for _, session := range currentModel.sessionsIn(folderId) {
-		rows = append(rows, listRow{kind: sessionRow, session: session, open: currentModel.openAgentFor(session.SessionId), depth: depth})
 	}
 	return rows
 }
