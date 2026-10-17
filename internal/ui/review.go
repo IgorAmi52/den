@@ -29,7 +29,7 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 		lines = append(lines, currentModel.layoutRow([]segment{{text: filepath.Base(suggestion.LinkedPath), style: theme.bold}},
 			[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(text)), style: theme.dim}}, width, false))
 		lines = append(lines, currentModel.fileLink(suggestion.LinkedPath, width), "")
-		lines = append(lines, currentModel.draftPreview(text, width)...)
+		lines = append(lines, wrapAll(currentModel.markdownLines(text), width)...)
 	case store.SuggestFolder:
 		where := "at the top level"
 		if suggestion.ParentFolderId != "" {
@@ -38,14 +38,18 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 		lines = append(lines, theme.folder.Render("▸ "+suggestion.FolderName)+theme.dim.Render(" · new, "+where))
 		if suggestion.LinkedPath != "" {
 			lines = append(lines, theme.dim.Render("context: ")+currentModel.fileLink(suggestion.LinkedPath, width-9))
+			lines = append(lines, wrapAll(currentModel.markdownLines(store.ReadText(suggestion.LinkedPath)), width)...)
 		} else {
-			lines = append(lines, currentModel.draftPreview(suggestion.ProposedText, width)...)
+			lines = append(lines, wrapAll(currentModel.markdownLines(suggestion.ProposedText), width)...)
 		}
 		if suggestion.Skill {
 			lines = append(lines, "", theme.dim.Render("Every session you start in it begins with these instructions."))
 		} else {
 			lines = append(lines, "", theme.dim.Render("The session moves into it, and every new session there begins with this context."))
 		}
+	case store.SuggestRule:
+		lines = append(lines, currentModel.diffLines("", "- "+suggestion.Rule, width)...)
+		lines = append(lines, "", theme.dim.Render("Goes to "+laptopFileNames(suggestion.FilePaths)+", which agents load in every repo. Tell den to keep it in a folder or the repo instead."))
 	}
 	return lines
 }

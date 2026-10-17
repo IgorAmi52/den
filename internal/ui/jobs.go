@@ -120,6 +120,7 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 			Repository:      repository,
 			FolderNotes:     currentModel.folderNotesText(session.FolderId),
 			RepositoryNotes: repository.ReadContext(""),
+			LaptopRules:     currentModel.laptopRulesText(),
 		})
 		return run(request, &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: len(turns)})
 	case chatJob:
@@ -248,7 +249,34 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 		}
 		logDecision("keep "+answer.Keep.Kind, fmt.Sprintf("%s (%.2f)", answer.Keep.Reason, answer.Keep.Confidence), outcome)
 	}
+	if strings.TrimSpace(answer.Rule.Rule) != "" {
+		suggestion, outcome := brain.RuleSuggestion(answer.Rule, *session, currentModel.laptopTexts())
+		if outcome == "proposed" && !repository.Offer(suggestion) {
+			outcome = "withheld: already rejected, or enough waiting"
+		}
+		logDecision("rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
+	}
 	currentModel.saveRepository()
+}
+
+// laptopTexts are the laptop files a rule can go to, by path: the ones that exist, and those of installed tools.
+func (currentModel model) laptopTexts() map[string]string {
+	texts := map[string]string{}
+	for _, file := range currentModel.shownLaptopFiles() {
+		texts[file.Path] = file.Text
+	}
+	return texts
+}
+
+// laptopRulesText is everything the laptop files say, so den doesn't propose what they have.
+func (currentModel model) laptopRulesText() string {
+	var texts []string
+	for _, text := range currentModel.laptopTexts() {
+		if strings.TrimSpace(text) != "" {
+			texts = append(texts, strings.TrimSpace(text))
+		}
+	}
+	return strings.Join(texts, "\n\n")
 }
 
 // folderNotesText is everything a folder's context says: its linked file, then den's notes.

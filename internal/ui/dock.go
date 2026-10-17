@@ -2,13 +2,13 @@ package ui
 
 import (
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/IgorAmi52/den/internal/brain"
@@ -16,10 +16,13 @@ import (
 )
 
 const (
-	// maximumDockShare keeps the dock to part of the panel, so the tree stays visible above it.
-	maximumDockShare = 2
+	// minimumTreeLinesBesideDock keeps a few tree lines visible above an open card, so it's clear what it's about.
+	minimumTreeLinesBesideDock = 5
 	// dockNotesPreviewLines is how much of rewritten notes the dock shows before enter saves them.
 	dockNotesPreviewLines = 8
+	dockScrollStep        = 5
+	// reviseTextWidth lays a card out for den's model, which reads it without a screen.
+	reviseTextWidth = 200
 )
 
 // dockItem is one decision in the dock: one suggestion.
@@ -38,6 +41,8 @@ type dockState struct {
 	reply    *brain.ChatMessage
 	thinking bool
 	item     dockItem
+	// bodyOffset scrolls a card too long for the panel, so the whole proposed context can be read.
+	bodyOffset int
 }
 
 func newDockState() dockState {
@@ -126,6 +131,7 @@ func (currentModel *model) blurDock() {
 
 func (currentModel *model) clearDockReply() {
 	currentModel.dock.asked, currentModel.dock.reply, currentModel.dock.thinking = "", nil, false
+	currentModel.dock.bodyOffset = 0
 }
 
 // followDockItem selects the item's row in the tree, opening its folder, so it's clear what the suggestion is about.
@@ -156,6 +162,12 @@ func (currentModel model) updateDock(keyPress tea.KeyPressMsg) (tea.Model, tea.C
 		return currentModel, nil
 	case (keyPress.String() == "right" || keyPress.String() == "left") && isEmpty:
 		currentModel.toggleWide()
+		return currentModel, nil
+	case keyPress.String() == "pgdown":
+		state.bodyOffset += dockScrollStep
+		return currentModel, nil
+	case keyPress.String() == "pgup":
+		state.bodyOffset = max(state.bodyOffset-dockScrollStep, 0)
 		return currentModel, nil
 	case keyPress.String() == "up", keyPress.String() == "down":
 		step := 1
@@ -244,7 +256,7 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 	if suggestion == nil || state.asked == "" {
 		return brain.ChatInput{}, false
 	}
-	tag, subject, details, why := currentModel.describeDockItem(state.item)
+	tag, subject, details, why := currentModel.describeDockItem(state.item, reviseTextWidth)
 	about := tag + ": " + ansi.Strip(subject)
 	for _, detail := range details {
 		about += "\n" + ansi.Strip(detail)
@@ -262,12 +274,15 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 		About:           about,
 		RepositoryNotes: currentModel.repository.ReadContext(""),
 	}
-	if suggestion.FolderId != "" {
-		input.SubjectFolder = suggestion.FolderId
-		input.SubjectNotes = currentModel.folderNotesText(suggestion.FolderId)
-	}
 	if len(suggestion.SessionIds) == 1 {
 		input.SubjectSession = suggestion.SessionIds[0]
+	}
+	input.SubjectFolder = suggestion.FolderId
+	if session := currentModel.repository.FindSession(input.SubjectSession); session != nil && suggestion.Kind == store.SuggestRule {
+		input.SubjectFolder = session.FolderId
+	}
+	if input.SubjectFolder != "" {
+		input.SubjectNotes = currentModel.folderNotesText(input.SubjectFolder)
 	}
 	input.Transcripts = currentModel.chatTranscripts(input.SubjectFolder, input.SubjectSession)
 	return input, true
@@ -313,43 +328,43 @@ func (currentModel *model) afterDockAnswer() {
 }
 
 // dockLines draw the dock: one line when the tree has focus, the whole card when the dock has it.
+// The card's header and input always show; its body scrolls when it's longer than the panel allows.
 func (currentModel model) dockLines(width int) []string {
 	item, exists := currentModel.currentDockItem()
 	if !exists {
 		return nil
 	}
 	theme := currentModel.theme
-	tag, subject, details, why := currentModel.describeDockItem(item)
-	lines := []string{theme.border.Render(strings.Repeat("─", width))}
-	badge := theme.badge.Render(" " + tag + " ")
+	tag, subject, details, why := currentModel.describeDockItem(item, width)
+	rule := theme.border.Render(strings.Repeat("─", width))
 	if !currentModel.dock.focused {
-		return append(lines, truncateStyled(badge+" "+subject, width))
+		return []string{rule, truncateStyled(theme.badge.Render(" "+tag+" ")+" "+subject, width)}
 	}
 	items := currentModel.dockItems()
 	position := fmt.Sprintf("%d of %d", min(currentModel.dock.index, len(items)-1)+1, len(items))
-	lines = append(lines, currentModel.layoutRow([]segment{{text: " " + tag + " ", style: theme.badge}}, []segment{{text: position, style: theme.dim}}, width, false))
-	lines = append(lines, wrapAll([]string{subject}, width)...)
-	lines = append(lines, details...)
+	header := []string{rule, currentModel.layoutRow([]segment{{text: " " + tag + " ", style: theme.badge}}, []segment{{text: position, style: theme.dim}}, width, false)}
+	body := wrapAll(append([]string{subject}, details...), width)
 	if why != "" {
-		lines = append(lines, wrapAll([]string{theme.dim.Render(why)}, width)...)
+		body = append(body, wrapAll([]string{theme.dim.Render(why)}, width)...)
 	}
 	state := currentModel.dock
+	var footer []string
 	if state.asked != "" {
-		lines = append(lines, wrapAll([]string{theme.youLabel.Render("you ") + theme.text.Render(state.asked)}, width)...)
+		footer = append(footer, wrapAll([]string{theme.youLabel.Render("you ") + theme.text.Render(state.asked)}, width)...)
 	}
 	switch {
 	case state.thinking:
-		lines = append(lines, theme.denLabel.Render("den ")+theme.faint.Render("thinking…"))
+		footer = append(footer, theme.denLabel.Render("den ")+theme.faint.Render("thinking…"))
 	case state.reply != nil:
 		for index, replyLine := range strings.Split(state.reply.Text, "\n") {
 			label := "    "
 			if index == 0 {
 				label = theme.denLabel.Render("den ")
 			}
-			lines = append(lines, wrapAll([]string{label + theme.text.Render(replyLine)}, width)...)
+			footer = append(footer, wrapAll([]string{label + theme.text.Render(replyLine)}, width)...)
 		}
 		if len(state.reply.Actions) > 0 {
-			lines = append(lines, theme.key.Render("↵")+theme.action.Render(" do it  ")+theme.key.Render("⌫")+theme.action.Render(" back"))
+			footer = append(footer, theme.key.Render("↵")+theme.action.Render(" do it  ")+theme.key.Render("⌫")+theme.action.Render(" back"))
 		}
 	}
 	input := state.input
@@ -357,13 +372,23 @@ func (currentModel model) dockLines(width int) []string {
 	if state.reply != nil || state.thinking {
 		input.Placeholder = "or tell den more…"
 	}
-	lines = append(lines, input.View())
-	return lines[:min(len(lines), max(currentModel.height/maximumDockShare, 4))]
+	footer = append(footer, input.View())
+	bodyHeight := max(currentModel.height-currentModel.treeTop()-footerHeight-minimumTreeLinesBesideDock-len(header)-len(footer), 3)
+	if len(body) > bodyHeight {
+		offset := min(state.bodyOffset, len(body)-bodyHeight+1)
+		shown := body[offset : offset+bodyHeight-1]
+		more := fmt.Sprintf("↓ %d more lines · pgdn", len(body)-offset-len(shown))
+		if offset+len(shown) >= len(body) {
+			more = "↑ pgup for the start"
+		}
+		body = append(shown, theme.faint.Render(more))
+	}
+	return append(append(header, body...), footer...)
 }
 
 // describeDockItem says what a suggestion does in a fixed shape: a type tag, one sentence of what yes does
-// in the tree's own colors, details, and why den suggests it.
-func (currentModel model) describeDockItem(item dockItem) (tag string, subject string, details []string, why string) {
+// in the tree's own colors, everything it would write, and why den suggests it.
+func (currentModel model) describeDockItem(item dockItem, width int) (tag string, subject string, details []string, why string) {
 	theme := currentModel.theme
 	repository := &currentModel.repository
 	suggestion := repository.FindSuggestion(item.suggestionId)
@@ -372,10 +397,17 @@ func (currentModel model) describeDockItem(item dockItem) (tag string, subject s
 	}
 	tag, why = suggestionTag(*suggestion), suggestion.Reason
 	contextName := theme.folder.Render("◆ " + currentModel.contextHeading(suggestion.FolderId))
-	previewDetails := func(text string) []string {
+	writtenText := func(text string) []string {
 		var lines []string
-		for _, line := range contextPreview(text, 2) {
-			lines = append(lines, theme.faint.Render("  "+line))
+		for _, line := range splitLines(strings.TrimSpace(text)) {
+			style, continuation := theme.text, "  "
+			if strings.HasPrefix(line, "#") {
+				style = theme.bold
+			}
+			if strings.HasPrefix(strings.TrimSpace(line), "- ") {
+				continuation = "    "
+			}
+			lines = append(lines, hangingIndent(line, style, width, "  ", continuation)...)
 		}
 		return lines
 	}
@@ -385,19 +417,20 @@ func (currentModel model) describeDockItem(item dockItem) (tag string, subject s
 		added := addedLines(current, suggestion.ProposedText)
 		switch {
 		case strings.TrimSpace(current) == "":
-			subject = theme.text.Render("Start ") + contextName + theme.text.Render(fmt.Sprintf("'s notes, %d lines", len(added)))
-			details = previewDetails(suggestion.ProposedText)
+			subject = theme.text.Render("Start ") + contextName + theme.text.Render(fmt.Sprintf("'s notes, %d %s:", len(added), plural(len(added), "line")))
+			details = writtenText(suggestion.ProposedText)
 		case len(added) == 1:
 			subject = theme.text.Render("Add to ") + contextName + theme.text.Render(": ") + theme.bold.Render(strings.TrimPrefix(added[0], "- "))
 		default:
-			subject = theme.text.Render(fmt.Sprintf("Add %d lines to ", len(added))) + contextName
-			for _, line := range added[:min(len(added), 3)] {
-				details = append(details, theme.diffAdded.Render("+ "+strings.TrimPrefix(line, "- ")))
+			subject = theme.text.Render(fmt.Sprintf("Add %d lines to ", len(added))) + contextName + theme.text.Render(":")
+			for _, line := range added {
+				details = append(details, hangingIndent(strings.TrimPrefix(line, "- "), theme.diffAdded, width, "+ ", "  ")...)
 			}
 		}
 	case store.SuggestLink:
 		subject = theme.text.Render("Use ") + theme.link.Render(currentModel.relativeToRepository(suggestion.LinkedPath, "")) +
-			theme.text.Render(" as ") + contextName + theme.text.Render("'s context")
+			theme.text.Render(" as ") + contextName + theme.text.Render("'s context:")
+		details = writtenText(store.ReadText(suggestion.LinkedPath))
 	case store.SuggestFolder:
 		verb, joiner := "New folder ", " for "
 		if suggestion.Skill {
@@ -411,10 +444,19 @@ func (currentModel model) describeDockItem(item dockItem) (tag string, subject s
 			details = append(details, theme.dim.Render("  inside ")+theme.folder.Render(repository.FolderName(suggestion.ParentFolderId)))
 		}
 		if suggestion.LinkedPath != "" {
-			details = append(details, theme.dim.Render("  context: ")+theme.link.Render(filepath.Base(suggestion.LinkedPath)))
+			details = append(details, theme.dim.Render("  context: ")+theme.link.Render(currentModel.relativeToRepository(suggestion.LinkedPath, "")))
+			details = append(details, writtenText(store.ReadText(suggestion.LinkedPath))...)
 		} else {
-			details = append(details, previewDetails(suggestion.ProposedText)...)
+			details = append(details, theme.dim.Render("  its context:"))
+			details = append(details, writtenText(suggestion.ProposedText)...)
 		}
+	case store.SuggestRule:
+		subject = theme.text.Render("Add to ") + theme.link.Render(laptopFileNames(suggestion.FilePaths)) + theme.text.Render(": ") + theme.bold.Render(suggestion.Rule)
+		keepIn := "a folder"
+		if session := repository.FindSession(suggestion.SessionIds[0]); session != nil && session.FolderId != "" {
+			keepIn = repository.FolderName(session.FolderId)
+		}
+		details = []string{theme.dim.Render("  agents follow it in every repo · or tell den \"keep it in " + keepIn + "\"")}
 	}
 	return tag, subject, details, why
 }
@@ -431,4 +473,21 @@ func (currentModel model) dockHints() []key.Binding {
 		bindings = append(bindings, key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "see it whole")))
 	}
 	return append(bindings, relabeled(keys.back, "back to the tree"))
+}
+
+// hangingIndent wraps a line to width, the first piece after first and the rest after continuation,
+// so a wrapped bullet stays visibly one bullet.
+func hangingIndent(text string, style lipgloss.Style, width int, first string, continuation string) []string {
+	if text == "" {
+		return []string{""}
+	}
+	var lines []string
+	for index, piece := range wrapText(text, max(width-len(continuation), 1)) {
+		prefix := continuation
+		if index == 0 {
+			prefix = first
+		}
+		lines = append(lines, style.Render(prefix+piece))
+	}
+	return lines
 }

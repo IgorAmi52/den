@@ -350,6 +350,8 @@ func (currentModel model) describeDone(suggestion store.Suggestion) string {
 		return "linked " + filepath.Base(suggestion.LinkedPath) + " · new sessions in " + currentModel.contextHeading(suggestion.FolderId) + " start with it"
 	case store.SuggestFolder:
 		return "made " + suggestion.FolderName + " · new sessions there start with its context"
+	case store.SuggestRule:
+		return "added to " + laptopFileNames(suggestion.FilePaths) + " · agents follow it in every repo"
 	}
 	return "saved to " + currentModel.contextHeading(suggestion.FolderId) + "'s notes · new sessions there start with them"
 }

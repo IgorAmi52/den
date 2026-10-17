@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/IgorAmi52/den/internal/store"
@@ -23,8 +24,15 @@ func (currentModel model) proposalFor(row listRow) *store.Suggestion {
 		if row.laptopTool == "" {
 			return repository.PendingForFolder("")
 		}
+		file, _ := currentModel.laptopFile(row.laptopTool)
+		if rule := repository.PendingRule(); rule != nil && slices.Contains(rule.FilePaths, file.Path) {
+			return rule
+		}
 	case repositoryRow:
-		return repository.PendingForFolder("")
+		if suggestion := repository.PendingForFolder(""); suggestion != nil {
+			return suggestion
+		}
+		return repository.PendingRule()
 	}
 	return nil
 }
@@ -42,6 +50,8 @@ func suggestionTag(suggestion store.Suggestion) string {
 	switch {
 	case suggestion.Kind == store.SuggestLink:
 		return "LINK"
+	case suggestion.Kind == store.SuggestRule:
+		return "RULE"
 	case suggestion.Kind == store.SuggestFolder && suggestion.Skill:
 		return "SKILL"
 	case suggestion.Kind == store.SuggestFolder:
@@ -60,6 +70,8 @@ func (currentModel model) proposalTitle(suggestion store.Suggestion) string {
 			return "make a skill folder " + suggestion.FolderName
 		}
 		return "make a folder " + suggestion.FolderName
+	case store.SuggestRule:
+		return "add a rule to " + laptopFileNames(suggestion.FilePaths)
 	}
 	added := addedLines(currentModel.currentContextText(suggestion), suggestion.ProposedText)
 	if strings.TrimSpace(currentModel.currentContextText(suggestion)) == "" {
@@ -84,20 +96,13 @@ func addedLines(before string, after string) []string {
 	return added
 }
 
-// contextPreview is the start of a proposed context without its headings, at most a few lines, for a card.
-func contextPreview(text string, maximumLines int) []string {
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if len(lines) == maximumLines {
-			return append(lines, "…")
-		}
-		lines = append(lines, line)
+// laptopFileNames names the laptop files a rule goes to, like "CLAUDE.md and AGENTS.md".
+func laptopFileNames(filePaths []string) string {
+	var names []string
+	for _, filePath := range filePaths {
+		names = append(names, filepath.Base(filePath))
 	}
-	return lines
+	return strings.Join(names, " and ")
 }
 
 func plural(count int, noun string) string {

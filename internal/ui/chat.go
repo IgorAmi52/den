@@ -260,6 +260,8 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 			if session != nil {
 				repository.SetArchived(session.SessionId, true)
 			}
+		case "addRule":
+			currentModel.addRuleNow(action)
 		case "moveNotes":
 			currentModel.moveNotes(action.FromFolderId, action.FolderId)
 		case "editNotes":
@@ -317,6 +319,25 @@ func boolOrder(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+// addRuleNow writes a rule the user asked for: to a folder's notes, the repo's context, or the laptop files that lack it.
+func (currentModel *model) addRuleNow(action brain.ChatAction) {
+	if action.Target == "laptop" {
+		for filePath := range currentModel.laptopTexts() {
+			_, err := store.AppendRule(filePath, action.Rule)
+			currentModel.reportError(err)
+		}
+		return
+	}
+	current := currentModel.repository.ReadContext(action.FolderId)
+	if store.HasRule(current, action.Rule) {
+		return
+	}
+	if strings.TrimSpace(current) == "" {
+		current = "# " + currentModel.contextHeading(action.FolderId) + "\n"
+	}
+	currentModel.reportError(currentModel.repository.WriteContext(action.FolderId, store.AddToSection(current, "Rules", action.Rule)))
 }
 
 func (currentModel model) chatView() string {

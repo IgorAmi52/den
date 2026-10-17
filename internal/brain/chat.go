@@ -37,6 +37,9 @@ type ChatAction struct {
 	LinkedPath string
 	// Name is the new name, or for a move into a folder the same answer creates, that folder's name.
 	Name string
+	// Target is folder, repo or laptop, for a rule.
+	Target string
+	Rule   string
 	// FromFolderId is where notes move from; Text is a folder's whole new notes, or a new folder's.
 	FromFolderId string
 	Text         string
@@ -220,6 +223,20 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 		case "archive":
 			if session != nil && !session.Archived {
 				actions = append(actions, ChatAction{Kind: "archive", SessionId: session.SessionId, Description: "archive \"" + session.Title + "\""})
+			}
+		case "addRule":
+			rule := strings.TrimSpace(proposed.Rule)
+			if folder == nil {
+				folder = repository.FindFolder(input.SubjectFolder)
+			}
+			switch {
+			case rule == "":
+			case proposed.Target == "laptop":
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "laptop", Rule: rule, Description: "add to your CLAUDE.md and AGENTS.md: " + rule})
+			case proposed.Target == "folder" && folder != nil:
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "folder", FolderId: folder.Id, Rule: rule, Description: "add to " + folder.Name + "'s notes: " + rule})
+			default:
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "repo", Rule: rule, Description: "add to " + filepath.Base(repository.RepositoryPath) + "'s context: " + rule})
 			}
 		case "acceptSuggestion":
 			if input.About != "" {

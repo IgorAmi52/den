@@ -14,6 +14,8 @@ const (
 	SuggestLink SuggestionKind = "link"
 	// SuggestFolder makes a folder with its context and moves the session it came from into it.
 	SuggestFolder SuggestionKind = "folder"
+	// SuggestRule adds a rule to the user's own files that agents load in every repo, like ~/.claude/CLAUDE.md.
+	SuggestRule SuggestionKind = "rule"
 )
 
 // maximumPendingSuggestions keeps den quiet: past it, new suggestions wait until the user answered some.
@@ -36,8 +38,11 @@ type Suggestion struct {
 	ProposedText string `json:"proposedText,omitempty"`
 	Source       string `json:"source,omitempty"`
 	// LinkedPath is the file a link proposes, or a new folder's linked context.
-	LinkedPath string    `json:"linkedPath,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
+	LinkedPath string `json:"linkedPath,omitempty"`
+	// Rule is the line a rule adds; FilePaths are the laptop files that don't have it yet.
+	Rule      string    `json:"rule,omitempty"`
+	FilePaths []string  `json:"filePaths,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // RejectionKeys identify what was rejected, so the same suggestion is never offered again.
@@ -45,6 +50,8 @@ func (suggestion Suggestion) RejectionKeys() []string {
 	switch suggestion.Kind {
 	case SuggestLink:
 		return []string{"link:" + suggestion.FolderId + ":" + suggestion.LinkedPath}
+	case SuggestRule:
+		return []string{"rule:" + normalizedWords(suggestion.Rule)}
 	case SuggestFolder:
 		var keys []string
 		for _, sessionId := range suggestion.SessionIds {
@@ -69,7 +76,8 @@ func (repository *Repository) IsRejected(suggestion Suggestion) bool {
 }
 
 // Offer queues a suggestion unless it was rejected before, the same one is already waiting, its session already has one
-// waiting, or enough are waiting already. It reports whether the queue changed.
+// waiting, or enough are waiting already. A rule stands beside a session's other suggestion, since it's about the user,
+// not the work. It reports whether the queue changed.
 func (repository *Repository) Offer(suggestion Suggestion) bool {
 	if repository.IsRejected(suggestion) || len(repository.Suggestions) >= maximumPendingSuggestions {
 		return false
@@ -78,10 +86,11 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 		if slices.Equal(pending.RejectionKeys(), suggestion.RejectionKeys()) {
 			return false
 		}
-		if slices.ContainsFunc(suggestion.SessionIds, func(sessionId string) bool { return slices.Contains(pending.SessionIds, sessionId) }) {
+		isAboutWork := suggestion.Kind != SuggestRule && pending.Kind != SuggestRule
+		if isAboutWork && slices.ContainsFunc(suggestion.SessionIds, func(sessionId string) bool { return slices.Contains(pending.SessionIds, sessionId) }) {
 			return false
 		}
-		if suggestion.Kind != SuggestFolder && pending.Kind != SuggestFolder && pending.FolderId == suggestion.FolderId {
+		if isAboutWork && suggestion.Kind != SuggestFolder && pending.Kind != SuggestFolder && pending.FolderId == suggestion.FolderId {
 			return false
 		}
 	}
@@ -147,6 +156,12 @@ func (repository *Repository) Accept(suggestionId string) (string, error) {
 				session.FolderId, session.Archived, session.ArchivedAt = folderId, false, time.Time{}
 			}
 		}
+	case SuggestRule:
+		for _, filePath := range suggestion.FilePaths {
+			if _, err := AppendRule(filePath, suggestion.Rule); err != nil {
+				return "", err
+			}
+		}
 	}
 	repository.Dismiss(suggestionId)
 	return folderId, nil
@@ -162,10 +177,10 @@ func (repository *Repository) Unlink(folderId string) {
 	folder.LinkedPath = ""
 }
 
-// PendingFor returns the waiting suggestion that came from this session, if any.
+// PendingFor returns the waiting suggestion about the work of this session, if any.
 func (repository *Repository) PendingFor(sessionId string) *Suggestion {
 	for index := range repository.Suggestions {
-		if slices.Contains(repository.Suggestions[index].SessionIds, sessionId) {
+		if repository.Suggestions[index].Kind != SuggestRule && slices.Contains(repository.Suggestions[index].SessionIds, sessionId) {
 			return &repository.Suggestions[index]
 		}
 	}
@@ -176,8 +191,18 @@ func (repository *Repository) PendingFor(sessionId string) *Suggestion {
 func (repository *Repository) PendingForFolder(folderId string) *Suggestion {
 	for index := range repository.Suggestions {
 		suggestion := &repository.Suggestions[index]
-		if suggestion.Kind != SuggestFolder && suggestion.FolderId == folderId {
+		if (suggestion.Kind == SuggestContext || suggestion.Kind == SuggestLink) && suggestion.FolderId == folderId {
 			return suggestion
+		}
+	}
+	return nil
+}
+
+// PendingRule returns the first waiting rule for the laptop files.
+func (repository *Repository) PendingRule() *Suggestion {
+	for index := range repository.Suggestions {
+		if repository.Suggestions[index].Kind == SuggestRule {
+			return &repository.Suggestions[index]
 		}
 	}
 	return nil

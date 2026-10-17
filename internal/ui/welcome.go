@@ -18,10 +18,7 @@ import (
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
-const (
-	welcomeCardWidth  = 78
-	draftPreviewLines = 9
-)
+const welcomeCardWidth = 78
 
 type welcomeStep int
 
@@ -326,16 +323,6 @@ func (currentModel model) scanningNote() string {
 		return "Their prompts and edited files, read on this Mac; sessions with real work come in."
 	}
 	return "Their prompts, edited files and how they ended; " + currentModel.helperCaller.Name() + " judges which are worth returning to."
-}
-
-// draftPreview shows the start of a draft behind a bar in the suggestion color.
-func (currentModel model) draftPreview(text string, width int) []string {
-	draftLines := wrapAll(currentModel.markdownLines(text), width-2)
-	shown := draftLines[:min(draftPreviewLines, len(draftLines))]
-	if len(draftLines) > len(shown) {
-		shown = append(shown, currentModel.theme.faint.Render("…"))
-	}
-	return strings.Split(currentModel.theme.pinned.Render(strings.Join(shown, "\n")), "\n")
 }
 
 func (currentModel model) welcomeKeysBody(width int) []string {

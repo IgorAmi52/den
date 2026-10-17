@@ -424,7 +424,7 @@ func (currentModel model) rowHints() []key.Binding {
 		bindings = append([]key.Binding{relabeled(keys.accept, "answer den")}, bindings...)
 	}
 	if !currentModel.isWide() {
-		return append(bindings, keys.wide)
+		return append(bindings, keys.chat, keys.wide)
 	}
 	bindings = append(bindings, keys.filter, keys.chat)
 	if len(currentModel.openAgents) > 0 {

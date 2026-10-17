@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/IgorAmi52/den/internal/agent"
@@ -34,6 +35,48 @@ const keepRules = "keep: whether this session produced something worth keeping a
 	"Never propose a folder or skill an existing folder already covers. Use only facts from the session; never invent. " +
 	"confidence: 0 to 1 that the user will say yes. reason: one sentence of at most 14 words the user reads first, " +
 	"naming the concrete thing worth keeping, like \"Pagination breaks past 500 issues; the fix is still open.\" Never generic."
+
+// ruleRules tell the model when a correction is a rule for every repo. The user can still move it into a folder instead.
+const ruleRules = "rule: a rule for the user's own files that agents load in every repo (CLAUDE.md, AGENTS.md). Only from a clear " +
+	"correction or preference the user stated about how agents should work that holds in any repo, like \"don't add comments\" or " +
+	"\"never use abbreviations in names\". Not about this repo's code, this task, or a one-off \"not that file\". " +
+	"rule: one short imperative sentence, or \"\" for none, the normal answer. evidence: the user's words, quoted. " +
+	"confidence: 0 to 1 that it holds in every repo. Never a rule the laptop files already have."
+
+// Rule is what the model answers about a rule for every repo.
+type Rule struct {
+	Rule       string  `json:"rule"`
+	Evidence   string  `json:"evidence"`
+	Confidence float64 `json:"confidence"`
+}
+
+func ruleSchema() map[string]any {
+	return objectSchema(map[string]any{"rule": stringSchema(), "evidence": stringSchema(), "confidence": map[string]any{"type": "number"}})
+}
+
+// RuleSuggestion checks a rule the model found and offers it for the laptop files that don't say it yet,
+// given as their path and text. outcome says what happened, for the decision log.
+func RuleSuggestion(rule Rule, session store.Session, laptopTexts map[string]string) (suggestion store.Suggestion, outcome string) {
+	line := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rule.Rule), "- "))
+	switch {
+	case line == "":
+		return store.Suggestion{}, "no rule"
+	case rule.Confidence < minimumKeepConfidence:
+		return store.Suggestion{}, "withheld: not sure enough"
+	}
+	var filePaths []string
+	for filePath, text := range laptopTexts {
+		if !store.HasRule(text, line) {
+			filePaths = append(filePaths, filePath)
+		}
+	}
+	if len(filePaths) == 0 {
+		return store.Suggestion{}, "dropped: the laptop files already say it"
+	}
+	slices.Sort(filePaths)
+	reason := "You said: \"" + strings.Trim(strings.TrimSpace(rule.Evidence), "\"'“”") + "\""
+	return store.Suggestion{Kind: store.SuggestRule, Rule: line, FilePaths: filePaths, SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason}, "proposed"
+}
 
 // Keep is what the model answers about keeping something from a session.
 type Keep struct {

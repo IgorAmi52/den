@@ -35,7 +35,7 @@ const reviewSystem = "You are den. You watch a developer's AI coding agent sessi
 	"title: the session's name in the tree. Return \"\" to keep the current one, which is the normal answer. Rename only when the current " +
 	"title is a raw prompt, too long, or would mislead someone looking for this session. " + titleRules + "\n\n" +
 	"summary: one plain sentence, at most 15 words, on what the session is doing and where it stands, " +
-	"like \"Coupons no longer apply twice; tests pass, case handling is next.\"\n\n" + keepRules
+	"like \"Coupons no longer apply twice; tests pass, case handling is next.\"\n\n" + keepRules + "\n\n" + ruleRules
 
 const chatSystem = "You are den. You organize a developer's AI coding agent sessions into folders, with context per folder that every new " +
 	"session in the folder starts with. A folder holds a piece of work, like a feature, or a way of working, a skill, like Exploration with " +
@@ -64,6 +64,8 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"- renameFolder: (folder, name)\n" +
 	"- createFolder: a new folder (name; folder is its parent, or empty for the top level; text is its notes, or empty)\n" +
 	"- archive: (session)\n" +
+	"- addRule: a rule for agents (target folder, repo or laptop, where laptop is the user's CLAUDE.md and AGENTS.md for every repo; " +
+	"folder when the target is folder; rule). When the user says a rule den suggested belongs in a folder or the repo instead, use this with that target.\n" +
 	"- moveNotes: move den's notes, and a linked file, from one folder into another (from, folder)\n" +
 	"- editNotes: rewrite den's notes for a folder, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
 	"- acceptSuggestion: do den's suggestion the chat is about, as it is"
@@ -88,12 +90,15 @@ type ReviewInput struct {
 	Repository      *store.Repository
 	FolderNotes     string
 	RepositoryNotes string
+	// LaptopRules is what the user's own files for every repo already say.
+	LaptopRules string
 }
 
 type ReviewAnswer struct {
 	Title   string `json:"title"`
 	Summary string `json:"summary"`
 	Keep    Keep   `json:"keep"`
+	Rule    Rule   `json:"rule"`
 }
 
 func ReviewRequest(input ReviewInput) helper.Request {
@@ -115,10 +120,11 @@ func ReviewRequest(input ReviewInput) helper.Request {
 		prompt.WriteString("\nTHIS FOLDER'S CONTEXT\n" + orNone(notesExcerpt(input.FolderNotes)) + "\n")
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
+	prompt.WriteString("\nLAPTOP RULES (already in every repo)\n" + orNone(notesExcerpt(input.LaptopRules)) + "\n")
 	return helper.Request{
 		System: reviewSystem,
 		Prompt: prompt.String(),
-		Schema: objectSchema(map[string]any{"title": stringSchema(), "summary": stringSchema(), "keep": keepSchema()}),
+		Schema: objectSchema(map[string]any{"title": stringSchema(), "summary": stringSchema(), "keep": keepSchema(), "rule": ruleSchema()}),
 	}
 }
 
@@ -218,6 +224,8 @@ type ChatAnswer struct {
 		Name    string `json:"name"`
 		From    string `json:"from"`
 		Text    string `json:"text"`
+		Target  string `json:"target"`
+		Rule    string `json:"rule"`
 	} `json:"actions"`
 }
 
@@ -311,8 +319,10 @@ func ChatRequest(input ChatInput) helper.Request {
 		Schema: objectSchema(map[string]any{
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{
-				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive",
+				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive", "addRule",
 					"moveNotes", "editNotes", "acceptSuggestion"),
+				"target":  enumSchema("", "folder", "repo", "laptop"),
+				"rule":    stringSchema(),
 				"from":    stringSchema(),
 				"text":    stringSchema(),
 				"folder":  stringSchema(),
