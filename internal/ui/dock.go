@@ -387,15 +387,11 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 	contextName := theme.folder.Render("◆ " + currentModel.contextHeading(suggestion.FolderId))
 	writtenText := func(text string) []string {
 		var lines []string
-		for _, line := range splitLines(strings.TrimSpace(text)) {
-			style, continuation := theme.text, "  "
-			if strings.HasPrefix(line, "#") {
-				style = theme.bold
-			}
-			if strings.HasPrefix(strings.TrimSpace(line), "- ") {
-				continuation = "    "
-			}
-			lines = append(lines, hangingIndent(line, style, width, "  ", continuation)...)
+		if strings.TrimSpace(text) == "" {
+			return nil
+		}
+		for _, line := range currentModel.renderedMarkdown(text, width-2) {
+			lines = append(lines, "  "+line)
 		}
 		return lines
 	}

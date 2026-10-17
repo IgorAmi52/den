@@ -29,7 +29,7 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 		lines = append(lines, currentModel.layoutRow([]segment{{text: filepath.Base(suggestion.LinkedPath), style: theme.bold}},
 			[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(text)), style: theme.dim}}, width, false))
 		lines = append(lines, currentModel.fileLink(suggestion.LinkedPath, width), "")
-		lines = append(lines, wrapAll(currentModel.markdownLines(text), width)...)
+		lines = append(lines, currentModel.renderedMarkdown(text, width)...)
 	case store.SuggestFolder:
 		where := "at the top level"
 		if suggestion.ParentFolderId != "" {
@@ -38,9 +38,9 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 		lines = append(lines, theme.folder.Render("▸ "+suggestion.FolderName)+theme.dim.Render(" · new, "+where))
 		if suggestion.LinkedPath != "" {
 			lines = append(lines, theme.dim.Render("context: ")+currentModel.fileLink(suggestion.LinkedPath, width-9))
-			lines = append(lines, wrapAll(currentModel.markdownLines(store.ReadText(suggestion.LinkedPath)), width)...)
+			lines = append(lines, currentModel.renderedMarkdown(store.ReadText(suggestion.LinkedPath), width)...)
 		} else {
-			lines = append(lines, wrapAll(currentModel.markdownLines(suggestion.ProposedText), width)...)
+			lines = append(lines, currentModel.renderedMarkdown(suggestion.ProposedText, width)...)
 		}
 		if suggestion.Skill {
 			lines = append(lines, "", theme.dim.Render("Every session you start in it begins with these instructions."))

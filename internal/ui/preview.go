@@ -124,7 +124,7 @@ func (currentModel model) folderContextPreview(folder *store.Folder, width int) 
 	}
 	lines := []string{currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · " + owner, style: theme.dim}},
 		[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(text)), style: theme.dim}}, width, false), ""}
-	lines = append(lines, currentModel.markdownLines(text)...)
+	lines = append(lines, currentModel.renderedMarkdown(text, width)...)
 	lines = append(lines, "", currentModel.fileLink(filePath, width), theme.dim.Render("loads after "+strings.Join(inherits, ", ")))
 	lines = append(lines, theme.key.Render("→")+theme.action.Render(" edit it here, by hand or by asking den"))
 	return wrapAll(lines, width)
@@ -156,7 +156,7 @@ func (currentModel model) contextFilePreview(laptopTool string, width int) []str
 			lines = append(lines, "", theme.dim.Render("This is the read-this-first file you would paste into every new session."))
 		}
 	} else {
-		lines = append(lines, currentModel.markdownLines(text)...)
+		lines = append(lines, currentModel.renderedMarkdown(text, width)...)
 	}
 	lines = append(lines, "", currentModel.fileLink(filePath, width))
 	return wrapAll(lines, width)

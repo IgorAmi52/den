@@ -44,15 +44,10 @@ func (currentModel model) planCard(actions []brain.ChatAction, outcome string, c
 		if action.Change != "" {
 			shownText = action.Change
 		}
-		for _, textLine := range splitLines(strings.TrimSpace(shownText)) {
-			style, continuation := theme.text, "    "
-			if strings.HasPrefix(textLine, "#") {
-				style = theme.bold
+		if strings.TrimSpace(shownText) != "" {
+			for _, textLine := range currentModel.renderedMarkdown(shownText, innerWidth-4) {
+				lines = append(lines, "    "+textLine)
 			}
-			if strings.HasPrefix(strings.TrimSpace(textLine), "- ") {
-				continuation = "      "
-			}
-			lines = append(lines, hangingIndent(textLine, style, innerWidth, "    ", continuation)...)
 		}
 	}
 	if outcome == "" && len(confirmKeys) > 0 {

@@ -263,7 +263,7 @@ func (currentModel model) contextPaneBody(text string, width int) []string {
 	if strings.TrimSpace(text) == "" {
 		return wrapAll([]string{"", theme.dim.Render("No context yet. ↓ asks den to write it, for example \"make it from the latest session\"; ↑ writes it by hand.")}, width)
 	}
-	return wrapAll(append([]string{""}, currentModel.markdownLines(text)...), width)
+	return append([]string{""}, currentModel.renderedMarkdown(text, width)...)
 }
 
 func hint(keyLabel string, description string) key.Binding {
