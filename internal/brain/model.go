@@ -33,9 +33,12 @@ const (
 const editingInstructions = "Do what they ask with one action: replaceText to change a passage, with from an exact passage of the current text " +
 	"and text what replaces it, or editNotes only when the whole text should be rewritten. To change a title, replace just that line."
 
-const titleRules = "A title is 2-4 words in sentence case and at most 28 characters, like \"Fix duplicate coupons\". It starts with an imperative verb (Fix, Add, Remove, Refactor, " +
-	"Investigate, Review, Explain, Plan, Write, Design), names the session's goal rather than its latest step, is specific enough " +
-	"to tell apart from other sessions (never \"Fix bug\"), and has no branch names or issue keys."
+const titleRules = "A title is one emoji for the session's kind, a space, then a subject of 2-4 words in sentence case and at most 28 characters, " +
+	"like \"🐛 Duplicate coupons\". The kinds: 🔍 investigate, explore, explain, review or research; 🐛 fix something broken; " +
+	"✨ build a feature or add something new; 🧹 refactor or clean up; 📋 plan or design; 📝 write docs, notes or prompts; " +
+	"💬 a quick question or small talk. Use only these emoji. The subject has no verb, since the emoji says the kind, and never " +
+	"the repo's name, since every session is in that repo. It names the session's goal rather than its latest step, is specific enough " +
+	"to tell apart from other sessions (never \"🐛 Bug\"), and has no branch names or issue keys."
 
 const reviewSystem = "You are den. You watch a developer's AI coding agent sessions in one repo. Sessions sit in folders, and each folder has context: " +
 	"notes every new session started in it begins with. A folder holds either a piece of work, like a feature, or a way of working, like research " +
