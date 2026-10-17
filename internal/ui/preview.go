@@ -168,9 +168,15 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 	theme := currentModel.theme
 	digest := currentModel.digests[session.SessionId]
 	lines := wrapAll([]string{theme.accentBold.Render(session.Title)}, width)
-	summary := theme.faint.Render("No summary yet: den writes one after the first prompt.")
-	if session.Summary != "" {
-		summary = theme.text.Render(session.Summary)
+	summary := theme.faint.Render("No progress yet: den writes it after the first prompt.")
+	if progress := session.Progress; progress.Goal != "" {
+		var progressLines []string
+		for _, part := range [][2]string{{"goal", progress.Goal}, {"done", progress.Done}, {"next", progress.Next}} {
+			if part[1] != "" {
+				progressLines = append(progressLines, theme.dim.Render(padRight(part[0], 5))+theme.text.Render(part[1]))
+			}
+		}
+		summary = strings.Join(progressLines, "\n")
 	}
 	lines = append(lines, strings.Split(theme.summaryBlock.Width(width).Render(summary), "\n")...)
 	lines = append(lines, "")

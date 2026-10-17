@@ -19,13 +19,17 @@ var claudeProjectNameCharacters = regexp.MustCompile(`[^a-zA-Z0-9]`)
 type Claude struct{}
 
 type claudeEvent struct {
-	Type        string    `json:"type"`
-	AiTitle     string    `json:"aiTitle"`
-	IsMeta      bool      `json:"isMeta"`
-	IsSidechain bool      `json:"isSidechain"`
-	Cwd         string    `json:"cwd"`
-	GitBranch   string    `json:"gitBranch"`
-	Timestamp   time.Time `json:"timestamp"`
+	Type    string `json:"type"`
+	Subtype string `json:"subtype"`
+	AiTitle string `json:"aiTitle"`
+	PrUrl   string `json:"prUrl"`
+	// Content is a system event's text, like a recap; other events may hold something else there.
+	Content     json.RawMessage `json:"content"`
+	IsMeta      bool            `json:"isMeta"`
+	IsSidechain bool            `json:"isSidechain"`
+	Cwd         string          `json:"cwd"`
+	GitBranch   string          `json:"gitBranch"`
+	Timestamp   time.Time       `json:"timestamp"`
 	Message     struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
@@ -159,6 +163,14 @@ func readClaudeDigest(transcriptPath string) Digest {
 			if event.AiTitle != "" {
 				digest.AgentTitle = oneLine(event.AiTitle)
 			}
+		case "pr-link":
+			digest.PullRequest = event.PrUrl
+		case "system":
+			var recap string
+			if event.Subtype == "away_summary" && json.Unmarshal(event.Content, &recap) == nil {
+				recap, _, _ = strings.Cut(recap, " (disable recaps")
+				digest.Recap = oneLine(recap)
+			}
 		case "user":
 			if prompt := firstTypedText(event.Message.Content); prompt != "" && !event.IsMeta {
 				if digest.FirstPrompt == "" {
@@ -212,9 +224,13 @@ func (Claude) Turns(sessionId string) ([]Turn, error) {
 	if err != nil || !found {
 		return nil, err
 	}
+	return cachedTurnsOf(transcriptPath, readClaudeTurns)
+}
+
+func readClaudeTurns(transcriptPath string) ([]Turn, error) {
 	var turns []Turn
 	agentText := ""
-	err = eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
+	err := eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
 		var event claudeEvent
 		if json.Unmarshal(line, &event) != nil || event.IsSidechain {
 			return true

@@ -19,11 +19,11 @@ import (
 
 const (
 	// reviewEvery is how many new prompts make a session worth another look while its agent is open.
-	reviewEvery = 2
+	reviewEvery = 5
 	// reviewTurns is how many of the latest turns a review reads, the new ones marked, so it sees where they came from.
 	reviewTurns = 10
-	// quietAfter is how long a session sits idle before den reviews all of it once.
-	quietAfter = 20 * time.Minute
+	// quietAfter is how long a session sits idle before den reviews what it hasn't seen, all of it once there's real work.
+	quietAfter = 10 * time.Minute
 	// minimumQuietPrompts keeps the review of a whole session to sessions with real work in them.
 	minimumQuietPrompts = 3
 	// maximumTitleLength drops titles that ignored the naming rules.
@@ -56,7 +56,8 @@ type job struct {
 	kind         jobKind
 	sessionId    string
 	suggestionId string
-	// wholeSession makes a review look at all of a session that went quiet, not only its latest turns.
+	// wholeSession makes a review the card review of a session that went quiet, which reads all of it,
+	// instead of the progress review of its latest turns.
 	wholeSession bool
 	// rejectedCard is the card a lesson job learns from, spelled out with anything said about it.
 	rejectedCard string
@@ -193,7 +194,11 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		}
 		if done.job.kind == reviewJob {
 			if session := currentModel.repository.FindSession(done.job.sessionId); session != nil {
-				session.ReviewedAtPrompt = done.promptCount
+				if done.job.wholeSession {
+					session.QuietReviewedAtPrompt = done.promptCount
+				} else {
+					session.ReviewedAtPrompt = done.promptCount
+				}
 			}
 		}
 		if currentModel.helperFailures >= maximumHelperFailures {
@@ -239,8 +244,10 @@ func isRewording(currentTitle string, newTitle string) bool {
 	return shared*2 >= max(len(currentWords), len(newWords))
 }
 
-// queueReviewIfDue reviews a session after its first prompt, even while its agent runs, so it gets a name right away,
-// then every few prompts while its agent waits, and once all of it when it goes quiet: idle for a while.
+// queueReviewIfDue keeps a session's name and progress current with the progress review: after its first prompt, even while
+// its agent runs, so it gets a name right away, then every few prompts while its agent waits, and whenever it goes quiet,
+// idle for a while, so den always knows where it stands. Once a quiet session has real work, the card review reads all of it
+// for what's worth keeping; the progress review goes first, so the card review sees where it stands.
 // Sessions last active before den started watching the repo start counting from now. It reports whether it changed the session.
 func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent.Digest) bool {
 	if session.Archived || digest.PromptCount == 0 {
@@ -256,71 +263,80 @@ func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent
 	}
 	// Agents started outside den have no status den can read, so going quiet is going idle for a while, for every session.
 	isQuiet := time.Since(session.LastActivityAt) > quietAfter
+	unreviewed := digest.PromptCount - session.ReviewedAtPrompt
+	if unreviewed > 0 && (session.ReviewedAtPrompt == 0 || unreviewed >= reviewEvery || isQuiet) {
+		currentModel.queueJob(job{kind: reviewJob, sessionId: session.SessionId})
+	}
 	if isQuiet && digest.PromptCount >= minimumQuietPrompts && session.QuietReviewedAtPrompt < digest.PromptCount {
 		currentModel.queueJob(job{kind: reviewJob, sessionId: session.SessionId, wholeSession: true})
-		return false
-	}
-	unreviewed := digest.PromptCount - session.ReviewedAtPrompt
-	if unreviewed > 0 && (session.ReviewedAtPrompt == 0 || unreviewed >= reviewEvery) {
-		currentModel.queueJob(job{kind: reviewJob, sessionId: session.SessionId})
 	}
 	return false
 }
 
-// applyReview carries out a review: a new name right away, and what's worth keeping as a suggestion. Everything is logged.
+// applyReview carries out a review: a progress review renames the session and updates where it stands,
+// a card review offers what's worth keeping as a suggestion. Everything is logged.
 func (currentModel *model) applyReview(done job, promptCount int, answer brain.ReviewAnswer) {
 	repository := &currentModel.repository
-	sessionId := done.sessionId
-	session := repository.FindSession(sessionId)
+	session := repository.FindSession(done.sessionId)
 	if session == nil {
 		return
 	}
-	wasTitled := session.TitledAtPrompt > 0
-	session.ReviewedAtPrompt, session.TitledAtPrompt = promptCount, promptCount
 	if done.wholeSession {
 		session.QuietReviewedAtPrompt = promptCount
+		currentModel.offerCards(session, answer)
+	} else {
+		currentModel.applyProgress(session, promptCount, answer)
 	}
-	if summary := strings.TrimSpace(answer.Summary); summary != "" {
-		session.Summary = summary
-	}
-	logDecision := func(action string, detail string, outcome string) {
-		currentModel.reportError(repository.LogDecision(store.Decision{Job: "review", SessionId: sessionId, FolderId: session.FolderId, Action: action, Detail: detail, Outcome: outcome}))
+	currentModel.saveRepository()
+}
+
+// applyProgress takes a progress review's title, unless the user pinned one or it only rewords the current one, and its progress.
+func (currentModel *model) applyProgress(session *store.Session, promptCount int, answer brain.ReviewAnswer) {
+	wasTitled := session.TitledAtPrompt > 0
+	session.ReviewedAtPrompt, session.TitledAtPrompt = promptCount, promptCount
+	if goal := strings.TrimSpace(answer.Progress.Goal); goal != "" {
+		session.Progress = store.Progress{Goal: goal, Done: strings.TrimSpace(answer.Progress.Done), Next: strings.TrimSpace(answer.Progress.Next)}
 	}
 	title := strings.Trim(strings.TrimSpace(answer.Title), "\"'.")
-	if title != "" && !strings.EqualFold(title, session.Title) {
-		switch {
-		case session.TitlePinned:
-			logDecision("retitle", title, "dropped: pinned")
-		case len([]rune(title)) > maximumTitleLength:
-			logDecision("retitle", title, "dropped: too long")
-		case wasTitled && isRewording(session.Title, title):
-			logDecision("retitle", session.Title+" → "+title, "dropped: same name, reworded")
-		default:
-			logDecision("retitle", session.Title+" → "+title, "applied")
-			currentModel.retitle(session, title)
-		}
+	if title == "" || strings.EqualFold(title, session.Title) {
+		return
 	}
+	switch {
+	case session.TitlePinned:
+		currentModel.logReviewDecision(session, "retitle", title, "dropped: pinned")
+	case len([]rune(title)) > maximumTitleLength:
+		currentModel.logReviewDecision(session, "retitle", title, "dropped: too long")
+	case wasTitled && isRewording(session.Title, title):
+		currentModel.logReviewDecision(session, "retitle", session.Title+" → "+title, "dropped: same name, reworded")
+	default:
+		currentModel.logReviewDecision(session, "retitle", session.Title+" → "+title, "applied")
+		currentModel.retitle(session, title)
+	}
+}
+
+// offerCards offers a card review's keep and rule as suggestions, unless the user already said no to them or enough are waiting.
+func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer) {
+	repository := &currentModel.repository
 	keepKind := answer.Keep.Kind
 	if keepKind == "" {
 		keepKind = "none"
 	}
-	suggestion, outcome := brain.KeepSuggestion(answer.Keep, *session, currentModel.digests[sessionId], repository)
+	suggestion, outcome := brain.KeepSuggestion(answer.Keep, *session, currentModel.digests[session.SessionId], repository)
 	if outcome == "proposed" && !repository.Offer(suggestion) {
 		outcome = "withheld: already rejected, or enough waiting"
 	}
-	scope := "latest turns"
-	if done.wholeSession {
-		scope = "whole session"
-	}
-	logDecision("keep "+keepKind, fmt.Sprintf("%s (%.2f, %s)", answer.Keep.Reason, answer.Keep.Confidence, scope), outcome)
+	currentModel.logReviewDecision(session, "keep "+keepKind, fmt.Sprintf("%s (%.2f)", answer.Keep.Reason, answer.Keep.Confidence), outcome)
 	if strings.TrimSpace(answer.Rule.Rule) != "" {
 		suggestion, outcome := brain.RuleSuggestion(answer.Rule, *session, currentModel.laptopTexts())
 		if outcome == "proposed" && !repository.Offer(suggestion) {
 			outcome = "withheld: already rejected, or enough waiting"
 		}
-		logDecision("rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
+		currentModel.logReviewDecision(session, "rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
 	}
-	currentModel.saveRepository()
+}
+
+func (currentModel *model) logReviewDecision(session *store.Session, action string, detail string, outcome string) {
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "review", SessionId: session.SessionId, FolderId: session.FolderId, Action: action, Detail: detail, Outcome: outcome}))
 }
 
 // laptopTexts are the laptop files a rule can go to, by path: the ones that exist, and those of installed tools.

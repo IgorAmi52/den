@@ -19,9 +19,9 @@ import (
 
 const callTimeout = 3 * time.Minute
 
-// claudeModel follows den's instructions on what not to do, which matters most where den acts without asking.
-// Its calls are short and need no thinking. Claude is den's fallback when codex isn't installed.
-const claudeModel = "sonnet"
+// claudeModels are what claude runs for a tier when codex isn't installed: haiku for routine calls, and for the rest sonnet,
+// which follows den's instructions on what not to do, which matters most where den acts without asking. Neither thinks.
+var claudeModels = map[Tier]string{Light: "haiku", Reasoning: "sonnet"}
 
 // Tier says how much thinking a call needs.
 type Tier int
@@ -45,8 +45,7 @@ type codexModel struct {
 }
 
 var codexModels = map[Tier]codexModel{
-	// Light runs on sol too until the call log shows luna ({name: "gpt-6-luna", reasoningEffort: "none", prices 0.10, 0.01, 0.125, 0.50}) judges as well.
-	Light:     {name: "gpt-6.1-sol", reasoningEffort: "low", inputPrice: 2, cachedPrice: 0.20, cacheWritePrice: 2.50, outputPrice: 10},
+	Light:     {name: "gpt-6-luna", reasoningEffort: "none", inputPrice: 0.10, cachedPrice: 0.01, cacheWritePrice: 0.125, outputPrice: 0.50},
 	Reasoning: {name: "gpt-6.1-sol", reasoningEffort: "low", inputPrice: 2, cachedPrice: 0.20, cacheWritePrice: 2.50, outputPrice: 10},
 }
 
@@ -64,6 +63,8 @@ type Request struct {
 	Tier   Tier
 	// ReadsRepository is the repo a call may read files of, or "" for a call with no tools at all.
 	ReadsRepository string
+	// Files are written by name into the call's working directory, for a call that reads the repo to read when it needs them.
+	Files map[string]string
 }
 
 // Usage is what a call cost and which model made it.
@@ -78,7 +79,7 @@ type Usage struct {
 // Name says which CLI and models make the calls, like "codex gpt-6-luna · gpt-6.1-sol".
 func (caller Caller) Name() string {
 	if caller.Tool == "claude" {
-		return "claude " + claudeModel
+		return "claude " + claudeModels[Light] + " · " + claudeModels[Reasoning]
 	}
 	if codexModels[Light].name == codexModels[Reasoning].name {
 		return "codex " + codexModels[Reasoning].name
@@ -95,8 +96,8 @@ func Find() (Caller, bool) {
 	return Caller{}, false
 }
 
-// Call runs the request and decodes the answer into answer. Calls run from den's own directory,
-// never from the repo, so they never show up as the repo's sessions.
+// Call runs the request and decodes the answer into answer. Each call runs in its own directory inside den's,
+// never from the repo, so it never shows up as the repo's sessions.
 func (caller Caller) Call(request Request, answer any) (Usage, error) {
 	deadline, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
@@ -104,13 +105,23 @@ func (caller Caller) Call(request Request, answer any) (Usage, error) {
 	if err != nil {
 		return Usage{}, err
 	}
+	callDirectory, err := os.MkdirTemp(directory, "call-")
+	if err != nil {
+		return Usage{}, err
+	}
+	defer os.RemoveAll(callDirectory)
+	for name, text := range request.Files {
+		if err := os.WriteFile(filepath.Join(callDirectory, name), []byte(text), 0o644); err != nil {
+			return Usage{}, err
+		}
+	}
 	started := time.Now()
 	var raw []byte
 	var usage Usage
 	if caller.Tool == "codex" {
-		raw, usage, err = callCodex(deadline, directory, request)
+		raw, usage, err = callCodex(deadline, callDirectory, request)
 	} else {
-		raw, usage, err = callClaude(deadline, directory, request)
+		raw, usage, err = callClaude(deadline, callDirectory, request)
 	}
 	usage.Duration = time.Since(started)
 	if err != nil {
@@ -122,7 +133,7 @@ func (caller Caller) Call(request Request, answer any) (Usage, error) {
 	return usage, nil
 }
 
-func callClaude(deadline context.Context, directory string, request Request) ([]byte, Usage, error) {
+func callClaude(deadline context.Context, callDirectory string, request Request) ([]byte, Usage, error) {
 	schema, err := json.Marshal(request.Schema)
 	if err != nil {
 		return nil, Usage{}, err
@@ -131,11 +142,11 @@ func callClaude(deadline context.Context, directory string, request Request) ([]
 	if request.ReadsRepository != "" {
 		tools = []string{"--tools", "Read,Glob,Grep", "--add-dir", request.ReadsRepository}
 	}
-	arguments := append([]string{"-p", "--safe-mode", "--model", claudeModel, "--settings", `{"alwaysThinkingEnabled":false}`,
+	arguments := append([]string{"-p", "--safe-mode", "--model", claudeModels[request.Tier], "--settings", `{"alwaysThinkingEnabled":false}`,
 		"--system-prompt", request.System}, tools...)
 	arguments = append(arguments, "--strict-mcp-config", "--no-session-persistence", "--output-format", "json", "--json-schema", string(schema))
 	command := exec.CommandContext(deadline, "claude", arguments...)
-	command.Dir = directory
+	command.Dir = callDirectory
 	command.Stdin = strings.NewReader(request.Prompt)
 	output, err := runCommand(command)
 	if err != nil {
@@ -154,21 +165,16 @@ func callClaude(deadline context.Context, directory string, request Request) ([]
 	if err := json.Unmarshal(output, &result); err != nil {
 		return nil, Usage{}, fmt.Errorf("claude gave no result: %s", firstLine(string(output)))
 	}
-	usage := Usage{Model: claudeModel, InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens, CostDollars: result.TotalCostDollars}
+	usage := Usage{Model: claudeModels[request.Tier], InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens, CostDollars: result.TotalCostDollars}
 	if result.IsError || len(result.StructuredOutput) == 0 || string(result.StructuredOutput) == "null" {
 		return nil, usage, fmt.Errorf("claude failed: %s", firstLine(result.Result))
 	}
 	return result.StructuredOutput, usage, nil
 }
 
-func callCodex(deadline context.Context, directory string, request Request) ([]byte, Usage, error) {
+func callCodex(deadline context.Context, callDirectory string, request Request) ([]byte, Usage, error) {
 	model := codexModels[request.Tier]
 	usage := Usage{Model: model.name}
-	callDirectory, err := os.MkdirTemp(directory, "call-")
-	if err != nil {
-		return nil, usage, err
-	}
-	defer os.RemoveAll(callDirectory)
 	schema, err := json.Marshal(request.Schema)
 	if err != nil {
 		return nil, usage, err

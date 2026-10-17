@@ -36,8 +36,8 @@ type Session struct {
 	ReviewedAtPrompt int `json:"reviewedAtPrompt,omitempty"`
 	// QuietReviewedAtPrompt is the prompt count when den last reviewed the whole session after it went quiet.
 	QuietReviewedAtPrompt int `json:"quietReviewedAtPrompt,omitempty"`
-	// Summary is den's one sentence on what the session is doing and where it stands.
-	Summary string `json:"summary,omitempty"`
+	// Progress is den's note on where the session stands, updated by every review rather than rewritten.
+	Progress Progress `json:"progress,omitzero"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
 	WithoutContext bool      `json:"withoutContext,omitempty"`
 	Archived       bool      `json:"archived,omitempty"`
@@ -45,6 +45,13 @@ type Session struct {
 	// CreatedAt is when den started tracking the session, so an imported old session gets its days before the archive.
 	CreatedAt      time.Time `json:"createdAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
+}
+
+// Progress is what a session is after, what it got done so far, and what comes next; Next is empty when nothing is left.
+type Progress struct {
+	Goal string `json:"goal"`
+	Done string `json:"done"`
+	Next string `json:"next"`
 }
 
 const (

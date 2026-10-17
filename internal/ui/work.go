@@ -47,7 +47,7 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 	keys := currentModel.keys
 	if key.Matches(keyPress, keys.newFromAgent) && currentModel.prompt == nil && !currentModel.filtering {
 		currentModel.confirming, currentModel.picker = nil, nil
-		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false)
+		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false, "")
 	}
 	switch {
 	case currentModel.prompt != nil:
@@ -85,9 +85,9 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 			currentModel.previewOffset += 5
 		}
 	case key.Matches(keyPress, keys.newSession):
-		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false)
+		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), false, "")
 	case key.Matches(keyPress, keys.newWithout):
-		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), true)
+		return currentModel, currentModel.startNewSession(currentModel.folderForNewItems(), true, "")
 	case key.Matches(keyPress, keys.jump):
 		currentModel.jumpToAgent(keyPress.String())
 	case key.Matches(keyPress, keys.wide):
@@ -207,13 +207,15 @@ func (currentModel *model) editContextFile(laptopTool string) tea.Cmd {
 }
 
 // startNewSession opens an agent in the folder, asking which agent first when more than one is installed.
-func (currentModel *model) startNewSession(folderId string, withoutContext bool) tea.Cmd {
+// A handoff, when given, is added to the context the agent starts with.
+func (currentModel *model) startNewSession(folderId string, withoutContext bool, handoff string) tea.Cmd {
 	if len(currentModel.openAgents) >= maximumAgents {
 		currentModel.setError(fmt.Sprintf("%d agents open, close one first", maximumAgents))
 		return nil
 	}
 	currentModel.newSessionFolderId = folderId
 	currentModel.newSessionWithoutContext = withoutContext
+	currentModel.newSessionHandoff = handoff
 	if len(currentModel.installedAgents) == 1 {
 		currentModel.openAgent(currentModel.installedAgents[0])
 		return nil

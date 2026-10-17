@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -178,6 +179,7 @@ func (currentModel model) contextPaneInput() brain.ChatInput {
 		RepositoryNotes: currentModel.repository.ReadContext(""),
 		EditingContext:  true,
 		Transcripts:     currentModel.chatTranscripts(pane.folderId, ""),
+		Now:             time.Now(),
 	}
 }
 

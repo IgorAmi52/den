@@ -233,14 +233,17 @@ func (currentModel *model) applyWelcome() {
 			Title:            arrival.Title,
 			TitledAtPrompt:   digest.PromptCount,
 			ReviewedAtPrompt: digest.PromptCount,
-			Summary:          arrival.Why,
 			CreatedAt:        now,
 			LastActivityAt:   digest.LastActivityAt,
 		}
-		// The first run sees only a session's start and end, so one worth keeping gets a full review of all its prompts;
-		// the rest wait for new prompts.
+		// The first run sees only a session's start and end, so one worth keeping gets the card review of all its prompts,
+		// and one worth keeping or unfinished gets the progress review of its latest prompt, which writes where it stands.
+		// The rest wait for new prompts.
 		if arrival.Verdict != brain.VerdictKeep {
 			session.QuietReviewedAtPrompt = digest.PromptCount
+		}
+		if arrival.Verdict != brain.VerdictDone {
+			session.ReviewedAtPrompt = digest.PromptCount - 1
 		}
 		currentModel.repository.Sessions = append(currentModel.repository.Sessions, session)
 		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "first run", SessionId: digest.SessionId,

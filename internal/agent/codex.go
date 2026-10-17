@@ -151,9 +151,13 @@ func (Codex) Turns(sessionId string) ([]Turn, error) {
 	if len(transcriptPaths) == 0 {
 		return nil, nil
 	}
+	return cachedTurnsOf(transcriptPaths[0], readCodexTurns)
+}
+
+func readCodexTurns(transcriptPath string) ([]Turn, error) {
 	var turns []Turn
 	agentText := ""
-	err = eachJsonLine(transcriptPaths[0], func(line json.RawMessage) bool {
+	err := eachJsonLine(transcriptPath, func(line json.RawMessage) bool {
 		var event codexEvent
 		if json.Unmarshal(line, &event) != nil || event.Payload.Type != "message" {
 			return true

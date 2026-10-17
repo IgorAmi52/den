@@ -23,8 +23,10 @@ const (
 	// so "make this chat the folder's context" has the chat to work from.
 	maximumChatTranscripts = 3
 	maximumChatTurns       = 12
-	contextHeadLength      = 300
-	notesExcerptLength     = 1500
+	// maximumTranscriptFileTurns is how much of each session's conversation its file for the chat holds: the latest turns.
+	maximumTranscriptFileTurns = 40
+	contextHeadLength          = 300
+	notesExcerptLength         = 1500
 	// maximumEditedContextLength is how much of a context den reads when asked to change it: all of any sensible one.
 	maximumEditedContextLength = 60000
 )
@@ -40,14 +42,24 @@ const titleRules = "A title is one emoji for the session's kind, a space, then a
 	"the repo's name, since every session is in that repo. It names the session's goal rather than its latest step, is specific enough " +
 	"to tell apart from other sessions (never \"🐛 Bug\"), and has no branch names or issue keys."
 
-const reviewSystem = "You are den. You watch a developer's AI coding agent sessions in one repo. Sessions sit in folders, and each folder has context: " +
+// reviewIntroduction is what both reviews know about den and its folders.
+const reviewIntroduction = "You are den. You watch a developer's AI coding agent sessions in one repo. Sessions sit in folders, and each folder has context: " +
 	"notes every new session started in it begins with. A folder holds either a piece of work, like a feature, or a way of working, like research " +
-	"(a skill). You look at one session and answer three things. Most of the time nothing should change: return empty values and kind none. " +
-	"Never invent facts; everything must come from the session.\n\n" +
+	"(a skill). Never invent facts; everything must come from the session.\n\n"
+
+// progressReviewSystem keeps a session's name and where it stands current, often and cheaply, while the user works.
+const progressReviewSystem = reviewIntroduction + "You look at one session and answer two things.\n\n" +
 	"title: the session's name in the tree. Return \"\" to keep the current one, which is the normal answer. Rename only when the current " +
 	"title is a raw prompt, too long, or would mislead someone looking for this session. " + titleRules + "\n\n" +
-	"summary: one sentence, at most 15 words, on what the session is doing and where it stands, in den's voice: " + denVoice + " " +
-	"like \"Coupons no longer apply twice; tests pass, case handling is next.\"\n\n" + keepRules + "\n\n" + ruleRules
+	"progress: where the session stands, for whoever picks it up later. Plain facts, no voice. Update the current progress " +
+	"rather than starting over: goal is what the session is after, at most 12 words, kept unless the goal changed; done is what's " +
+	"finished, decided or found so far, at most 20 words, folding in what's new; next is what comes next or what it waits on, " +
+	"at most 12 words, or \"\" when nothing is left. Like goal \"Stop coupons applying twice\", done \"Fixed the double apply; " +
+	"tests pass\", next \"Handle mixed-case coupon codes\"."
+
+// cardReviewSystem looks at all of a session once it went quiet, and decides whether any of it is worth a card.
+const cardReviewSystem = reviewIntroduction + "The session went quiet, and you look at all of it to answer two things. " +
+	"Most of the time nothing is worth keeping: return kind none and an empty rule.\n\n" + keepRules + "\n\n" + ruleRules
 
 // denVoice is how den talks to the user, wherever it does: concise and clear first, with a light, upbeat personality.
 // It never applies to titles or context files, which are working material.
@@ -70,6 +82,13 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"say you don't know. Call sessions by their title, never by their id. " +
 	"You never run code and never change the repo. You can read the repo's files, at REPO PATH, but only when the user asks you to " +
 	"look at a file or at what the repo says, like \"put PLAN.md into its context\"; otherwise answer from the facts given.\n\n" +
+	"Finding where work stands: SESSIONS lists every session with when it was last used, whether its agent is open, and den's notes on " +
+	"its goal, what's done and what's next. Answer from that list when it's enough, like \"what did I work on Friday?\" against TODAY. " +
+	"Each session's whole conversation is in the file its line names, like s3.md, in your working directory: read the ones you need " +
+	"whenever the list doesn't say enough, like what was decided or exactly where it stopped, and only those.\n\n" +
+	"Picking work back up: when the user wants to continue earlier work in a new session, propose startSession with a handoff brief " +
+	"you write after reading that session's file, for the agent that starts with it: markdown with only sections you have facts for " +
+	"(## Where it stands, ## Decisions and constraints, ## Next, ## Pointers with the files involved), under 200 words, facts only.\n\n" +
 	"How context works: each folder has one context file. By default it's den's own; linking a file of the user's, like docs/PLAN.md, " +
 	"makes that file the context instead, and unlinking brings den's back. A session starts with the repo's notes, " +
 	"then the context of each folder above it, then its own folder's. editNotes rewrites whichever file a folder's context is.\n\n" +
@@ -99,6 +118,8 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"- replaceText: change one passage of a folder's context, or the repo's with folder \"repo\" (folder, from: the exact current passage, " +
 	"text: what replaces it). Prefer it to editNotes for any change that leaves the rest as it is.\n" +
 	"- editNotes: rewrite a folder's context, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
+	"- startSession: open a new agent session that picks up earlier work (folder: where it goes, as listed, \"Inbox\" for none, or a folder " +
+	"createFolder makes; session: the session it continues, or empty; text: the handoff brief)\n" +
 	"- acceptSuggestion: do den's suggestion the chat is about, as it is\n" +
 	"- withdrawSuggestion: drop den's suggestion the chat is about, when the user doesn't want it or its evidence doesn't hold up"
 
@@ -121,7 +142,8 @@ type ReviewInput struct {
 	Turns       []agent.Turn
 	FirstTurn   int
 	NewFromTurn int
-	// AllPrompts are every prompt of the session, for the review of a whole session once it went quiet.
+	// AllPrompts are every prompt of the session. Given, the review is the card review of a session that went quiet;
+	// otherwise it's the progress review of its latest turns.
 	AllPrompts      []string
 	Repository      *store.Repository
 	FolderNotes     string
@@ -133,10 +155,10 @@ type ReviewInput struct {
 }
 
 type ReviewAnswer struct {
-	Title   string `json:"title"`
-	Summary string `json:"summary"`
-	Keep    Keep   `json:"keep"`
-	Rule    Rule   `json:"rule"`
+	Title    string         `json:"title"`
+	Progress store.Progress `json:"progress"`
+	Keep     Keep           `json:"keep"`
+	Rule     Rule           `json:"rule"`
 }
 
 func ReviewRequest(input ReviewInput) helper.Request {
@@ -150,9 +172,12 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	fmt.Fprintf(&prompt, "title: %s\nfolder: %s\n", title, repository.FolderName(input.Session.FolderId))
 	writeField(&prompt, "first prompt", startOfText(input.Digest.FirstPrompt, 600))
 	writeField(&prompt, "files edited", strings.Join(relativePaths(repository.RepositoryPath, input.Digest.TouchedFiles, 15), ", "))
-	writeField(&prompt, "den's summary so far", input.Session.Summary)
-	if len(input.AllPrompts) > 0 {
-		prompt.WriteString("\nTHE SESSION WENT QUIET, SO THIS IS A LOOK AT ALL OF IT. EVERY PROMPT THE USER TYPED\n")
+	writeField(&prompt, "goal so far", input.Session.Progress.Goal)
+	writeField(&prompt, "done so far", input.Session.Progress.Done)
+	writeField(&prompt, "next so far", input.Session.Progress.Next)
+	isCardReview := len(input.AllPrompts) > 0
+	if isCardReview {
+		prompt.WriteString("\nEVERY PROMPT THE USER TYPED\n")
 		for index, userPrompt := range input.AllPrompts[max(len(input.AllPrompts)-maximumWholeSessionPrompts, 0):] {
 			fmt.Fprintf(&prompt, "%d. %s\n", index+1, startOfText(userPrompt, wholeSessionPromptLength))
 		}
@@ -160,6 +185,14 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	fmt.Fprintf(&prompt, "\nLATEST TURNS (turns marked new came after den last looked)\n")
 	writeTurns(&prompt, input.Turns, input.FirstTurn, maximumTurnsPerReview, input.NewFromTurn)
 	writeField(&prompt, "agent's latest reply", input.Digest.LastAgentMessage)
+	if !isCardReview {
+		return helper.Request{
+			System: progressReviewSystem,
+			Prompt: prompt.String(),
+			Schema: objectSchema(map[string]any{"title": stringSchema(), "progress": objectSchema(map[string]any{"goal": stringSchema(), "done": stringSchema(), "next": stringSchema()})}),
+			Tier:   helper.Light,
+		}
+	}
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
 	if input.Session.FolderId != "" {
 		prompt.WriteString("\nTHIS FOLDER'S CONTEXT\n" + orNone(notesExcerpt(input.FolderNotes)) + "\n")
@@ -167,15 +200,11 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
 	prompt.WriteString("\nLAPTOP RULES (already in every repo)\n" + orNone(notesExcerpt(input.LaptopRules)) + "\n")
 	prompt.WriteString(lessonsSection(input.Lessons))
-	tier := helper.Light
-	if len(input.AllPrompts) > 0 {
-		tier = helper.Reasoning
-	}
 	return helper.Request{
-		System: reviewSystem,
+		System: cardReviewSystem,
 		Prompt: prompt.String(),
-		Schema: objectSchema(map[string]any{"title": stringSchema(), "summary": stringSchema(), "keep": keepSchema(), "rule": ruleSchema()}),
-		Tier:   tier,
+		Schema: objectSchema(map[string]any{"keep": keepSchema(), "rule": ruleSchema()}),
+		Tier:   helper.Reasoning,
 	}
 }
 
@@ -281,6 +310,11 @@ type ChatInput struct {
 	// EditingContext is set when the user asks from a folder's context pane, so the answer is a change to that context.
 	EditingContext bool
 	Lessons        string
+	Now            time.Time
+	// AgentStatuses are the open agents' statuses by session id: running, waiting or done.
+	AgentStatuses map[string]string
+	// SessionTurns are the conversations of the listed sessions by session id, which the chat reads as files when it needs them.
+	SessionTurns map[string][]agent.Turn
 }
 
 type ChatAnswer struct {
@@ -351,19 +385,19 @@ func ChatRequest(input ChatInput) helper.Request {
 	default:
 		prompt.WriteString("THE CHAT IS ABOUT THE WHOLE REPO " + filepath.Base(repository.RepositoryPath) + "\n")
 	}
+	prompt.WriteString("\nTODAY\n" + input.Now.Format("Monday, Jan 2 2006, 15:04") + "\n")
 	prompt.WriteString("\nREPO PATH\n" + repository.RepositoryPath + "\n")
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
-	prompt.WriteString("\nSESSIONS (id | title | folder | files edited | latest prompt)\n")
+	prompt.WriteString("\nSESSIONS (newest first)\n")
 	sessionIds := ChatSessionIds(input)
+	files := map[string]string{}
 	for index, sessionId := range sessionIds {
+		handle := fmt.Sprintf("s%d", index+1)
 		session := repository.FindSession(sessionId)
-		digest := input.Digests[sessionId]
-		state := ""
-		if session.Archived {
-			state = " (archived)"
+		prompt.WriteString(sessionIndexLine(handle, session, input))
+		if turns := input.SessionTurns[sessionId]; len(turns) > 0 {
+			files[handle+".md"] = transcriptFile(session, turns, input.Digests[sessionId])
 		}
-		fmt.Fprintf(&prompt, "s%d | %s%s | %s | %s | %s\n", index+1, session.Title, state, repository.FolderName(session.FolderId),
-			strings.Join(relativePaths(repository.RepositoryPath, digest.TouchedFiles, 5), ", "), startOfText(digest.LastPrompt, 160))
 	}
 	for _, transcript := range input.Transcripts {
 		session := repository.FindSession(transcript.SessionId)
@@ -396,11 +430,12 @@ func ChatRequest(input ChatInput) helper.Request {
 		Prompt:          prompt.String(),
 		Tier:            helper.Reasoning,
 		ReadsRepository: repository.RepositoryPath,
+		Files:           files,
 		Schema: objectSchema(map[string]any{
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{
 				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive", "addRule",
-					"moveNotes", "replaceText", "editNotes", "acceptSuggestion", "withdrawSuggestion"),
+					"moveNotes", "replaceText", "editNotes", "startSession", "acceptSuggestion", "withdrawSuggestion"),
 				"target":  enumSchema("", "folder", "repo", "laptop"),
 				"rule":    stringSchema(),
 				"from":    stringSchema(),
@@ -412,6 +447,63 @@ func ChatRequest(input ChatInput) helper.Request {
 			})),
 		}),
 	}
+}
+
+var agentStatusDescriptions = map[string]string{"running": "working", "waiting": "waiting for the user", "done": "done, the user's turn"}
+
+// sessionIndexLine is what the chat always knows about a session: one line with when it was used, its agent, den's notes on
+// where it stands, and the file holding its conversation, if there is one.
+func sessionIndexLine(handle string, session *store.Session, input ChatInput) string {
+	repository := input.Repository
+	digest := input.Digests[session.SessionId]
+	fields := []string{handle, session.Title}
+	if session.Archived {
+		fields[1] += " (archived)"
+	}
+	fields = append(fields, "folder "+repository.FolderName(session.FolderId))
+	lastUsed := digest.LastActivityAt
+	if lastUsed.IsZero() {
+		lastUsed = session.LastActivityAt
+	}
+	fields = append(fields, "last used "+lastUsed.In(input.Now.Location()).Format("Mon Jan 2 15:04")+", "+roughAge(input.Now.Sub(lastUsed))+" ago")
+	agentStatus := "agent closed"
+	if status, open := input.AgentStatuses[session.SessionId]; open {
+		agentStatus = "agent open"
+		if described := agentStatusDescriptions[status]; described != "" {
+			agentStatus += ", " + described
+		}
+	}
+	fields = append(fields, agentStatus)
+	labeled := []struct{ label, value string }{
+		{"branch", digest.Branch},
+		{"pull request", digest.PullRequest},
+		{"goal", session.Progress.Goal},
+		{"done", session.Progress.Done},
+		{"next", session.Progress.Next},
+		{"agent's recap", digest.Recap},
+		{"files edited", strings.Join(relativePaths(repository.RepositoryPath, digest.TouchedFiles, 5), ", ")},
+		{"latest prompt", startOfText(digest.LastPrompt, 160)},
+	}
+	for _, field := range labeled {
+		if strings.TrimSpace(field.value) != "" {
+			fields = append(fields, field.label+": "+field.value)
+		}
+	}
+	if len(input.SessionTurns[session.SessionId]) > 0 {
+		fields = append(fields, "conversation in "+handle+".md")
+	}
+	return strings.Join(fields, " | ") + "\n"
+}
+
+// transcriptFile is a session's conversation as the chat reads it from a file: how it started, then its latest turns.
+func transcriptFile(session *store.Session, turns []agent.Turn, digest agent.Digest) string {
+	var file strings.Builder
+	file.WriteString("# " + session.Title + "\n\n")
+	writeField(&file, "first prompt", startOfText(digest.FirstPrompt, 600))
+	file.WriteString("\n")
+	writeTurns(&file, turns, 0, maximumTranscriptFileTurns, -1)
+	writeField(&file, "agent's latest reply", digest.LastAgentMessage)
+	return file.String()
 }
 
 // folderOverview lists the folders with what's in them, so the model can file by more than a name.

@@ -172,6 +172,8 @@ type model struct {
 	prompt                   *textPrompt
 	statusMessage            string
 	statusIsError            bool
+	// newSessionHandoff is the brief the next new session starts with, when the chat proposed picking up earlier work.
+	newSessionHandoff string
 	// dragging matches the session held with the mouse, dropTargetRow the row under the mouse, or -1.
 	dragging      func(listRow) bool
 	dropTargetRow int
@@ -434,6 +436,10 @@ func (currentModel *model) jumpToAgent(key string) {
 func (currentModel *model) openAgent(adapter agent.Adapter) {
 	folderId := currentModel.newSessionFolderId
 	launch, contextState := currentModel.launchFor(folderId, !currentModel.newSessionWithoutContext)
+	if handoff := strings.TrimSpace(currentModel.newSessionHandoff); handoff != "" {
+		launch.Context = strings.TrimSpace(launch.Context + "\n\n# Handoff from earlier work\n\n" + handoff)
+		contextState = "notes"
+	}
 	command, sessionId := adapter.NewSessionCommand(launch)
 	paneId := currentModel.launchInPane(adapter.Name(), sessionId, "", folderId, contextState, currentModel.workingDirectory, command)
 	if contextState == "none" {

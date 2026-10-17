@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -275,6 +276,7 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 		Digests:         currentModel.digests,
 		About:           about,
 		RepositoryNotes: currentModel.repository.ReadContext(""),
+		Now:             time.Now(),
 	}
 	if len(suggestion.SessionIds) == 1 {
 		input.SubjectSession = suggestion.SessionIds[0]

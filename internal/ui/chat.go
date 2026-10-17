@@ -5,6 +5,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
@@ -154,6 +155,20 @@ func (currentModel model) chatInput() brain.ChatInput {
 		SubjectFolder:   state.subject.folderId,
 		SubjectSession:  state.subject.sessionId,
 		RepositoryNotes: currentModel.repository.ReadContext(""),
+		Now:             time.Now(),
+		AgentStatuses:   map[string]string{},
+		SessionTurns:    map[string][]agent.Turn{},
+	}
+	for _, open := range currentModel.openAgents {
+		input.AgentStatuses[open.sessionId] = open.status
+	}
+	for _, sessionId := range brain.ChatSessionIds(input) {
+		session := currentModel.repository.FindSession(sessionId)
+		if adapter, known := agent.ByName(session.Tool); known {
+			if turns, err := adapter.Turns(sessionId); err == nil && len(turns) > 0 {
+				input.SessionTurns[sessionId] = turns
+			}
+		}
 	}
 	if state.about != nil {
 		label, summary := currentModel.suggestionSummary(*state.about)
@@ -264,6 +279,12 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 			if session != nil {
 				repository.SetArchived(session.SessionId, true)
 			}
+		case "startSession":
+			folderId := action.FolderId
+			if action.Name != "" {
+				folderId = currentModel.folderNamed(action.Name)
+			}
+			currentModel.startNewSession(folderId, false, action.Text)
 		case "addRule":
 			currentModel.addRuleNow(action)
 		case "moveNotes":

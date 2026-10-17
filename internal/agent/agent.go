@@ -78,7 +78,11 @@ type Digest struct {
 	// StartingFiles are the markdown files the first prompt points at, like @docs/PLAN.md, that exist.
 	StartingFiles []string
 	// UsedSkills are the skills and slash commands run in the session, by name, once per run.
-	UsedSkills     []string
+	UsedSkills []string
+	// Recap is the tool's own latest note on where the session stands, when it writes one.
+	Recap string
+	// PullRequest is the link to the pull request the session opened, when the tool records one.
+	PullRequest    string
 	StartedAt      time.Time
 	LastActivityAt time.Time
 }
@@ -314,6 +318,40 @@ func cachedDigestOf(transcriptPath string, read func(transcriptPath string) Dige
 	digestCache[transcriptPath] = cachedDigest{size: information.Size(), modifiedTime: information.ModTime(), digest: digest}
 	digestCacheMutex.Unlock()
 	return digest, nil
+}
+
+type cachedTurns struct {
+	size         int64
+	modifiedTime time.Time
+	turns        []Turn
+}
+
+// turnsCache keeps turns by transcript path, valid while the file's size and modification time stay the same,
+// so a chat can list many sessions' conversations without reading every transcript again.
+var (
+	turnsCache      = map[string]cachedTurns{}
+	turnsCacheMutex sync.Mutex
+)
+
+func cachedTurnsOf(transcriptPath string, read func(transcriptPath string) ([]Turn, error)) ([]Turn, error) {
+	information, err := os.Stat(transcriptPath)
+	if err != nil {
+		return nil, err
+	}
+	turnsCacheMutex.Lock()
+	cached, exists := turnsCache[transcriptPath]
+	turnsCacheMutex.Unlock()
+	if exists && cached.size == information.Size() && cached.modifiedTime.Equal(information.ModTime()) {
+		return cached.turns, nil
+	}
+	turns, err := read(transcriptPath)
+	if err != nil {
+		return nil, err
+	}
+	turnsCacheMutex.Lock()
+	turnsCache[transcriptPath] = cachedTurns{size: information.Size(), modifiedTime: information.ModTime(), turns: turns}
+	turnsCacheMutex.Unlock()
+	return turns, nil
 }
 
 // settleIssueKey prefers the issue key in the branch over one typed in a prompt.

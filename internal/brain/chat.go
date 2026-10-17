@@ -42,7 +42,7 @@ type ChatAction struct {
 	// Target is folder, repo or laptop, for a rule.
 	Target string
 	Rule   string
-	// FromFolderId is where notes move from; Text is a folder's whole new notes, or a new folder's.
+	// FromFolderId is where notes move from; Text is a folder's whole new notes, a new folder's, or a new session's handoff.
 	FromFolderId string
 	Text         string
 	// Change is the passage as it becomes, for a change to part of a context; a plan shows it instead of the whole text.
@@ -228,6 +228,26 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			if session != nil && !session.Archived {
 				actions = append(actions, ChatAction{Kind: "archive", SessionId: session.SessionId, Description: "archive \"" + session.Title + "\""})
 			}
+		case "startSession":
+			brief := strings.TrimSpace(proposed.Text)
+			isInbox := strings.EqualFold(strings.TrimSpace(proposed.Folder), "Inbox") || strings.TrimSpace(proposed.Folder) == ""
+			isNewFolder := createdNames[strings.ToLower(strings.TrimSpace(proposed.Folder))]
+			if brief == "" || (folder == nil && !isInbox && !isNewFolder) {
+				break
+			}
+			action := ChatAction{Kind: "startSession", Text: brief + "\n", Description: "start a session in Inbox"}
+			switch {
+			case folder != nil:
+				action.FolderId, action.Description = folder.Id, "start a session in "+folder.Name
+			case isNewFolder:
+				action.Name, action.Description = strings.TrimSpace(proposed.Folder), "start a session in "+strings.TrimSpace(proposed.Folder)
+			}
+			if session != nil {
+				action.SessionId = session.SessionId
+				action.Description += " picking up \"" + session.Title + "\""
+			}
+			action.Description += ", starting with this handoff:"
+			actions = append(actions, action)
 		case "addRule":
 			rule := strings.TrimSpace(proposed.Rule)
 			if folder == nil {
