@@ -204,13 +204,15 @@ func DisplayPopup(title string, workingDirectory string, command []string) error
 
 // BindDenKeys binds Option keys, with no prefix, in den windows: ⌥1–⌥4 select that agent, the panel being the top-left
 // pane and the agents following it in pane order; ⌥0 selects the panel, or from the panel goes back to the last agent;
-// ⌥N asks the panel for a new agent. Outside den windows each key reaches the program as usual.
+// ⌥Tab moves to the next pane, wrapping from the last agent back to the panel; ⌥N asks the panel for a new agent.
+// Outside den windows each key reaches the program as usual.
 // They replace Ctrl+Space, which an earlier den bound and macOS keeps for switching keyboard layouts.
 func BindDenKeys(windowMarkerOption string, panelMarkerOption string) error {
 	insideDenWindow := "#{" + windowMarkerOption + "}"
 	bindings := map[string]string{
-		"M-0": "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\"",
-		"M-n": "send-keys -t '{top-left}' M-n",
+		"M-0":   "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\"",
+		"M-n":   "send-keys -t '{top-left}' M-n",
+		"M-Tab": "select-pane -t ':.+'",
 	}
 	for agentNumber := 1; agentNumber <= 4; agentNumber++ {
 		number := strconv.Itoa(agentNumber)

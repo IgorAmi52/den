@@ -337,6 +337,7 @@ func (currentModel model) welcomeKeysBody(width int) []string {
 	lines = append(lines, "",
 		keyLine("⌥1–⌥4", "jump to that agent"),
 		keyLine("⌥0", "jump to den, and back"),
+		keyLine("⌥⇥", "next pane, round to den"),
 		keyLine("⌥N", "start a new agent"),
 		keyLine("click", "focus any pane"),
 		"", theme.columnHeader.Render("IN DEN"),

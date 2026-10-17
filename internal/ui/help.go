@@ -21,7 +21,7 @@ func (currentModel model) helpGroups() []helpGroup {
 	return []helpGroup{
 		{title: "FROM ANYWHERE", bindings: []key.Binding{
 			optionKey("⌥1-4", "jump to that agent"), optionKey("⌥0", "jump to den, and back"),
-			keys.newFromAgent, optionKey("click", "focus any pane"),
+			optionKey("⌥⇥", "next pane"), keys.newFromAgent, optionKey("click", "focus any pane"),
 		}},
 		{title: "YES AND NO", bindings: []key.Binding{
 			relabeled(keys.accept, "answer den's suggestions"), relabeled(keys.yes, "yes, there and when den asks"),
