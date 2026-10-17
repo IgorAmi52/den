@@ -41,10 +41,14 @@ const (
 	reviseJob
 	// contextJob answers what the user asked to change in a folder's context pane.
 	contextJob
+	// lessonJob learns from a card the user said no to, for den's lessons file.
+	lessonJob
+	// compactLessonsJob shortens den's lessons file once it grew too long.
+	compactLessonsJob
 )
 
 func (kind jobKind) String() string {
-	return [...]string{"review", "chat", "revise", "context"}[kind]
+	return [...]string{"review", "chat", "revise", "context", "lesson", "compact lessons"}[kind]
 }
 
 // job is one model call. Its input is built when it starts, so it sees the latest state.
@@ -54,6 +58,8 @@ type job struct {
 	suggestionId string
 	// wholeSession makes a review look at all of a session that went quiet, not only its latest turns.
 	wholeSession bool
+	// rejectedCard is the card a lesson job learns from, spelled out with anything said about it.
+	rejectedCard string
 }
 
 type jobDoneMessage struct {
@@ -135,6 +141,7 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 			FolderNotes:     currentModel.folderNotesText(session.FolderId),
 			RepositoryNotes: repository.ReadContext(""),
 			LaptopRules:     currentModel.laptopRulesText(),
+			Lessons:         store.ReadLessons(),
 		}
 		if next.wholeSession {
 			for _, turn := range turns {
@@ -145,16 +152,23 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 		return run(request, &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: len(turns)})
 	case contextJob:
 		input := currentModel.contextPaneInput()
+		input.Lessons = store.ReadLessons()
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
 	case chatJob:
 		input := currentModel.chatInput()
+		input.Lessons = store.ReadLessons()
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
+	case lessonJob:
+		return run(brain.LessonRequest(next.rejectedCard, store.ReadLessons()), &brain.LessonAnswer{}, jobDoneMessage{job: next})
+	case compactLessonsJob:
+		return run(brain.CompactLessonsRequest(store.ReadLessons()), &brain.CompactLessonsAnswer{}, jobDoneMessage{job: next})
 	case reviseJob:
 		input, exists := currentModel.reviseInput()
 		if !exists {
 			currentModel.dock.thinking = false
 			return nil
 		}
+		input.Lessons = store.ReadLessons()
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
 	}
 	return nil
@@ -194,6 +208,10 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	currentModel.helperUsage.OutputTokens += done.usage.OutputTokens
 	currentModel.helperUsage.CostDollars += done.usage.CostDollars
 	switch answer := done.answer.(type) {
+	case *brain.LessonAnswer:
+		currentModel.applyLesson(answer.Lesson)
+	case *brain.CompactLessonsAnswer:
+		currentModel.applyCompactedLessons(answer.Lessons)
 	case *brain.ReviewAnswer:
 		currentModel.keepingSelection(func() { currentModel.applyReview(done.job, done.promptCount, *answer) })
 	case *brain.ChatAnswer:
@@ -361,4 +379,35 @@ func (currentModel *model) logCall(done jobDoneMessage) {
 func promptVersion(system string) string {
 	hash := sha256.Sum256([]byte(system))
 	return hex.EncodeToString(hash[:4])
+}
+
+// applyLesson adds what den learned from a rejected card to its lessons, and compacts them once they grew too long.
+func (currentModel *model) applyLesson(lesson string) {
+	lessons := store.ReadLessons()
+	updated := brain.AddLesson(lessons, lesson)
+	outcome := "nothing new"
+	if updated != lessons {
+		outcome = "learned"
+		if currentModel.reportError(store.WriteLessons(updated)) {
+			return
+		}
+		if len(updated) > brain.MaximumLessonsLength {
+			currentModel.queueJob(job{kind: compactLessonsJob})
+		}
+	}
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "lesson", Action: "lesson", Detail: lesson, Outcome: outcome}))
+}
+
+// applyCompactedLessons replaces the lessons with their shorter version, unless the model failed to shorten them.
+func (currentModel *model) applyCompactedLessons(compacted string) {
+	lessons := store.ReadLessons()
+	compacted = strings.TrimSpace(compacted) + "\n"
+	outcome := "applied"
+	if strings.TrimSpace(compacted) == "" || len(compacted) >= len(lessons) {
+		outcome = "dropped: not shorter"
+	} else if currentModel.reportError(store.WriteLessons(compacted)) {
+		return
+	}
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "lesson", Action: "compact",
+		Detail: fmt.Sprintf("%d → %d characters", len(lessons), len(compacted)), Outcome: outcome}))
 }

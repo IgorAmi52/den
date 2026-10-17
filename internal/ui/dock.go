@@ -43,6 +43,9 @@ type dockState struct {
 	item     dockItem
 	// bodyOffset scrolls a card too long for the panel, so the whole proposed context can be read.
 	bodyOffset int
+	// discussion is the last exchange about the card discussedId, kept after the reply is cleared, for the lesson of a no.
+	discussion  string
+	discussedId string
 }
 
 func newDockState() dockState {
@@ -130,6 +133,9 @@ func (currentModel *model) blurDock() {
 }
 
 func (currentModel *model) clearDockReply() {
+	if currentModel.dock.asked != "" {
+		currentModel.dock.discussion, currentModel.dock.discussedId = currentModel.dockDiscussion(), currentModel.dock.item.suggestionId
+	}
 	currentModel.dock.asked, currentModel.dock.reply, currentModel.dock.thinking = "", nil, false
 	currentModel.dock.bodyOffset = 0
 }
@@ -227,6 +233,7 @@ func (currentModel *model) answerDockItem(item dockItem, accepted bool) {
 		logged.Outcome = "accepted"
 		currentModel.acceptSuggestion(suggestion.Id)
 	} else {
+		currentModel.queueLesson(item, *suggestion)
 		currentModel.rejectSuggestion(suggestion.Id)
 	}
 	currentModel.reportError(currentModel.repository.LogDecision(logged))
@@ -261,20 +268,7 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 	if suggestion == nil || state.asked == "" {
 		return brain.ChatInput{}, false
 	}
-	tag, subject, details, why := currentModel.describeDockItem(state.item, reviseTextWidth)
-	about := tag + ": " + ansi.Strip(subject)
-	for _, detail := range details {
-		about += "\n" + ansi.Strip(detail)
-	}
-	if why != "" {
-		about += "\nwhy: " + why
-	}
-	if len(suggestion.Evidence) > 0 {
-		about += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(suggestion.Evidence, "\n- ")
-	}
-	if suggestion.ProposedText != "" {
-		about += "\nthe whole proposed text:\n" + suggestion.ProposedText
-	}
+	about := currentModel.spelledOutCard(state.item, *suggestion)
 	input := brain.ChatInput{
 		Conversation:    []brain.ChatMessage{{Text: state.asked}},
 		Repository:      &currentModel.repository,
@@ -294,6 +288,25 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 	}
 	input.Transcripts = currentModel.chatTranscripts(input.SubjectFolder, input.SubjectSession)
 	return input, true
+}
+
+// spelledOutCard is a card as plain text for den's model: what it does, why, the evidence and the whole proposed text.
+func (currentModel model) spelledOutCard(item dockItem, suggestion store.Suggestion) string {
+	tag, subject, details, why := currentModel.describeDockItem(item, reviseTextWidth)
+	card := tag + ": " + ansi.Strip(subject)
+	for _, detail := range details {
+		card += "\n" + ansi.Strip(detail)
+	}
+	if why != "" {
+		card += "\nwhy: " + why
+	}
+	if len(suggestion.Evidence) > 0 {
+		card += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(suggestion.Evidence, "\n- ")
+	}
+	if suggestion.ProposedText != "" {
+		card += "\nthe whole proposed text:\n" + suggestion.ProposedText
+	}
+	return card
 }
 
 // applyReviseAnswer shows den's answer in the dock, with the changes it would make instead, waiting for enter.
@@ -485,4 +498,25 @@ func hangingIndent(text string, style lipgloss.Style, width int, first string, c
 		lines = append(lines, style.Render(prefix+piece))
 	}
 	return lines
+}
+
+// queueLesson has den learn from a card the user said no to, with what the user told den about it and what den answered.
+func (currentModel *model) queueLesson(item dockItem, suggestion store.Suggestion) {
+	card := currentModel.spelledOutCard(item, suggestion)
+	state := currentModel.dock
+	switch {
+	case state.item.suggestionId == suggestion.Id && state.asked != "":
+		card += "\n\n" + currentModel.dockDiscussion()
+	case state.discussedId == suggestion.Id:
+		card += "\n\n" + state.discussion
+	}
+	currentModel.queueJob(job{kind: lessonJob, rejectedCard: card})
+}
+
+func (currentModel model) dockDiscussion() string {
+	discussion := "the user told den about it: " + currentModel.dock.asked
+	if reply := currentModel.dock.reply; reply != nil {
+		discussion += "\nden answered: " + reply.Text
+	}
+	return discussion
 }

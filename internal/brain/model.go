@@ -124,6 +124,8 @@ type ReviewInput struct {
 	RepositoryNotes string
 	// LaptopRules is what the user's own files for every repo already say.
 	LaptopRules string
+	// Lessons are what den learned from the cards the user said no to.
+	Lessons string
 }
 
 type ReviewAnswer struct {
@@ -160,6 +162,7 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
 	prompt.WriteString("\nLAPTOP RULES (already in every repo)\n" + orNone(notesExcerpt(input.LaptopRules)) + "\n")
+	prompt.WriteString(lessonsSection(input.Lessons))
 	tier := helper.Light
 	if len(input.AllPrompts) > 0 {
 		tier = helper.Reasoning
@@ -263,6 +266,7 @@ type ChatInput struct {
 	Transcripts     []Transcript
 	// EditingContext is set when the user asks from a folder's context pane, so the answer is a change to that context.
 	EditingContext bool
+	Lessons        string
 }
 
 type ChatAnswer struct {
@@ -363,6 +367,7 @@ func ChatRequest(input ChatInput) helper.Request {
 		prompt.WriteString("\nCONTEXT OF THE FOLDER THE CHAT IS ABOUT\n" + notesExcerpt(input.SubjectNotes) + "\n")
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
+	prompt.WriteString(lessonsSection(input.Lessons))
 	prompt.WriteString("\nCONVERSATION\n")
 	conversation := input.Conversation[max(len(input.Conversation)-maximumChatMessages, 0):]
 	for _, message := range conversation {
