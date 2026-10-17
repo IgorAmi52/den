@@ -163,15 +163,14 @@ func UnsetPaneOption(paneId string, option string) error {
 }
 
 // SetPaneStatus records an agent's state on its pane and colors a waiting pane's border amber.
-// reason says why a waiting agent needs the user; an empty one keeps the reason already shown,
-// and any other state clears it.
+// reason says why it waits, or what it finished; an empty one keeps the reason already shown, and running clears it.
 func SetPaneStatus(paneId string, state string, reason string) error {
 	if err := SetPaneOption(paneId, "@den-status", state); err != nil {
 		return err
 	}
 	var err error
 	switch {
-	case state != "waiting":
+	case state == "running":
 		err = UnsetPaneOption(paneId, "@den-reason")
 	case reason != "":
 		err = SetPaneOption(paneId, "@den-reason", reason)

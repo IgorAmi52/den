@@ -98,46 +98,67 @@ var (
 // maximumReasonLength keeps a waiting agent's reason to what fits on its pane border.
 const maximumReasonLength = 70
 
-// WaitingReason says in a few words why an agent waits for the user, from the event its hook passed:
-// what it asks permission for, the question its last reply ends on, or that it's done and with what.
-// It's empty when the event says nothing new, like Claude's reminder that it's still waiting for input.
-func WaitingReason(event []byte) string {
+// Hook states an agent's stop can mean.
+const (
+	// StateWaiting is an agent that needs the user: a permission to give, or a question to answer.
+	StateWaiting = "waiting"
+	// StateDone is an agent that finished its turn without asking anything.
+	StateDone = "done"
+)
+
+// StopState reads why an agent stopped from the event its hook passed, and says it in a few words:
+// waiting with what it asks permission for or the question its reply ends on, or done with what it did.
+// An empty state means the event says nothing new, like Claude's reminder that it's still idle, so the pane keeps its state.
+func StopState(event []byte) (state string, reason string) {
 	var parsed struct {
 		Message                   string `json:"message"`
 		LastAssistantMessage      string `json:"last_assistant_message"`
 		CodexLastAssistantMessage string `json:"last-assistant-message"`
 	}
 	if json.Unmarshal(event, &parsed) != nil {
-		return ""
+		return StateWaiting, ""
 	}
 	if message := oneLine(parsed.Message); message != "" {
 		if strings.Contains(message, "waiting for your input") {
-			return ""
+			return "", ""
 		}
-		return startOf(strings.TrimPrefix(strings.TrimPrefix(message, "Claude "), "needs your "), maximumReasonLength)
+		return StateWaiting, startOf(strings.TrimPrefix(strings.TrimPrefix(message, "Claude "), "needs your "), maximumReasonLength)
 	}
 	reply := parsed.LastAssistantMessage
 	if reply == "" {
 		reply = parsed.CodexLastAssistantMessage
 	}
-	if question := lastQuestion(reply); question != "" {
-		return startOf("asks: "+question, maximumReasonLength)
+	if question := closingQuestion(reply); question != "" {
+		return StateWaiting, startOf("asks: "+question, maximumReasonLength)
 	}
-	if sentence := firstSentence(reply); sentence != "" {
-		return startOf("done: "+sentence, maximumReasonLength)
-	}
-	return ""
+	return StateDone, startOf("done: "+firstSentence(reply), maximumReasonLength)
 }
 
-// lastQuestion is the last sentence of text that ends with a question mark, if any.
-func lastQuestion(text string) string {
-	end := strings.LastIndex(text, "?")
-	if end < 0 {
+// questionMark matches a question mark that ends a sentence: followed by whitespace, closing marks, or the end.
+// One inside a word or a link, like x.com/item?id=1, doesn't count.
+var questionMark = regexp.MustCompile(`\?[*_"')\]]*(\s|$)`)
+
+// closingQuestion is the question a reply ends on, if it ends on one. A question asked earlier and then answered,
+// or followed by more work, isn't waiting on the user.
+func closingQuestion(text string) string {
+	text = strings.TrimSpace(text)
+	if paragraphStart := strings.LastIndex(text, "\n\n"); paragraphStart >= 0 {
+		text = text[paragraphStart+2:]
+	}
+	matches := questionMark.FindAllStringIndex(text, -1)
+	if len(matches) == 0 || matches[len(matches)-1][1] != len(text) {
 		return ""
 	}
-	start := strings.LastIndexAny(text[:end], ".!?\n") + 1
-	return oneLine(strings.TrimLeft(text[start:end+1], "*#>- "))
+	end := matches[len(matches)-1][0] + 1
+	start := 0
+	for _, boundary := range sentenceEnd.FindAllStringIndex(text[:end-1], -1) {
+		start = boundary[1]
+	}
+	return oneLine(strings.TrimLeft(text[start:end], "*#>- "))
 }
+
+// sentenceEnd matches where a sentence ends: a full stop, exclamation or question mark followed by whitespace, or a line break.
+var sentenceEnd = regexp.MustCompile(`[.!?]\s+|\n`)
 
 // firstSentence is text up to its first sentence end, on one line, without markdown markers.
 func firstSentence(text string) string {

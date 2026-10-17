@@ -45,11 +45,14 @@ func run(arguments []string) error {
 		if paneId == "" {
 			return nil
 		}
-		reason := ""
-		if arguments[2] == "waiting" {
-			reason = agent.WaitingReason(hookEvent(arguments[3:]))
+		state, reason := arguments[2], ""
+		if state == agent.StateWaiting {
+			state, reason = agent.StopState(hookEvent(arguments[3:]))
 		}
-		return tmux.SetPaneStatus(paneId, arguments[2], reason)
+		if state == "" {
+			return nil
+		}
+		return tmux.SetPaneStatus(paneId, state, reason)
 	}
 	if err := checkDependencies(); err != nil {
 		return err

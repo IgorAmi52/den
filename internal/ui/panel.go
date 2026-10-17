@@ -349,6 +349,8 @@ func (currentModel model) statusGlyph(status string) segment {
 		return segment{text: "●", style: currentModel.theme.running}
 	case "waiting":
 		return segment{text: "!", style: currentModel.theme.waiting}
+	case "done":
+		return segment{text: "✓", style: currentModel.theme.dim}
 	}
 	return segment{text: "●", style: currentModel.theme.dim}
 }

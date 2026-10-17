@@ -176,12 +176,15 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 	lines = append(lines, "")
 	switch {
 	case open != nil:
-		statusText := map[string]string{"running": "running", "waiting": "waiting for you"}[open.status]
+		statusText := map[string]string{"running": "running", "waiting": "waiting for you", "done": "done, your turn"}[open.status]
 		if statusText == "" {
 			statusText = "open"
 		}
 		glyph := currentModel.statusGlyph(open.status)
 		lines = append(lines, glyph.style.Render(glyph.text+" "+statusText)+theme.dim.Render(fmt.Sprintf(" · pane %d · ⌥%d jumps there", open.number, open.number)))
+		if open.reason != "" {
+			lines = append(lines, wrapAll([]string{glyph.style.Render("↳ " + open.reason)}, width)...)
+		}
 	case session.Archived:
 		lines = append(lines, theme.archive.Render("archived")+theme.dim.Render(fmt.Sprintf(" · %dd until den forgets it · ↵ resumes it", int(session.ArchiveTimeLeft(time.Now()).Hours()/24)+1)))
 	default:
