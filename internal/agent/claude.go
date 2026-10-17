@@ -124,6 +124,10 @@ func (Claude) LaptopFilePath() (string, error) {
 	return filepath.Join(configurationDirectory, "CLAUDE.md"), err
 }
 
+func (Claude) TranscriptPath(sessionId string) (string, bool, error) {
+	return claudeTranscriptPath(sessionId)
+}
+
 func claudeTranscriptPath(sessionId string) (string, bool, error) {
 	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
 	if err != nil {

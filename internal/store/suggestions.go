@@ -45,6 +45,8 @@ type Suggestion struct {
 	Rule      string    `json:"rule,omitempty"`
 	FilePaths []string  `json:"filePaths,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
+	// CallId is the model call that proposed it, for the decision log.
+	CallId string `json:"callId,omitempty"`
 }
 
 // RejectionKeys identify what was rejected, so the same suggestion is never offered again.

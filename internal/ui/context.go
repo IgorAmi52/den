@@ -18,6 +18,8 @@ type editorClosedMessage struct {
 	filePath  string
 	onSaved   func(currentModel *model, text string)
 	isStarter bool
+	// before is the file's text when the editor opened, so an edit by hand can be logged.
+	before string
 }
 
 // editContext opens a folder's context in $EDITOR, in a popup over the grid: its linked file when it has one,
@@ -56,8 +58,9 @@ func (currentModel *model) editFile(title string, filePath string, starter strin
 		editor = os.Getenv("EDITOR")
 	}
 	workingDirectory := currentModel.workingDirectory
+	before := store.ReadText(filePath)
 	return func() tea.Msg {
-		closed := editorClosedMessage{filePath: filePath, onSaved: onSaved, isStarter: isStarter}
+		closed := editorClosedMessage{filePath: filePath, onSaved: onSaved, isStarter: isStarter, before: before}
 		if editor == "" {
 			closed.err = exec.Command("open", "-W", "-t", filePath).Run()
 			return closed
@@ -73,6 +76,9 @@ func (currentModel model) afterEditorClosed(closed editorClosedMessage) (tea.Mod
 	}
 	content, _ := os.ReadFile(closed.filePath)
 	text := string(content)
+	if text != closed.before && closed.onSaved == nil {
+		currentModel.logByHand(store.Decision{Action: "edit file", Detail: closed.filePath, Before: closed.before, After: text})
+	}
 	switch {
 	case closed.isStarter && !hasNotesBeyondHeading(text):
 		os.Remove(closed.filePath)

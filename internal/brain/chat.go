@@ -48,6 +48,8 @@ type ChatAction struct {
 	// Change is the passage as it becomes, for a change to part of a context; a plan shows it instead of the whole text.
 	Change      string
 	Description string
+	// CallId is the model call that proposed the action, for the decision log.
+	CallId string
 }
 
 // ChatContext is what den reads to answer without a model.
@@ -303,6 +305,9 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			actions = append(actions, ChatAction{Kind: "editNotes", FolderId: folderId, Text: strings.Replace(current, proposed.From, proposed.Text, 1),
 				Change: proposed.Text, Description: "change " + name + "'s context to:"})
 		}
+	}
+	for index := range actions {
+		actions[index].CallId = input.CallId
 	}
 	return actions
 }

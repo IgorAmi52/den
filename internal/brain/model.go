@@ -315,6 +315,8 @@ type ChatInput struct {
 	AgentStatuses map[string]string
 	// SessionTurns are the conversations of the listed sessions by session id, which the chat reads as files when it needs them.
 	SessionTurns map[string][]agent.Turn
+	// CallId is the logged call that answered, set once it has, so the actions it proposed trace back to it.
+	CallId string
 }
 
 type ChatAnswer struct {

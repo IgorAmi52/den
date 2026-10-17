@@ -178,7 +178,8 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 // finishJob applies what the model answered, then starts the next job.
 func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	currentModel.runningJob = nil
-	currentModel.logCall(done)
+	callId := currentModel.logCall(done)
+	done.chatInput.CallId = callId
 	if done.err != nil {
 		currentModel.helperFailures++
 		switch done.job.kind {
@@ -218,7 +219,7 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	case *brain.CompactLessonsAnswer:
 		currentModel.applyCompactedLessons(answer.Lessons)
 	case *brain.ReviewAnswer:
-		currentModel.keepingSelection(func() { currentModel.applyReview(done.job, done.promptCount, *answer) })
+		currentModel.keepingSelection(func() { currentModel.applyReview(done.job, done.promptCount, *answer, callId) })
 	case *brain.ChatAnswer:
 		if done.job.kind == reviseJob {
 			currentModel.applyReviseAnswer(done.job, *answer, done.chatInput)
@@ -275,7 +276,7 @@ func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent
 
 // applyReview carries out a review: a progress review renames the session and updates where it stands,
 // a card review offers what's worth keeping as a suggestion. Everything is logged.
-func (currentModel *model) applyReview(done job, promptCount int, answer brain.ReviewAnswer) {
+func (currentModel *model) applyReview(done job, promptCount int, answer brain.ReviewAnswer, callId string) {
 	repository := &currentModel.repository
 	session := repository.FindSession(done.sessionId)
 	if session == nil {
@@ -283,15 +284,15 @@ func (currentModel *model) applyReview(done job, promptCount int, answer brain.R
 	}
 	if done.wholeSession {
 		session.QuietReviewedAtPrompt = promptCount
-		currentModel.offerCards(session, answer)
+		currentModel.offerCards(session, answer, callId)
 	} else {
-		currentModel.applyProgress(session, promptCount, answer)
+		currentModel.applyProgress(session, promptCount, answer, callId)
 	}
 	currentModel.saveRepository()
 }
 
 // applyProgress takes a progress review's title, unless the user pinned one or it only rewords the current one, and its progress.
-func (currentModel *model) applyProgress(session *store.Session, promptCount int, answer brain.ReviewAnswer) {
+func (currentModel *model) applyProgress(session *store.Session, promptCount int, answer brain.ReviewAnswer, callId string) {
 	wasTitled := session.TitledAtPrompt > 0
 	session.ReviewedAtPrompt, session.TitledAtPrompt = promptCount, promptCount
 	if goal := strings.TrimSpace(answer.Progress.Goal); goal != "" {
@@ -303,40 +304,43 @@ func (currentModel *model) applyProgress(session *store.Session, promptCount int
 	}
 	switch {
 	case session.TitlePinned:
-		currentModel.logReviewDecision(session, "retitle", title, "dropped: pinned")
+		currentModel.logReviewDecision(session, callId, "retitle", title, "dropped: pinned")
 	case len([]rune(title)) > maximumTitleLength:
-		currentModel.logReviewDecision(session, "retitle", title, "dropped: too long")
+		currentModel.logReviewDecision(session, callId, "retitle", title, "dropped: too long")
 	case wasTitled && isRewording(session.Title, title):
-		currentModel.logReviewDecision(session, "retitle", session.Title+" → "+title, "dropped: same name, reworded")
+		currentModel.logReviewDecision(session, callId, "retitle", session.Title+" → "+title, "dropped: same name, reworded")
 	default:
-		currentModel.logReviewDecision(session, "retitle", session.Title+" → "+title, "applied")
+		currentModel.logReviewDecision(session, callId, "retitle", session.Title+" → "+title, "applied")
 		currentModel.retitle(session, title)
 	}
 }
 
 // offerCards offers a card review's keep and rule as suggestions, unless the user already said no to them or enough are waiting.
-func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer) {
+func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer, callId string) {
 	repository := &currentModel.repository
 	keepKind := answer.Keep.Kind
 	if keepKind == "" {
 		keepKind = "none"
 	}
 	suggestion, outcome := brain.KeepSuggestion(answer.Keep, *session, currentModel.digests[session.SessionId], repository)
+	suggestion.CallId = callId
 	if outcome == "proposed" && !repository.Offer(suggestion) {
 		outcome = "withheld: already rejected, or enough waiting"
 	}
-	currentModel.logReviewDecision(session, "keep "+keepKind, fmt.Sprintf("%s (%.2f)", answer.Keep.Reason, answer.Keep.Confidence), outcome)
+	currentModel.logReviewDecision(session, callId, "keep "+keepKind, fmt.Sprintf("%s (%.2f)", answer.Keep.Reason, answer.Keep.Confidence), outcome)
 	if strings.TrimSpace(answer.Rule.Rule) != "" {
 		suggestion, outcome := brain.RuleSuggestion(answer.Rule, *session, currentModel.laptopTexts())
+		suggestion.CallId = callId
 		if outcome == "proposed" && !repository.Offer(suggestion) {
 			outcome = "withheld: already rejected, or enough waiting"
 		}
-		currentModel.logReviewDecision(session, "rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
+		currentModel.logReviewDecision(session, callId, "rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
 	}
 }
 
-func (currentModel *model) logReviewDecision(session *store.Session, action string, detail string, outcome string) {
-	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "review", SessionId: session.SessionId, FolderId: session.FolderId, Action: action, Detail: detail, Outcome: outcome}))
+func (currentModel *model) logReviewDecision(session *store.Session, callId string, action string, detail string, outcome string) {
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "review", SessionId: session.SessionId, FolderId: session.FolderId,
+		Action: action, Detail: detail, Outcome: outcome, CallId: callId}))
 }
 
 // laptopTexts are the laptop files a rule can go to, by path: the ones that exist, and those of installed tools.
@@ -364,10 +368,11 @@ func (currentModel model) folderNotesText(folderId string) string {
 	return strings.TrimSpace(currentModel.repository.ReadContext(folderId))
 }
 
-// logCall keeps every model call whole in calls.jsonl, its prompt, answer, cost and time, for evaluating den later.
-func (currentModel *model) logCall(done jobDoneMessage) {
+// logCall keeps every model call whole in calls.jsonl, its prompt, files, answer, cost and time, for evaluating den later,
+// and the system prompt once per version. It returns the call's id, or "" when nothing was called.
+func (currentModel *model) logCall(done jobDoneMessage) string {
 	if done.request.Prompt == "" {
-		return
+		return ""
 	}
 	call := store.Call{
 		Job:           done.job.kind.String(),
@@ -375,20 +380,27 @@ func (currentModel *model) logCall(done jobDoneMessage) {
 		Model:         done.usage.Model,
 		PromptVersion: promptVersion(done.request.System),
 		Prompt:        done.request.Prompt,
+		Files:         done.request.Files,
 		InputTokens:   done.usage.InputTokens,
 		OutputTokens:  done.usage.OutputTokens,
 		CostDollars:   done.usage.CostDollars,
 		Milliseconds:  done.usage.Duration.Milliseconds(),
 	}
-	if done.job.wholeSession {
-		call.Job = "review whole session"
+	if done.job.kind == reviewJob {
+		call.Job = "progress review"
+		if done.job.wholeSession {
+			call.Job = "card review"
+		}
 	}
 	if done.err != nil {
 		call.Error = done.err.Error()
 	} else if answer, err := json.Marshal(done.answer); err == nil {
 		call.Answer = answer
 	}
-	currentModel.reportError(currentModel.repository.LogCall(call))
+	currentModel.reportError(currentModel.repository.KeepSystemPrompt(call.PromptVersion, done.request.System))
+	callId, err := currentModel.repository.LogCall(call)
+	currentModel.reportError(err)
+	return callId
 }
 
 // promptVersion is a short hash of a system prompt, which changes whenever the prompt does.

@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/IgorAmi52/den/internal/agent"
+	"github.com/IgorAmi52/den/internal/eval"
 	"github.com/IgorAmi52/den/internal/layout"
 	"github.com/IgorAmi52/den/internal/tmux"
 	"github.com/IgorAmi52/den/internal/ui"
@@ -53,6 +55,9 @@ func run(arguments []string) error {
 			return nil
 		}
 		return tmux.SetPaneStatus(paneId, state, reason)
+	}
+	if len(arguments) > 0 && arguments[0] == "eval" {
+		return runEval(arguments[1:])
 	}
 	if err := checkDependencies(); err != nil {
 		return err
@@ -115,4 +120,28 @@ func checkDependencies() error {
 func sessionName(workingDirectory string) string {
 	repositoryName := strings.NewReplacer(".", "-", ":", "-").Replace(filepath.Base(workingDirectory))
 	return "den-" + repositoryName
+}
+
+// runEval runs "den eval export", which packs den's logs, state and the transcripts of the sessions it tracks
+// into one archive in the current directory, to send to whoever evaluates den.
+func runEval(arguments []string) error {
+	if len(arguments) != 1 || arguments[0] != "export" {
+		return errors.New("usage: den eval export")
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	summary, err := eval.Export(workingDirectory, time.Now())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("packed %s (%.1f MB)\n", summary.Path, float64(summary.Bytes)/(1<<20))
+	fmt.Printf("  %d repos, %d sessions, %d transcripts", summary.Repositories, summary.Sessions, summary.Transcripts)
+	if summary.MissingTranscripts > 0 {
+		fmt.Printf(" (%d no longer on disk)", summary.MissingTranscripts)
+	}
+	fmt.Printf(", %d model calls, %d decisions\n", summary.Calls, summary.Decisions)
+	fmt.Println("It holds your prompts, your agents' whole conversations and parts of your code: send it only to whoever evaluates den.")
+	return nil
 }

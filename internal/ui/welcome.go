@@ -37,7 +37,9 @@ type welcomeState struct {
 	spinner  spinner.Model
 	arrivals []brain.Arrival
 	accepted []bool
-	cursor   int
+	// callId is the logged call that judged the arrivals, for the decision log.
+	callId string
+	cursor int
 	// optionKeyProfile is Terminal.app's profile for new windows, when den runs in Terminal.app.
 	optionKeyProfile string
 	optionKeyEnabled bool
@@ -49,8 +51,9 @@ type pastSessionsMessage struct {
 	optionKeyEnabled bool
 	// modelError says why den's model couldn't judge the sessions, so the local rule did.
 	modelError string
-	// call is den's model call that judged them, for the call log.
-	call *store.Call
+	// call is den's model call that judged them, for the call log, and system its instructions.
+	call   *store.Call
+	system string
 }
 
 func newWelcomeState() *welcomeState {
@@ -95,6 +98,7 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 			var answer brain.FirstRunAnswer
 			request := brain.FirstRunRequest(newest, promptsBySessionId, &repository, time.Now())
 			usage, err := helperCaller.Call(request, &answer)
+			scanned.system = request.System
 			scanned.call = &store.Call{Job: "first run", Model: usage.Model, PromptVersion: promptVersion(request.System), Prompt: request.Prompt,
 				InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CostDollars: usage.CostDollars, Milliseconds: usage.Duration.Milliseconds()}
 			if err != nil {
@@ -127,7 +131,10 @@ func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Mo
 		return currentModel, nil
 	}
 	if scanned.call != nil {
-		currentModel.reportError(currentModel.repository.LogCall(*scanned.call))
+		currentModel.reportError(currentModel.repository.KeepSystemPrompt(scanned.call.PromptVersion, scanned.system))
+		callId, err := currentModel.repository.LogCall(*scanned.call)
+		currentModel.reportError(err)
+		state.callId = callId
 	}
 	state.arrivals = scanned.arrivals
 	state.optionKeyProfile, state.optionKeyEnabled = scanned.optionKeyProfile, scanned.optionKeyEnabled
@@ -222,7 +229,14 @@ func (currentModel *model) applyWelcome() {
 	now := time.Now()
 	for index, arrival := range state.arrivals {
 		digest := arrival.Digest
-		if !state.accepted[index] || currentModel.repository.FindSession(digest.SessionId) != nil {
+		if currentModel.repository.FindSession(digest.SessionId) != nil {
+			continue
+		}
+		decision := store.Decision{Job: "first run", SessionId: digest.SessionId, Action: "verdict " + arrival.Verdict,
+			Detail: arrival.Title + " · " + arrival.Why, Outcome: "brought in", CallId: state.callId}
+		if !state.accepted[index] {
+			decision.Outcome = "left out"
+			currentModel.reportError(currentModel.repository.LogDecision(decision))
 			continue
 		}
 		session := store.Session{
@@ -246,8 +260,7 @@ func (currentModel *model) applyWelcome() {
 			session.ReviewedAtPrompt = digest.PromptCount - 1
 		}
 		currentModel.repository.Sessions = append(currentModel.repository.Sessions, session)
-		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "first run", SessionId: digest.SessionId,
-			Action: "verdict " + arrival.Verdict, Detail: arrival.Title + " · " + arrival.Why, Outcome: "brought in"}))
+		currentModel.reportError(currentModel.repository.LogDecision(decision))
 	}
 }
 

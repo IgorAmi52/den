@@ -105,15 +105,11 @@ func (Codex) FindSession(_ string, workingDirectory string, launchedAt time.Time
 }
 
 func (Codex) Digest(sessionId string) (Digest, bool, error) {
-	codexHome, err := homeDirectory("CODEX_HOME", ".codex")
-	if err != nil {
+	transcriptPath, found, err := Codex{}.TranscriptPath(sessionId)
+	if err != nil || !found {
 		return Digest{}, false, err
 	}
-	transcriptPaths, _ := filepath.Glob(filepath.Join(codexHome, "sessions", "*", "*", "*", "rollout-*-"+sessionId+".jsonl"))
-	if len(transcriptPaths) == 0 {
-		return Digest{}, false, nil
-	}
-	digest, err := cachedDigestOf(transcriptPaths[0], readCodexDigest)
+	digest, err := cachedDigestOf(transcriptPath, readCodexDigest)
 	digest.AgentTitle = codexThreadNames()[sessionId]
 	return digest, err == nil, err
 }
@@ -143,15 +139,23 @@ func (Codex) LaptopFilePath() (string, error) {
 }
 
 func (Codex) Turns(sessionId string) ([]Turn, error) {
+	transcriptPath, found, err := Codex{}.TranscriptPath(sessionId)
+	if err != nil || !found {
+		return nil, err
+	}
+	return cachedTurnsOf(transcriptPath, readCodexTurns)
+}
+
+func (Codex) TranscriptPath(sessionId string) (string, bool, error) {
 	codexHome, err := homeDirectory("CODEX_HOME", ".codex")
 	if err != nil {
-		return nil, err
+		return "", false, err
 	}
 	transcriptPaths, _ := filepath.Glob(filepath.Join(codexHome, "sessions", "*", "*", "*", "rollout-*-"+sessionId+".jsonl"))
 	if len(transcriptPaths) == 0 {
-		return nil, nil
+		return "", false, nil
 	}
-	return cachedTurnsOf(transcriptPaths[0], readCodexTurns)
+	return transcriptPaths[0], true, nil
 }
 
 func readCodexTurns(transcriptPath string) ([]Turn, error) {

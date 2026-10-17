@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/IgorAmi52/den/internal/store"
 	"github.com/IgorAmi52/den/internal/tmux"
 )
 
@@ -73,7 +74,9 @@ func (currentModel *model) askForRename(row listRow, inline bool) tea.Cmd {
 	case folderRow:
 		folderId := row.folder.Id
 		command = currentModel.askForText("Rename folder", row.folder.Name, func(currentModel *model, name string) {
-			currentModel.repository.FindFolder(folderId).Name = name
+			folder := currentModel.repository.FindFolder(folderId)
+			currentModel.logByHand(store.Decision{Action: "rename folder", FolderId: folderId, Detail: folder.Name + " → " + name})
+			folder.Name = name
 			currentModel.saveRepository()
 			currentModel.updatePaneFolderNames(folderId, name)
 		})
@@ -81,6 +84,7 @@ func (currentModel *model) askForRename(row listRow, inline bool) tea.Cmd {
 		sessionId := row.session.SessionId
 		command = currentModel.askForText("Rename session", row.session.Title, func(currentModel *model, title string) {
 			session := currentModel.repository.FindSession(sessionId)
+			currentModel.logByHand(store.Decision{Action: "rename session", SessionId: sessionId, FolderId: session.FolderId, Detail: session.Title + " → " + title})
 			session.Title, session.TitlePinned = title, true
 			delete(currentModel.retitles, sessionId)
 			if open := currentModel.openAgentFor(sessionId); open != nil {
@@ -131,6 +135,7 @@ func (currentModel *model) moveRowToFolder(row listRow, folderId string) {
 	}
 	currentModel.expandFolder(folderId)
 	if row.session != nil {
+		currentModel.logMoveByHand(row.session.SessionId, folderId)
 		currentModel.repository.MoveByHand(row.session.SessionId, folderId)
 	} else {
 		currentModel.reportError(tmux.SetPaneOption(row.open.paneId, paneFolderOption, folderId))
@@ -144,6 +149,7 @@ func (currentModel *model) moveRowToFolder(row listRow, folderId string) {
 
 // moveSessionToFolder files a session where the user picked.
 func (currentModel *model) moveSessionToFolder(sessionId string, folderId string) {
+	currentModel.logMoveByHand(sessionId, folderId)
 	currentModel.repository.MoveByHand(sessionId, folderId)
 	currentModel.expandFolder(folderId)
 	currentModel.saveRepository()
@@ -221,4 +227,19 @@ func (currentModel model) updateMouse(message tea.MouseMsg) (tea.Model, tea.Cmd)
 		}
 	}
 	return currentModel, command
+}
+
+// logByHand records a change the user made themselves, which often corrects something den did.
+func (currentModel *model) logByHand(decision store.Decision) {
+	decision.Job, decision.Outcome = "by hand", "applied"
+	currentModel.reportError(currentModel.repository.LogDecision(decision))
+}
+
+func (currentModel *model) logMoveByHand(sessionId string, folderId string) {
+	session := currentModel.repository.FindSession(sessionId)
+	if session == nil {
+		return
+	}
+	currentModel.logByHand(store.Decision{Action: "move session", SessionId: sessionId, FolderId: folderId,
+		Detail: session.Title + ": " + currentModel.repository.FolderName(session.FolderId) + " → " + currentModel.repository.FolderName(folderId)})
 }

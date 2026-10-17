@@ -114,6 +114,7 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			state.input.SetValue("")
 			if len(state.pendingActions) > 0 {
+				currentModel.logSkippedPlan(state.pendingActions, text)
 				state.settlePlan(planSkipped)
 			}
 			state.addMessage(brain.ChatMessage{Text: text})
@@ -210,13 +211,23 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 		text += fmt.Sprintf("\n(%d change I thought of didn't match your folders, sessions or files, so I left it out.)", len(answer.Actions)-len(actions))
 	}
 	state.addMessage(brain.ChatMessage{FromDen: true, Text: text, Actions: actions})
-	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "chat", Action: "reply", Detail: fmt.Sprintf("%d actions", len(actions)), Outcome: "proposed"}))
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "chat", Action: "reply", Detail: fmt.Sprintf("%d actions", len(actions)), Outcome: "proposed", CallId: input.CallId}))
 }
 
 // applyChatActions makes the changes the user asked for in the chat and confirmed with enter.
 func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
 	currentModel.doChatActions(actions)
 	currentModel.chat.settlePlan(planDone)
+}
+
+// logSkippedPlan records a plan the user wrote past instead of confirming, with what they wrote instead.
+func (currentModel *model) logSkippedPlan(actions []brain.ChatAction, instead string) {
+	var descriptions []string
+	for _, action := range actions {
+		descriptions = append(descriptions, action.Description)
+	}
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "chat", Action: "plan", CallId: actions[0].CallId,
+		Detail: strings.Join(descriptions, "; ") + " · user wrote instead: " + instead, Outcome: "skipped"}))
 }
 
 // settlePlan records what became of the plan waiting for the user's enter, so its card says so.
@@ -293,7 +304,7 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 			currentModel.reportError(repository.WriteContext(action.FolderId, action.Text))
 		}
 		done = append(done, action.Description)
-		currentModel.reportError(repository.LogDecision(store.Decision{Job: "chat", SessionId: action.SessionId, FolderId: action.FolderId, Action: action.Kind, Detail: action.Description, Outcome: "applied"}))
+		currentModel.reportError(repository.LogDecision(store.Decision{Job: "chat", SessionId: action.SessionId, FolderId: action.FolderId, Action: action.Kind, Detail: action.Description, Outcome: "applied", CallId: action.CallId}))
 	}
 	currentModel.updatePaneFolders()
 	currentModel.refreshContextTokens()

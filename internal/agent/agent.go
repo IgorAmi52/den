@@ -29,6 +29,8 @@ type Adapter interface {
 	LaptopFilePath() (string, error)
 	// Turns reads the user's prompts in order, each with the agent's last message before it.
 	Turns(sessionId string) ([]Turn, error)
+	// TranscriptPath is where the tool keeps a session's whole transcript; found is false when it has none.
+	TranscriptPath(sessionId string) (transcriptPath string, found bool, err error)
 }
 
 // Turn is one prompt the user typed, with what the agent said just before, since "nono, not like that"

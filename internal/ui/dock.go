@@ -226,7 +226,7 @@ func (currentModel *model) answerDockItem(item dockItem, accepted bool) {
 	if suggestion == nil {
 		return
 	}
-	logged := store.Decision{Job: "dock", FolderId: suggestion.FolderId, Action: string(suggestion.Kind), Detail: suggestion.Reason, Outcome: "rejected"}
+	logged := store.Decision{Job: "dock", FolderId: suggestion.FolderId, Action: string(suggestion.Kind), Detail: suggestion.Reason, Outcome: "rejected", CallId: suggestion.CallId}
 	if len(suggestion.SessionIds) > 0 {
 		logged.SessionId = suggestion.SessionIds[0]
 	}
