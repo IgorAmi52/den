@@ -109,8 +109,9 @@ const firstRunSystem = "You are den, opened for the first time in a repo. You lo
 	"keep when it's done but found or decided something worth having later. done for everything else: finished work, a quick question, " +
 	"nothing worth returning to. Most short sessions are done.\n" +
 	"title: " + titleRules + "\n" +
+	"A long session may wander across topics; then its title names what most of its prompts were about, not just the first one.\n" +
 	"why: at most 10 words on why it's worth bringing in, or \"\" when done.\n" +
-	"You only see the start and end of each session, so never propose folders or notes here; a session you keep gets a full review later."
+	"You only see the start, a few prompts from the middle and the end of each session, so never propose folders or notes here; a session you keep gets a full review later."
 
 // ReviewInput is what a review looks at: one session, the turns since den last looked, and the folders.
 type ReviewInput struct {
@@ -209,13 +210,23 @@ type FirstRunAnswer struct {
 	Sessions []FirstRunVerdict `json:"sessions"`
 }
 
+// LongSessionPrompts is how many prompts make a session long enough that the first run also sees prompts from its middle.
+const LongSessionPrompts = 10
+
+// middlePromptSamples is how many prompts the first run sees from the middle of a long session.
+const middlePromptSamples = 6
+
 // FirstRunRequest asks which recent sessions are worth bringing in; the model names them s1, s2 and so on.
-func FirstRunRequest(digests []agent.Digest, repository *store.Repository, now time.Time) helper.Request {
+// promptsBySessionId holds every prompt of the long sessions, so the model sees where they went after the first prompt.
+func FirstRunRequest(digests []agent.Digest, promptsBySessionId map[string][]string, repository *store.Repository, now time.Time) helper.Request {
 	var prompt strings.Builder
 	for index, digest := range digests {
 		fmt.Fprintf(&prompt, "SESSION s%d · last used %s ago · %d prompts\n", index+1, roughAge(now.Sub(digest.LastActivityAt)), digest.PromptCount)
 		writeField(&prompt, "files edited", strings.Join(relativePaths(repository.RepositoryPath, digest.TouchedFiles, 6), ", "))
 		writeField(&prompt, "first prompt", startOfText(digest.FirstPrompt, 400))
+		for _, middlePrompt := range middlePrompts(promptsBySessionId[digest.SessionId]) {
+			writeField(&prompt, "later prompt", startOfText(middlePrompt, 100))
+		}
 		if digest.LastPrompt != digest.FirstPrompt {
 			writeField(&prompt, "last prompt", startOfText(digest.LastPrompt, 300))
 		}
@@ -436,6 +447,20 @@ func folderOverview(repository *store.Repository) string {
 		overview.WriteString("\n")
 	}
 	return overview.String()
+}
+
+// middlePrompts are a few prompts spread evenly between the first and the last.
+func middlePrompts(prompts []string) []string {
+	if len(prompts) < 3 {
+		return nil
+	}
+	middle := prompts[1 : len(prompts)-1]
+	count := min(len(middle), middlePromptSamples)
+	var samples []string
+	for index := range count {
+		samples = append(samples, middle[index*len(middle)/count])
+	}
+	return samples
 }
 
 func writeField(builder *strings.Builder, name string, value string) {

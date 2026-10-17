@@ -69,19 +69,31 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 	}
 	return func() tea.Msg {
 		var digests []agent.Digest
+		adaptersBySessionId := map[string]agent.Adapter{}
 		for _, adapter := range installedAgents {
 			pastSessions, _ := adapter.PastSessions(git.Worktrees(repository.RepositoryPath))
 			for _, digest := range pastSessions {
 				if !tracked[digest.SessionId] && digest.PromptCount > 0 {
 					digests = append(digests, digest)
+					adaptersBySessionId[digest.SessionId] = adapter
 				}
 			}
 		}
 		newest := brain.NewestSessions(digests)
 		scanned := pastSessionsMessage{arrivals: brain.ArrivalsWithoutModel(newest)}
 		if helperCaller != nil && len(newest) > 0 {
+			promptsBySessionId := map[string][]string{}
+			for _, digest := range newest {
+				if digest.PromptCount < brain.LongSessionPrompts {
+					continue
+				}
+				turns, _ := adaptersBySessionId[digest.SessionId].Turns(digest.SessionId)
+				for _, turn := range turns {
+					promptsBySessionId[digest.SessionId] = append(promptsBySessionId[digest.SessionId], turn.User)
+				}
+			}
 			var answer brain.FirstRunAnswer
-			request := brain.FirstRunRequest(newest, &repository, time.Now())
+			request := brain.FirstRunRequest(newest, promptsBySessionId, &repository, time.Now())
 			usage, err := helperCaller.Call(request, &answer)
 			scanned.call = &store.Call{Job: "first run", Model: usage.Model, PromptVersion: promptVersion(request.System), Prompt: request.Prompt,
 				InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CostDollars: usage.CostDollars, Milliseconds: usage.Duration.Milliseconds()}
