@@ -20,7 +20,7 @@ type Observation struct {
 
 // Suggest runs the local rules. The store drops the suggestions the user already rejected or is still looking at.
 func Suggest(observation Observation) []store.Suggestion {
-	return folderNotes(observation)
+	return append(folderNotes(observation), skillFolders(observation)...)
 }
 
 // words splits text into lowercase words, breaking on anything that isn't a letter or digit.

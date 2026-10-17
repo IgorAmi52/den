@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -171,6 +172,9 @@ func readClaudeDigest(transcriptPath string) Digest {
 					promptIssueKey = IssueKeyIn(prompt)
 				}
 			}
+			if command := slashCommandIn(event.Message.Content); command != "" {
+				digest.UsedSkills = append(digest.UsedSkills, command)
+			}
 			for _, block := range claudeBlocks(event.Message.Content) {
 				if plan, proposed := proposedPlans[block.ToolUseId]; proposed && block.Type == "tool_result" {
 					if !block.IsError {
@@ -189,6 +193,9 @@ func readClaudeDigest(transcriptPath string) Digest {
 				}
 				if claudeEditingTools[block.Name] && block.Input.FilePath != "" {
 					digest.TouchedFiles = appendOnce(digest.TouchedFiles, block.Input.FilePath)
+				}
+				if block.Name == "Skill" && block.Input.Skill != "" {
+					digest.UsedSkills = append(digest.UsedSkills, block.Input.Skill)
 				}
 				if block.Name == "ExitPlanMode" && strings.TrimSpace(block.Input.Plan) != "" {
 					proposedPlans[block.Id] = block.Input.Plan
@@ -241,6 +248,7 @@ type claudeBlock struct {
 	Input     struct {
 		FilePath string `json:"file_path"`
 		Plan     string `json:"plan"`
+		Skill    string `json:"skill"`
 	} `json:"input"`
 }
 
@@ -287,4 +295,35 @@ func newUuid() string {
 	bytes[6] = bytes[6]&0x0f | 0x40
 	bytes[8] = bytes[8]&0x3f | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16])
+}
+
+var slashCommandPattern = regexp.MustCompile(`<command-name>/?([^<\s]+)</command-name>`)
+
+// slashCommandIn reads the name of the slash command a user message ran, like humanizer for /humanizer, or "".
+func slashCommandIn(content json.RawMessage) string {
+	var plainText string
+	if json.Unmarshal(content, &plainText) != nil {
+		return ""
+	}
+	if match := slashCommandPattern.FindStringSubmatch(plainText); match != nil {
+		return match[1]
+	}
+	return ""
+}
+
+// SkillFile finds the file of a skill or slash command of the user's, in the repo or in their own claude directory.
+// Claude's built-in commands, like /compact, have none.
+func SkillFile(name string, repositoryPath string) (string, bool) {
+	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
+	if err != nil || strings.ContainsAny(name, "/:") {
+		return "", false
+	}
+	for _, directory := range []string{filepath.Join(repositoryPath, ".claude"), configurationDirectory} {
+		for _, candidate := range []string{filepath.Join(directory, "skills", name, "SKILL.md"), filepath.Join(directory, "commands", name+".md")} {
+			if information, err := os.Stat(candidate); err == nil && !information.IsDir() {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
 }

@@ -76,7 +76,9 @@ type Digest struct {
 	// Plan is the latest plan the user approved in the tool's plan mode.
 	Plan string
 	// StartingFiles are the markdown files the first prompt points at, like @docs/PLAN.md, that exist.
-	StartingFiles  []string
+	StartingFiles []string
+	// UsedSkills are the skills and slash commands run in the session, by name, once per run.
+	UsedSkills     []string
 	StartedAt      time.Time
 	LastActivityAt time.Time
 }

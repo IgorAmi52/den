@@ -146,7 +146,7 @@ func (currentModel *model) followDockItem() {
 	if !exists {
 		return
 	}
-	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil && suggestion.Kind == store.SuggestFolder {
+	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil && suggestion.Kind == store.SuggestFolder && len(suggestion.SessionIds) > 0 {
 		if session := currentModel.repository.FindSession(suggestion.SessionIds[0]); session != nil {
 			currentModel.expandFolder(session.FolderId)
 			if session.Archived {
@@ -442,7 +442,9 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 			verb, joiner = "New skill folder ", " from "
 		}
 		subject = theme.text.Render(verb) + theme.folder.Render("▸ "+suggestion.FolderName)
-		if session := repository.FindSession(suggestion.SessionIds[0]); session != nil {
+		if len(suggestion.SessionIds) == 0 {
+			subject += theme.dim.Render(joiner) + theme.bold.Render(suggestion.Source)
+		} else if session := repository.FindSession(suggestion.SessionIds[0]); session != nil {
 			subject += theme.dim.Render(joiner) + theme.bold.Render("\""+session.Title+"\"")
 		}
 		if suggestion.ParentFolderId != "" {

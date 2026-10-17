@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	minimumKeepConfidence   = 0.8
+	minimumKeepConfidence   = 0.7
 	maximumEvidence         = 3
 	maximumKeepLines        = 3
 	maximumFolderNameLength = 30
