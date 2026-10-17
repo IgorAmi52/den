@@ -144,10 +144,15 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
 	prompt.WriteString("\nLAPTOP RULES (already in every repo)\n" + orNone(notesExcerpt(input.LaptopRules)) + "\n")
+	tier := helper.Light
+	if len(input.AllPrompts) > 0 {
+		tier = helper.Reasoning
+	}
 	return helper.Request{
 		System: reviewSystem,
 		Prompt: prompt.String(),
 		Schema: objectSchema(map[string]any{"title": stringSchema(), "summary": stringSchema(), "keep": keepSchema(), "rule": ruleSchema()}),
+		Tier:   tier,
 	}
 }
 
@@ -200,6 +205,7 @@ func FirstRunRequest(digests []agent.Digest, repository *store.Repository, now t
 	return helper.Request{
 		System: firstRunSystem,
 		Prompt: prompt.String(),
+		Tier:   helper.Reasoning,
 		Schema: objectSchema(map[string]any{
 			"sessions": arraySchema(objectSchema(map[string]any{
 				"session": stringSchema(),
@@ -354,6 +360,7 @@ func ChatRequest(input ChatInput) helper.Request {
 	return helper.Request{
 		System: chatSystem,
 		Prompt: prompt.String(),
+		Tier:   helper.Reasoning,
 		Schema: objectSchema(map[string]any{
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{

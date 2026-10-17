@@ -83,7 +83,7 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 			var answer brain.FirstRunAnswer
 			request := brain.FirstRunRequest(newest, &repository, time.Now())
 			usage, err := helperCaller.Call(request, &answer)
-			scanned.call = &store.Call{Job: "first run", Model: helperCaller.Name(), PromptVersion: promptVersion(request.System), Prompt: request.Prompt,
+			scanned.call = &store.Call{Job: "first run", Model: usage.Model, PromptVersion: promptVersion(request.System), Prompt: request.Prompt,
 				InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CostDollars: usage.CostDollars, Milliseconds: usage.Duration.Milliseconds()}
 			if err != nil {
 				scanned.modelError, scanned.call.Error = err.Error(), err.Error()

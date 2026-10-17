@@ -338,7 +338,7 @@ func (currentModel *model) logCall(done jobDoneMessage) {
 	call := store.Call{
 		Job:           done.job.kind.String(),
 		SessionId:     done.job.sessionId,
-		Model:         currentModel.helperName(),
+		Model:         done.usage.Model,
 		PromptVersion: promptVersion(done.request.System),
 		Prompt:        done.request.Prompt,
 		InputTokens:   done.usage.InputTokens,
@@ -355,13 +355,6 @@ func (currentModel *model) logCall(done jobDoneMessage) {
 		call.Answer = answer
 	}
 	currentModel.reportError(currentModel.repository.LogCall(call))
-}
-
-func (currentModel model) helperName() string {
-	if currentModel.helperCaller == nil {
-		return ""
-	}
-	return currentModel.helperCaller.Name()
 }
 
 // promptVersion is a short hash of a system prompt, which changes whenever the prompt does.
