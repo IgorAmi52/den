@@ -143,7 +143,7 @@ func (currentModel model) wideTopBar(width int) string {
 		right = append(right, segment{text: "no agents open · n starts one ", style: theme.faint})
 	} else {
 		for _, open := range currentModel.openAgents {
-			right = append(right, segment{text: fmt.Sprintf("⌥%d", open.number), style: theme.accentBold}, currentModel.statusGlyph(open.status), segment{text: "  ", style: theme.text})
+			right = append(right, segment{text: fmt.Sprintf("⌥%d", open.number), style: theme.accentBold}, currentModel.statusGlyph(open), segment{text: "  ", style: theme.text})
 		}
 		right = append(right, segment{text: "z", style: theme.key}, segment{text: " back to agents ", style: theme.action})
 	}
@@ -161,7 +161,7 @@ func (currentModel model) thinkingSegments() []segment {
 func (currentModel model) waitingAgents() []openAgent {
 	var waiting []openAgent
 	for _, open := range currentModel.openAgents {
-		if open.status == "waiting" {
+		if open.status == "waiting" && !open.seen {
 			waiting = append(waiting, open)
 		}
 	}
@@ -199,7 +199,11 @@ func (currentModel model) treeLayout(width int) []treeLine {
 		if row.open != nil && row.open.status == "waiting" && row.open.reason != "" {
 			// The reason sits under the title: past the gutter, the indent and the pane marker.
 			indent := strings.Repeat(" ", 1+2*row.depth+3)
-			layout = append(layout, treeLine{text: currentModel.theme.waiting.Render(truncate(indent+"↳ "+row.open.reason, width)), rowIndex: -1})
+			reasonStyle := currentModel.theme.waiting
+			if row.open.seen {
+				reasonStyle = currentModel.theme.dim
+			}
+			layout = append(layout, treeLine{text: reasonStyle.Render(truncate(indent+"↳ "+row.open.reason, width)), rowIndex: -1})
 		}
 		if row.kind == inboxRow && len(currentModel.repository.Sessions) == 0 && len(currentModel.openAgents) == 0 {
 			layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("    no sessions yet · n starts one", width)), rowIndex: -1})
@@ -340,14 +344,17 @@ func (currentModel model) paneMarker(open *openAgent) []segment {
 	if open == nil {
 		return []segment{{text: "  ", style: currentModel.theme.text}}
 	}
-	return []segment{{text: fmt.Sprint(open.number), style: currentModel.theme.accentBold}, currentModel.statusGlyph(open.status)}
+	return []segment{{text: fmt.Sprint(open.number), style: currentModel.theme.accentBold}, currentModel.statusGlyph(*open)}
 }
 
-func (currentModel model) statusGlyph(status string) segment {
-	switch status {
+func (currentModel model) statusGlyph(open openAgent) segment {
+	switch open.status {
 	case "running":
 		return segment{text: "●", style: currentModel.theme.running}
 	case "waiting":
+		if open.seen {
+			return segment{text: "!", style: currentModel.theme.waitingSeen}
+		}
 		return segment{text: "!", style: currentModel.theme.waiting}
 	case "done":
 		return segment{text: "✓", style: currentModel.theme.dim}

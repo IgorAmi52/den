@@ -180,7 +180,7 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 		if statusText == "" {
 			statusText = "open"
 		}
-		glyph := currentModel.statusGlyph(open.status)
+		glyph := currentModel.statusGlyph(*open)
 		lines = append(lines, glyph.style.Render(glyph.text+" "+statusText)+theme.dim.Render(fmt.Sprintf(" · pane %d · ⌥%d jumps there", open.number, open.number)))
 		if open.reason != "" {
 			lines = append(lines, wrapAll([]string{glyph.style.Render("↳ " + open.reason)}, width)...)

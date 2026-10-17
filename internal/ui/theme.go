@@ -58,6 +58,7 @@ type theme struct {
 	border         lipgloss.Style
 	running        lipgloss.Style
 	waiting        lipgloss.Style
+	waitingSeen    lipgloss.Style
 	waitingBar     lipgloss.Style
 	suggestion     lipgloss.Style
 	suggestionBold lipgloss.Style
@@ -113,6 +114,7 @@ func newTheme(isDark bool, profile colorprofile.Profile) theme {
 		border:         base.Foreground(pick(borderColor)),
 		running:        base.Foreground(pick(runningColor)),
 		waiting:        base.Foreground(pick(waitingColor)).Bold(true),
+		waitingSeen:    base.Foreground(pick(waitingColor)),
 		waitingBar:     base.Foreground(pick(waitingColor)).Background(pickBackground(waitingBarLight, waitingBarDark)).Bold(true),
 		suggestion:     base.Foreground(suggestion),
 		suggestionBold: base.Foreground(suggestion).Bold(true),

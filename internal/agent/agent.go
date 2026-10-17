@@ -106,6 +106,9 @@ const (
 	StateDone = "done"
 )
 
+// QuestionReasonPrefix starts the reason of an agent waiting on the question its reply ends on, not on a permission.
+const QuestionReasonPrefix = "asks: "
+
 // StopState reads why an agent stopped from the event its hook passed, and says it in a few words:
 // waiting with what it asks permission for or the question its reply ends on, or done with what it did.
 // An empty state means the event says nothing new, like Claude's reminder that it's still idle, so the pane keeps its state.
@@ -129,7 +132,7 @@ func StopState(event []byte) (state string, reason string) {
 		reply = parsed.CodexLastAssistantMessage
 	}
 	if question := closingQuestion(reply); question != "" {
-		return StateWaiting, startOf("asks: "+question, maximumReasonLength)
+		return StateWaiting, startOf(QuestionReasonPrefix+question, maximumReasonLength)
 	}
 	return StateDone, startOf("done: "+firstSentence(reply), maximumReasonLength)
 }

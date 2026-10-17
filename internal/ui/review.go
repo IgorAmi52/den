@@ -89,7 +89,7 @@ func (currentModel model) screenTopBar(name string, width int) string {
 	left := []segment{{text: " den", style: theme.accentBold}, {text: " · " + currentModel.repositoryName() + " · " + name, style: theme.dim}}
 	var right []segment
 	for _, open := range currentModel.openAgents {
-		right = append(right, segment{text: fmt.Sprint(open.number), style: theme.accentBold}, currentModel.statusGlyph(open.status), segment{text: "  ", style: theme.text})
+		right = append(right, segment{text: fmt.Sprint(open.number), style: theme.accentBold}, currentModel.statusGlyph(open), segment{text: "  ", style: theme.text})
 	}
 	right = append(right, segment{text: "esc", style: theme.key}, segment{text: " back ", style: theme.action})
 	return currentModel.layoutRow(left, right, width, false)

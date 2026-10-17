@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -47,6 +48,8 @@ const (
 	paneContextOption = "@den-context"
 	// paneReasonOption says why a waiting agent needs the user, set by its hook.
 	paneReasonOption = "@den-reason"
+	// paneSeenOption marks a waiting agent the user has focused since it started waiting.
+	paneSeenOption = "@den-seen"
 )
 
 const (
@@ -92,7 +95,9 @@ type openAgent struct {
 	folderId  string
 	status    string
 	// reason says why a waiting agent needs the user.
-	reason     string
+	reason string
+	// seen tells whether the user has focused a waiting agent since it started waiting.
+	seen       bool
 	context    string
 	number     int
 	launchedAt time.Time
@@ -523,7 +528,7 @@ func (currentModel *model) launchInPane(tool string, sessionId string, title str
 // refreshAgents reads the agents from tmux in pane order, so numbering follows the screen after swaps.
 func (currentModel *model) refreshAgents() error {
 	windowPanes, err := tmux.ListPanes(currentModel.windowId, paneToolOption, paneSessionOption, paneLaunchedAtOption,
-		paneFolderOption, paneStatusOption, paneReasonOption, paneContextOption, paneNumberOption)
+		paneFolderOption, paneStatusOption, paneReasonOption, paneContextOption, paneNumberOption, paneSeenOption, "pane_active")
 	if err != nil {
 		return err
 	}
@@ -538,6 +543,9 @@ func (currentModel *model) refreshAgents() error {
 				return err
 			}
 		}
+		if err := markSeen(pane); err != nil {
+			return err
+		}
 		launchedAtMilliseconds, _ := strconv.ParseInt(pane.Options[paneLaunchedAtOption], 10, 64)
 		currentModel.openAgents = append(currentModel.openAgents, openAgent{
 			paneId:     pane.Id,
@@ -546,12 +554,27 @@ func (currentModel *model) refreshAgents() error {
 			folderId:   pane.Options[paneFolderOption],
 			status:     pane.Options[paneStatusOption],
 			reason:     pane.Options[paneReasonOption],
+			seen:       pane.Options[paneSeenOption] != "",
 			context:    pane.Options[paneContextOption],
 			number:     number,
 			launchedAt: time.UnixMilli(launchedAtMilliseconds),
 		})
 	}
 	return nil
+}
+
+// markSeen notes that the user focused a waiting agent. A closing question needs nothing more, so it turns done;
+// a permission keeps the agent waiting, only quieter, until the user answers it.
+func markSeen(pane tmux.Pane) error {
+	if pane.Options[paneStatusOption] != agent.StateWaiting || pane.Options[paneSeenOption] != "" || pane.Options["pane_active"] != "1" {
+		return nil
+	}
+	if strings.HasPrefix(pane.Options[paneReasonOption], agent.QuestionReasonPrefix) {
+		pane.Options[paneStatusOption] = agent.StateDone
+		return tmux.SetPaneStatus(pane.Id, agent.StateDone, "")
+	}
+	pane.Options[paneSeenOption] = "1"
+	return tmux.SetPaneOption(pane.Id, paneSeenOption, "1")
 }
 
 // trackNewSessions saves sessions of open panes once their first prompt exists; before that there is nothing to resume.

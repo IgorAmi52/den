@@ -77,13 +77,9 @@ func (currentModel *model) openChat(about *store.Suggestion) tea.Cmd {
 	return currentModel.startChat(about, chatSubject{})
 }
 
-// startChat opens the chat; a new subject starts a new conversation.
+// startChat opens the chat on a subject; the conversation carries over until the user starts a new one.
 func (currentModel *model) startChat(about *store.Suggestion, subject chatSubject) tea.Cmd {
 	state := &currentModel.chat
-	isSameSuggestion := (about == nil && state.about == nil) || (about != nil && state.about != nil && about.Id == state.about.Id)
-	if !isSameSuggestion || subject != state.subject {
-		state.messages, state.pendingActions = nil, nil
-	}
 	state.subject = subject
 	state.about = nil
 	if about != nil {
@@ -407,7 +403,7 @@ func (currentModel model) conversationLines(width int) []string {
 		lines := wrapAll([]string{
 			theme.text.Render("Ask den about your sessions and folders, or tell it what to change: write a folder's context, make a folder, move a session."),
 			theme.dim.Render("den reads " + currentModel.chatReadsText() + ". It never touches your repo or runs anything, and every change waits in a plan card for your enter."),
-			theme.faint.Render("Each chat lasts until you close den, open it on another row, or press ⌥L; den remembers its last 12 messages."),
+			theme.faint.Render("Each chat lasts until you close den or press ⌥L, and reads the row you opened it on; den remembers its last 12 messages."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
 		examples := []string{"make an Exploration skill folder: research only, no code changes", "which sessions worked on the eval loader?", "link docs/PLAN.md to Eval"}
