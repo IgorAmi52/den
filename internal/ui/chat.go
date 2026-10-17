@@ -398,7 +398,7 @@ func (currentModel model) conversationLines(width int) []string {
 		lines := wrapAll([]string{
 			theme.text.Render("Ask den about your sessions and folders, or tell it what to change: write a folder's context, make a folder, move a session."),
 			theme.dim.Render("den reads " + currentModel.chatReadsText() + ". It never touches your repo or runs anything, and every change waits in a plan card for your enter."),
-			theme.faint.Render("Each chat lasts until you close den, open it on another row, or press ctrl+l; den remembers its last 12 messages."),
+			theme.faint.Render("Each chat lasts until you close den, open it on another row, or press ⌥L; den remembers its last 12 messages."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
 		examples := []string{"make an Exploration skill folder: research only, no code changes", "which sessions worked on the eval loader?", "link docs/PLAN.md to Eval"}
