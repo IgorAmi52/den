@@ -179,7 +179,6 @@ func readClaudeDigest(transcriptPath string) Digest {
 					delete(proposedPlans, block.ToolUseId)
 				}
 			}
-			digest.notePullRequests(line)
 		case "assistant":
 			for _, block := range claudeBlocks(event.Message.Content) {
 				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
@@ -195,7 +194,6 @@ func readClaudeDigest(transcriptPath string) Digest {
 					proposedPlans[block.Id] = block.Input.Plan
 				}
 			}
-			digest.notePullRequests(line)
 		}
 		return true
 	})

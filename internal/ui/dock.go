@@ -296,20 +296,7 @@ func (currentModel *model) applyReviseAnswer(done job, answer brain.ChatAnswer, 
 		return
 	}
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
-	text := replyText(answer.Reply, actions)
-	for _, action := range actions {
-		text += "\n· " + action.Description
-		if action.Kind == "editNotes" {
-			noteLines := strings.Split(strings.TrimSpace(action.Text), "\n")
-			for _, line := range noteLines[:min(len(noteLines), dockNotesPreviewLines)] {
-				text += "\n    " + line
-			}
-			if len(noteLines) > dockNotesPreviewLines {
-				text += fmt.Sprintf("\n    … %d more lines", len(noteLines)-dockNotesPreviewLines)
-			}
-		}
-	}
-	state.reply = &brain.ChatMessage{FromDen: true, Text: text, Actions: actions}
+	state.reply = &brain.ChatMessage{FromDen: true, Text: replyText(answer.Reply, actions), Actions: actions}
 	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", Action: "reply",
 		Detail: state.asked, Outcome: fmt.Sprintf("%d actions", len(actions))}))
 }
@@ -364,7 +351,8 @@ func (currentModel model) dockLines(width int) []string {
 			footer = append(footer, wrapAll([]string{label + theme.text.Render(replyLine)}, width)...)
 		}
 		if len(state.reply.Actions) > 0 {
-			footer = append(footer, theme.key.Render("↵")+theme.action.Render(" do it  ")+theme.key.Render("⌫")+theme.action.Render(" back"))
+			confirmKeys := []key.Binding{relabeled(currentModel.keys.yes, "confirm"), relabeled(currentModel.keys.no, "back")}
+			footer = append(footer, currentModel.planCard(state.reply.Actions, "", confirmKeys, width)...)
 		}
 	}
 	input := state.input

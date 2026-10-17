@@ -3,7 +3,6 @@
 package brain
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
@@ -38,13 +37,6 @@ func containsAll(haystack []string, needles []string) bool {
 		}
 	}
 	return true
-}
-
-func countedSessions(count int, noun string) string {
-	if count == 1 {
-		return "1 " + noun
-	}
-	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 func toSet(spaceSeparated string) map[string]bool {

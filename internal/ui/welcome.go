@@ -322,7 +322,7 @@ func (currentModel model) scanningNote() string {
 	if currentModel.helperCaller == nil {
 		return "Their prompts and edited files, read on this Mac; sessions with real work come in."
 	}
-	return "Their prompts, edited files and how they ended; " + currentModel.helperCaller.Name() + " judges which are worth returning to."
+	return "Their prompts, edited files and how they ended; den judges which are worth returning to."
 }
 
 func (currentModel model) welcomeKeysBody(width int) []string {
@@ -341,6 +341,8 @@ func (currentModel model) welcomeKeysBody(width int) []string {
 		keyLine("⌥N", "start a new agent"),
 		keyLine("click", "focus any pane"),
 		"", theme.columnHeader.Render("IN DEN"),
+		keyLine("n", "new agent in the selected folder, starting with its context"),
+		keyLine("c", "ask den: write a folder's context, make a folder, move things"),
 		keyLine("⇥", "den's suggestions: ↵ yes, ⌫ no, or type to tell den"),
 		keyLine("↵", "open, or yes when den asks"),
 		keyLine("esc", "back out without changing anything"),

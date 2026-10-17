@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +15,11 @@ import (
 	"github.com/IgorAmi52/den/internal/ui"
 )
 
-const windowName = "den"
+const (
+	windowName = "den"
+	// maximumHookEventSize caps what den reads of a hook's event; the reply it needs is near the start.
+	maximumHookEventSize = 1 << 20
+)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -34,12 +39,17 @@ func run(arguments []string) error {
 		return nil
 	}
 	// Agents run "den hook status <state>" from their hooks; the pane they run in comes from tmux.
-	// Codex appends a JSON argument, which is ignored.
+	// Claude sends its event as JSON on stdin and Codex appends it as an argument; a waiting agent's event says why it waits.
 	if len(arguments) > 2 && arguments[0] == "hook" && arguments[1] == "status" {
-		if paneId := tmux.CurrentPane(); paneId != "" {
-			return tmux.SetPaneStatus(paneId, arguments[2])
+		paneId := tmux.CurrentPane()
+		if paneId == "" {
+			return nil
 		}
-		return nil
+		reason := ""
+		if arguments[2] == "waiting" {
+			reason = agent.WaitingReason(hookEvent(arguments[3:]))
+		}
+		return tmux.SetPaneStatus(paneId, arguments[2], reason)
 	}
 	if err := checkDependencies(); err != nil {
 		return err
@@ -71,6 +81,19 @@ func restorePanelIfMissing(denSessionName string, workingDirectory string, panel
 		return err
 	}
 	return tmux.SplitFullHeightLeft(denSessionName, ui.PanelWidth, workingDirectory, panelCommand)
+}
+
+// hookEvent is the event an agent's hook passes: Codex's JSON argument, or else Claude's JSON on stdin.
+// stdin is only read when something is piped into it, so a hook run by hand never waits.
+func hookEvent(extraArguments []string) []byte {
+	if len(extraArguments) > 0 {
+		return []byte(extraArguments[len(extraArguments)-1])
+	}
+	if information, err := os.Stdin.Stat(); err != nil || information.Mode()&os.ModeCharDevice != 0 {
+		return nil
+	}
+	event, _ := io.ReadAll(io.LimitReader(os.Stdin, maximumHookEventSize))
+	return event
 }
 
 func checkDependencies() error {

@@ -22,7 +22,7 @@ type keyMap struct {
 	scrollPreview              key.Binding
 	back, yes, no, edit        key.Binding
 	toggle                     key.Binding
-	send, scrollChat           key.Binding
+	send, scrollChat, newChat  key.Binding
 	pickPrevious, pickNext     key.Binding
 	confirmYes, confirmNo      key.Binding
 	save                       key.Binding
@@ -61,6 +61,7 @@ func newKeyMap() keyMap {
 		toggle:        binding([]string{"space"}, "space", "tick"),
 		send:          binding([]string{"enter"}, "↵", "send"),
 		scrollChat:    binding([]string{"pgup", "pgdown"}, "pgup/pgdn", "scroll"),
+		newChat:       binding([]string{"ctrl+l"}, "ctrl+l", "new chat"),
 		pickPrevious:  binding([]string{"left", "h", "up", "k"}, "←", "pick"),
 		pickNext:      binding([]string{"right", "l", "down", "j"}, "→", "pick"),
 		confirmYes:    binding([]string{"enter"}, "↵", "yes"),

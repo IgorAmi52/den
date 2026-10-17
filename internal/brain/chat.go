@@ -24,6 +24,8 @@ type ChatMessage struct {
 	Text    string
 	// Actions are what den will do once the user presses enter, for changes they asked for.
 	Actions []ChatAction
+	// Outcome is what became of Actions: empty while they wait, then done, or skipped when the user said something else.
+	Outcome string
 	// Asks is set when den asked what's missing from a request to "link" or "unlink",
 	// so the user's next message continues it.
 	Asks string
@@ -216,7 +218,7 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 				}
 				if text := strings.TrimSpace(proposed.Text); text != "" {
 					action.Text = text + "\n"
-					action.Description += ", with " + countedSessions(len(strings.Split(text, "\n")), "line") + " of context"
+					action.Description += ", with this context:"
 				}
 				actions = append(actions, action)
 			}
@@ -252,9 +254,9 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			text := strings.TrimSpace(proposed.Text)
 			isRepository := strings.EqualFold(strings.TrimSpace(proposed.Folder), "repo")
 			if text != "" && (folder != nil || isRepository) {
-				action := ChatAction{Kind: "editNotes", Text: text + "\n", Description: "rewrite the repo's context"}
+				action := ChatAction{Kind: "editNotes", Text: text + "\n", Description: "rewrite the repo's context to:"}
 				if folder != nil {
-					action.FolderId, action.Description = folder.Id, "rewrite the notes of "+folder.Name
+					action.FolderId, action.Description = folder.Id, "rewrite the notes of "+folder.Name+" to:"
 				}
 				actions = append(actions, action)
 			}

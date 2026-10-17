@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/IgorAmi52/den/internal/store"
@@ -176,40 +177,61 @@ func (currentModel model) contextFilePreview(laptopTool string, width int) []str
 	return wrapAll(lines, width)
 }
 
+// sessionPreview shows a session at a glance: its name, den's summary set apart, whether it's open, where its context
+// comes from, then the last exchange, the files it edited and how it started.
 func (currentModel model) sessionPreview(session *store.Session, open *openAgent, width int) []string {
 	theme := currentModel.theme
 	digest := currentModel.digests[session.SessionId]
-	lines := []string{theme.bold.Render(session.Title)}
+	lines := wrapAll([]string{theme.accentBold.Render(session.Title)}, width)
+	summary := theme.faint.Render("No summary yet: den writes one after the first prompt.")
 	if session.Summary != "" {
-		lines = append(lines, theme.text.Render(session.Summary))
+		summary = theme.text.Render(session.Summary)
 	}
+	lines = append(lines, strings.Split(theme.summaryBlock.Width(width).Render(summary), "\n")...)
 	lines = append(lines, "")
-	details := session.Tool + " · " + relativeAge(session.LastActivityAt) + " ago · " + currentModel.repository.FolderName(session.FolderId)
-	if session.Archived {
-		details += fmt.Sprintf(" · archived, %dd left", int(session.ArchiveTimeLeft(time.Now()).Hours()/24)+1)
-	}
-	lines = append(lines, theme.dim.Render(details))
-	if session.Branch != "" {
-		lines = append(lines, theme.dim.Render("⎇ "+session.Branch))
-	}
-	if digest.IssueKey != "" {
-		lines = append(lines, theme.dim.Render("issue "+digest.IssueKey))
-	}
-	if open != nil {
+	switch {
+	case open != nil:
 		statusText := map[string]string{"running": "running", "waiting": "waiting for you"}[open.status]
 		if statusText == "" {
 			statusText = "open"
 		}
 		glyph := currentModel.statusGlyph(open.status)
-		lines = append(lines, glyph.style.Render(glyph.text)+theme.text.Render(fmt.Sprintf(" %s in pane %d", statusText, open.number)))
-	} else {
+		lines = append(lines, glyph.style.Render(glyph.text+" "+statusText)+theme.dim.Render(fmt.Sprintf(" · pane %d · ⌥%d jumps there", open.number, open.number)))
+	case session.Archived:
+		lines = append(lines, theme.archive.Render("archived")+theme.dim.Render(fmt.Sprintf(" · %dd until den forgets it · ↵ resumes it", int(session.ArchiveTimeLeft(time.Now()).Hours()/24)+1)))
+	default:
 		lines = append(lines, theme.faint.Render("· not open · ↵ resumes it"))
 	}
-	if digest.LastPrompt != "" && digest.LastPrompt != digest.FirstPrompt {
-		lines = append(lines, "", theme.columnHeader.Render(fmt.Sprintf("YOU LAST SAID · %d PROMPTS IN ALL", digest.PromptCount)), theme.text.Render(truncate(digest.LastPrompt, width*2)))
+	meta := session.Tool + " · " + ageText(session.LastActivityAt)
+	if digest.PromptCount > 0 {
+		meta += fmt.Sprintf(" · %d %s", digest.PromptCount, plural(digest.PromptCount, "prompt"))
 	}
+	lines = append(lines, theme.dim.Render(meta))
+	contextLine := theme.dim.Render("started without context (N)")
+	if !session.WithoutContext {
+		layers := []string{currentModel.repositoryName()}
+		for _, folder := range currentModel.repository.FolderPath(session.FolderId) {
+			layers = append(layers, folder.Name)
+		}
+		contextLine = theme.accent.Render("◆ ") + theme.text.Render(strings.Join(layers, " → "))
+	}
+	if session.Branch != "" {
+		contextLine += theme.dim.Render("   ⎇ " + session.Branch)
+	}
+	lines = append(lines, contextLine)
+	section := func(title string, text string, style lipgloss.Style, maximumLines int) {
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		lines = append(lines, "", theme.sectionHeader.Render(title))
+		for _, line := range firstWrappedLines(oneLine(text), width, maximumLines) {
+			lines = append(lines, style.Render(line))
+		}
+	}
+	section("YOU ASKED LAST", digest.LastPrompt, theme.text, 3)
+	section(strings.ToUpper(session.Tool)+" REPLIED", digest.LastAgentMessage, theme.dim, 4)
 	if len(digest.TouchedFiles) > 0 {
-		lines = append(lines, "", theme.columnHeader.Render(fmt.Sprintf("EDITED · %d FILES", len(digest.TouchedFiles))))
+		lines = append(lines, "", theme.sectionHeader.Render(fmt.Sprintf("EDITED · %d %s", len(digest.TouchedFiles), strings.ToUpper(plural(len(digest.TouchedFiles), "file")))))
 		for _, filePath := range digest.TouchedFiles[:min(8, len(digest.TouchedFiles))] {
 			lines = append(lines, theme.text.Render(truncate(currentModel.relativeToRepository(filePath, session.WorkingDirectory), width)))
 		}
@@ -217,29 +239,32 @@ func (currentModel model) sessionPreview(session *store.Session, open *openAgent
 			lines = append(lines, theme.faint.Render(fmt.Sprintf("and %d more", len(digest.TouchedFiles)-8)))
 		}
 	}
-	if digest.FirstPrompt != "" {
-		lines = append(lines, "", theme.columnHeader.Render("IT STARTED WITH"), theme.dim.Render(truncate(digest.FirstPrompt, width*3)))
-	}
-	if len(digest.PullRequests) > 0 {
-		lines = append(lines, "", theme.columnHeader.Render("PULL REQUESTS"))
-		for _, link := range digest.PullRequests {
-			lines = append(lines, ansi.SetHyperlink(link)+theme.link.Render(truncate(link, width))+ansi.ResetHyperlink())
-		}
-	}
-	lines = append(lines, "", theme.columnHeader.Render("CONTEXT"))
-	if session.WithoutContext {
-		lines = append(lines, theme.dim.Render("started without context (N)"))
-	} else {
-		layers := []string{currentModel.repositoryName()}
-		for _, folder := range currentModel.repository.FolderPath(session.FolderId) {
-			layers = append(layers, folder.Name)
-		}
-		lines = append(lines, theme.accent.Render("◆ ")+theme.text.Render(strings.Join(layers, " → ")))
+	if digest.FirstPrompt != digest.LastPrompt {
+		section("IT STARTED WITH", digest.FirstPrompt, theme.dim, 3)
 	}
 	if session.WorkingDirectory != "" {
-		lines = append(lines, theme.dim.Render(displayPath(session.WorkingDirectory)))
+		lines = append(lines, "", theme.faint.Render(truncate(displayPath(session.WorkingDirectory), width)))
 	}
-	return wrapAll(lines, width)
+	return lines
+}
+
+// ageText says how long ago something happened, as a phrase: "just now", or "2h ago".
+func ageText(moment time.Time) string {
+	if age := relativeAge(moment); age != "now" {
+		return age + " ago"
+	}
+	return "just now"
+}
+
+// firstWrappedLines wraps text to width and keeps at most maximumLines, ending in … when it cut some.
+func firstWrappedLines(text string, width int, maximumLines int) []string {
+	lines := wrapText(text, width)
+	if len(lines) <= maximumLines {
+		return lines
+	}
+	kept := lines[:maximumLines]
+	kept[maximumLines-1] = strings.TrimRight(ansi.Truncate(kept[maximumLines-1], max(width-1, 1), ""), " ") + "…"
+	return kept
 }
 
 func (currentModel model) relativeToRepository(filePath string, workingDirectory string) string {

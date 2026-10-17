@@ -182,6 +182,9 @@ func (currentModel model) waitingAlert(waiting []openAgent) string {
 	if session := currentModel.repository.FindSession(waiting[0].sessionId); session != nil {
 		title = session.Title
 	}
+	if waiting[0].reason != "" {
+		return fmt.Sprintf("! %s needs you · %s · ⌥%d jumps there", truncate(title, 40), waiting[0].reason, waiting[0].number)
+	}
 	return fmt.Sprintf("! %s is waiting for you · ⌥%d jumps there", truncate(title, 50), waiting[0].number)
 }
 
@@ -195,6 +198,11 @@ func (currentModel model) treeLayout(width int) []treeLine {
 			layout = append(layout, treeLine{rowIndex: -1})
 		}
 		layout = append(layout, treeLine{text: currentModel.treeRowLine(row, rowIndex, width), rowIndex: rowIndex})
+		if row.open != nil && row.open.status == "waiting" && row.open.reason != "" {
+			// The reason sits under the title: past the gutter, the indent and the pane marker.
+			indent := strings.Repeat(" ", 1+2*row.depth+3)
+			layout = append(layout, treeLine{text: currentModel.theme.waiting.Render(truncate(indent+"↳ "+row.open.reason, width)), rowIndex: -1})
+		}
 		if row.kind == inboxRow && len(currentModel.repository.Sessions) == 0 && len(currentModel.openAgents) == 0 {
 			layout = append(layout, treeLine{text: currentModel.theme.faint.Render(truncate("    no sessions yet · n starts one", width)), rowIndex: -1})
 		}

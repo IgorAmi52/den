@@ -80,6 +80,9 @@ type theme struct {
 	youLabel     lipgloss.Style
 	denLabel     lipgloss.Style
 	pinned       lipgloss.Style
+	// summaryBlock sets a session's summary apart behind a thick accent bar; sectionHeader names the parts of a preview.
+	summaryBlock  lipgloss.Style
+	sectionHeader lipgloss.Style
 }
 
 // newTheme builds the styles for the terminal's background and color support.
@@ -130,5 +133,7 @@ func newTheme(isDark bool, profile colorprofile.Profile) theme {
 		youLabel:       base.Foreground(accent).Bold(true),
 		denLabel:       base.Foreground(suggestion).Bold(true),
 		pinned:         base.Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(suggestion).PaddingLeft(1),
+		summaryBlock:   base.Border(lipgloss.ThickBorder(), false, false, false, true).BorderForeground(accent).PaddingLeft(1),
+		sectionHeader:  base.Foreground(dim).Bold(true),
 	}
 }

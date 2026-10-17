@@ -73,8 +73,6 @@ type Digest struct {
 	AgentTitle string
 	// IssueKey is the issue the session works on: the key in its branch, or else the first one typed in a prompt.
 	IssueKey string
-	// PullRequests are the pull request links that came up in the session, in order.
-	PullRequests []string
 	// Plan is the latest plan the user approved in the tool's plan mode.
 	Plan string
 	// StartingFiles are the markdown files the first prompt points at, like @docs/PLAN.md, that exist.
@@ -94,9 +92,61 @@ var supportedAdapters = []Adapter{Claude{}, Codex{}}
 var (
 	issueKeyPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9]+)-\d+\b`)
 	// notIssuePrefixes look like issue keys but name standards and encodings, like UTF-8 or SHA-256.
-	notIssuePrefixes   = map[string]bool{"UTF": true, "SHA": true, "ISO": true, "RFC": true, "CVE": true, "HTTP": true, "TLS": true, "SSL": true, "AES": true, "RSA": true, "PEP": true, "GPT": true, "UTC": true, "GMT": true, "ES": true}
-	pullRequestPattern = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+|https://gitlab\.[\w.-]+/[\w./-]+/-/merge_requests/\d+`)
+	notIssuePrefixes = map[string]bool{"UTF": true, "SHA": true, "ISO": true, "RFC": true, "CVE": true, "HTTP": true, "TLS": true, "SSL": true, "AES": true, "RSA": true, "PEP": true, "GPT": true, "UTC": true, "GMT": true, "ES": true}
 )
+
+// maximumReasonLength keeps a waiting agent's reason to what fits on its pane border.
+const maximumReasonLength = 70
+
+// WaitingReason says in a few words why an agent waits for the user, from the event its hook passed:
+// what it asks permission for, the question its last reply ends on, or that it's done and with what.
+// It's empty when the event says nothing new, like Claude's reminder that it's still waiting for input.
+func WaitingReason(event []byte) string {
+	var parsed struct {
+		Message                   string `json:"message"`
+		LastAssistantMessage      string `json:"last_assistant_message"`
+		CodexLastAssistantMessage string `json:"last-assistant-message"`
+	}
+	if json.Unmarshal(event, &parsed) != nil {
+		return ""
+	}
+	if message := oneLine(parsed.Message); message != "" {
+		if strings.Contains(message, "waiting for your input") {
+			return ""
+		}
+		return startOf(strings.TrimPrefix(strings.TrimPrefix(message, "Claude "), "needs your "), maximumReasonLength)
+	}
+	reply := parsed.LastAssistantMessage
+	if reply == "" {
+		reply = parsed.CodexLastAssistantMessage
+	}
+	if question := lastQuestion(reply); question != "" {
+		return startOf("asks: "+question, maximumReasonLength)
+	}
+	if sentence := firstSentence(reply); sentence != "" {
+		return startOf("done: "+sentence, maximumReasonLength)
+	}
+	return ""
+}
+
+// lastQuestion is the last sentence of text that ends with a question mark, if any.
+func lastQuestion(text string) string {
+	end := strings.LastIndex(text, "?")
+	if end < 0 {
+		return ""
+	}
+	start := strings.LastIndexAny(text[:end], ".!?\n") + 1
+	return oneLine(strings.TrimLeft(text[start:end+1], "*#>- "))
+}
+
+// firstSentence is text up to its first sentence end, on one line, without markdown markers.
+func firstSentence(text string) string {
+	text = oneLine(strings.TrimLeft(strings.TrimSpace(text), "*#>- "))
+	if end := strings.IndexAny(text, ".!?"); end >= 0 && end+1 < len(text) && text[end+1] == ' ' {
+		return text[:end+1]
+	}
+	return text
+}
 
 // IssueKeyIn finds the first issue key in text, like YT-123.
 func IssueKeyIn(text string) string {
@@ -238,13 +288,6 @@ func cachedDigestOf(transcriptPath string, read func(transcriptPath string) Dige
 	digestCache[transcriptPath] = cachedDigest{size: information.Size(), modifiedTime: information.ModTime(), digest: digest}
 	digestCacheMutex.Unlock()
 	return digest, nil
-}
-
-// notePullRequests adds the pull request links in a transcript line to the digest.
-func (digest *Digest) notePullRequests(line json.RawMessage) {
-	for _, link := range pullRequestPattern.FindAllString(string(line), -1) {
-		digest.PullRequests = appendOnce(digest.PullRequests, link)
-	}
 }
 
 // settleIssueKey prefers the issue key in the branch over one typed in a prompt.

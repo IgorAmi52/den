@@ -116,6 +116,9 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 				return currentModel, nil
 			}
 			state.input.SetValue("")
+			if len(state.pendingActions) > 0 {
+				state.settlePlan(planSkipped)
+			}
 			state.addMessage(brain.ChatMessage{Text: text})
 			if currentModel.helperCaller != nil {
 				state.thinking = true
@@ -128,6 +131,9 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 				WorkingDirectory: currentModel.workingDirectory,
 				FolderId:         state.subject.folderId,
 			}))
+			return currentModel, nil
+		case key.Matches(keyPress, keys.newChat):
+			state.messages, state.pendingActions, state.scrollOffset = nil, nil, 0
 			return currentModel, nil
 		case keyPress.String() == "pgup":
 			state.scrollOffset += 5
@@ -186,18 +192,6 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 	state.thinking = false
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
 	text := replyText(answer.Reply, actions)
-	if len(actions) > 0 {
-		var listed []string
-		for _, action := range actions {
-			listed = append(listed, "· "+action.Description)
-			if action.Text != "" {
-				for _, line := range strings.Split(strings.TrimSpace(action.Text), "\n") {
-					listed = append(listed, "    "+line)
-				}
-			}
-		}
-		text += "\n\n" + strings.Join(listed, "\n") + "\n↵ does it"
-	}
 	if len(answer.Actions) > len(actions) {
 		text += fmt.Sprintf("\n(%d change I thought of didn't match your folders, sessions or files, so I left it out.)", len(answer.Actions)-len(actions))
 	}
@@ -207,8 +201,19 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 
 // applyChatActions makes the changes the user asked for in the chat and confirmed with enter.
 func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
-	done := currentModel.doChatActions(actions)
-	currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: "Done: " + strings.Join(done, "; ") + "."})
+	currentModel.doChatActions(actions)
+	currentModel.chat.settlePlan(planDone)
+}
+
+// settlePlan records what became of the plan waiting for the user's enter, so its card says so.
+func (state *chatState) settlePlan(outcome string) {
+	for index := len(state.messages) - 1; index >= 0; index-- {
+		if message := &state.messages[index]; len(message.Actions) > 0 && message.Outcome == "" {
+			message.Outcome = outcome
+			break
+		}
+	}
+	state.pendingActions = nil
 }
 
 // doChatActions makes changes the user confirmed, in the chat or the dock, and says what each did.
@@ -369,9 +374,9 @@ func (currentModel model) chatView() string {
 	bottom := []string{theme.border.Render(strings.Repeat("─", width)), margin + state.input.View()}
 	send := currentModel.keys.send
 	if len(state.pendingActions) > 0 && state.input.Value() == "" {
-		send = relabeled(send, "yes")
+		send = relabeled(send, "confirm the plan")
 	}
-	bottom = append(bottom, margin+strings.Join(currentModel.hintLines([]key.Binding{send, currentModel.keys.scrollChat, currentModel.keys.back}, contentWidth, 1), ""))
+	bottom = append(bottom, margin+strings.Join(currentModel.hintLines([]key.Binding{send, currentModel.keys.newChat, currentModel.keys.scrollChat, currentModel.keys.back}, contentWidth, 1), ""))
 	conversationHeight := max(currentModel.height-len(top)-len(bottom)-1, 1)
 	conversation := currentModel.conversationLines(contentWidth)
 	end := max(len(conversation)-state.scrollOffset, 0)
@@ -391,8 +396,9 @@ func (currentModel model) conversationLines(width int) []string {
 	theme := currentModel.theme
 	if len(currentModel.chat.messages) == 0 {
 		lines := wrapAll([]string{
-			theme.text.Render("Ask den about your sessions and folders, or tell it what to change in what it suggested."),
-			theme.dim.Render("den answers and proposes. It never touches your repo, never runs anything, and every change it proposes waits for your yes."),
+			theme.text.Render("Ask den about your sessions and folders, or tell it what to change: write a folder's context, make a folder, move a session."),
+			theme.dim.Render("den reads " + currentModel.chatReadsText() + ". It never touches your repo or runs anything, and every change waits in a plan card for your enter."),
+			theme.faint.Render("Each chat lasts until you close den, open it on another row, or press ctrl+l; den remembers its last 12 messages."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
 		examples := []string{"make an Exploration skill folder: research only, no code changes", "which sessions worked on the eval loader?", "link docs/PLAN.md to Eval"}
@@ -424,9 +430,27 @@ func (currentModel model) conversationLines(width int) []string {
 			}
 			lines = append(lines, label+theme.text.Render(line))
 		}
+		if len(message.Actions) > 0 {
+			confirmKeys := []key.Binding{relabeled(currentModel.keys.send, "confirm"), key.NewBinding(key.WithKeys(), key.WithHelp("type", "to change it")), relabeled(currentModel.keys.back, "back")}
+			for _, cardLine := range currentModel.planCard(message.Actions, message.Outcome, confirmKeys, width-chatLabelWidth) {
+				lines = append(lines, strings.Repeat(" ", chatLabelWidth)+cardLine)
+			}
+		}
 	}
 	if currentModel.chat.thinking {
 		lines = append(lines, "", theme.denLabel.Render(padRight("den", chatLabelWidth))+theme.faint.Render("thinking…"))
 	}
 	return lines
+}
+
+// chatReadsText says what den reads to answer, for the chat it's about.
+func (currentModel model) chatReadsText() string {
+	reads := "every folder and session by name, and the repo's notes"
+	switch {
+	case currentModel.chat.subject.sessionId != "":
+		return "this session's latest turns, its folder's context, " + reads
+	case currentModel.chat.subject.folderId != "":
+		return "this folder's context, the latest turns of its newest sessions, " + reads
+	}
+	return "your latest session's turns, " + reads
 }

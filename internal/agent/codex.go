@@ -258,7 +258,6 @@ func readCodexDigest(filePath string) Digest {
 		if !event.Timestamp.IsZero() {
 			digest.LastActivityAt = event.Timestamp
 		}
-		digest.notePullRequests(line)
 		switch event.Payload.Type {
 		case "message":
 			if event.Payload.Role == "assistant" {

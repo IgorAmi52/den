@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"slices"
@@ -44,20 +45,33 @@ const (
 	// paneContextOption is "none" for a session started without context, "empty" when its folders have no notes yet,
 	// and "notes" when it started with notes.
 	paneContextOption = "@den-context"
+	// paneReasonOption says why a waiting agent needs the user, set by its hook.
+	paneReasonOption = "@den-reason"
+)
+
+const (
+	// inactiveDarkening is how much darker than the terminal's background the panes without focus get,
+	// so the focused one stands out while the others stay readable.
+	inactiveDarkening  = 0.3
+	inactiveLightening = 0.06
 )
 
 // paneLabel reads "claude · ◆ Eval · session title"; before the agent is known, it shows the running command.
 const paneLabel = "#{?#{@den-tool},#{@den-tool}#{?#{@den-folder}, · #{?#{==:#{@den-context},notes},◆ ,}#{@den-folder},}#{?#{@den-title}, · #{=50:@den-title},},#{pane_current_command}}"
 
+// windowOptions style the den window. Panes without focus are dimmed, and once den knows the terminal's background,
+// tinted a little darker too; the focused pane keeps the terminal's own colors. A waiting agent's border
+// carries an amber tag with why it waits, which the dimming never touches.
 var windowOptions = map[string]string{
-	"window-style":             "fg=colour247",
-	"window-active-style":      "fg=default",
+	"window-style": "fg=colour245",
+	// terminal, not default: in tmux a default here falls back to window-style, which would dim the focused pane too.
+	"window-active-style":      "fg=terminal,bg=terminal",
 	"pane-border-style":        "fg=colour238",
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
 	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌥0 back #[default], den #[fg=colour240]⌥0 #[default]},#{?#{==:#{@den-status},waiting}," +
-		"#[fg=colour214 bold] ! ⌥#{@den-number} needs you · " + paneLabel + " #[default]," +
+		"#[fg=colour234 bg=colour214 bold] ! ⌥#{@den-number} needs you #[fg=colour214 bg=default nobold]#{?#{@den-reason}, #{@den-reason} ·,} " + paneLabel + " #[default]," +
 		"#{?pane_active,#[bg=colour75 fg=colour231 bold] ⌥#{@den-number} " + paneLabel + " #[default], ⌥#{@den-number} " + paneLabel + " }}}",
 	windowMarkerOption: "1",
 }
@@ -72,11 +86,13 @@ const (
 )
 
 type openAgent struct {
-	paneId     string
-	tool       string
-	sessionId  string
-	folderId   string
-	status     string
+	paneId    string
+	tool      string
+	sessionId string
+	folderId  string
+	status    string
+	// reason says why a waiting agent needs the user.
+	reason     string
 	context    string
 	number     int
 	launchedAt time.Time
@@ -281,6 +297,7 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.BackgroundColorMsg:
 		currentModel.isDark = typedMessage.IsDark()
 		currentModel.theme = newTheme(currentModel.isDark, currentModel.colorProfile)
+		currentModel.reportError(tmux.SetWindowOption(currentModel.windowId, "window-style", inactivePaneStyle(typedMessage.Color, currentModel.isDark)))
 		return currentModel, nil
 	case tea.ColorProfileMsg:
 		currentModel.colorProfile = typedMessage.Profile
@@ -491,7 +508,7 @@ func (currentModel *model) launchInPane(tool string, sessionId string, title str
 // refreshAgents reads the agents from tmux in pane order, so numbering follows the screen after swaps.
 func (currentModel *model) refreshAgents() error {
 	windowPanes, err := tmux.ListPanes(currentModel.windowId, paneToolOption, paneSessionOption, paneLaunchedAtOption,
-		paneFolderOption, paneStatusOption, paneContextOption, paneNumberOption)
+		paneFolderOption, paneStatusOption, paneReasonOption, paneContextOption, paneNumberOption)
 	if err != nil {
 		return err
 	}
@@ -513,6 +530,7 @@ func (currentModel *model) refreshAgents() error {
 			sessionId:  pane.Options[paneSessionOption],
 			folderId:   pane.Options[paneFolderOption],
 			status:     pane.Options[paneStatusOption],
+			reason:     pane.Options[paneReasonOption],
 			context:    pane.Options[paneContextOption],
 			number:     number,
 			launchedAt: time.UnixMilli(launchedAtMilliseconds),
@@ -723,6 +741,24 @@ func (currentModel *model) setStatus(message string) {
 
 func (currentModel *model) clearStatus() {
 	currentModel.statusMessage, currentModel.statusIsError = "", false
+}
+
+// inactivePaneStyle dims the panes without focus: dimmer text on the terminal's own background, a little darker
+// on a dark terminal and a little grayer on a light one, so the focused pane stands out in any theme.
+func inactivePaneStyle(background color.Color, isDark bool) string {
+	red, green, blue, _ := background.RGBA()
+	shade := func(channel uint32) uint32 {
+		value := float64(channel >> 8)
+		if isDark {
+			return uint32(value * (1 - inactiveDarkening))
+		}
+		return uint32(value * (1 - inactiveLightening))
+	}
+	foreground := "colour245"
+	if !isDark {
+		foreground = "colour243"
+	}
+	return fmt.Sprintf("fg=%s,bg=#%02x%02x%02x", foreground, shade(red), shade(green), shade(blue))
 }
 
 func (currentModel model) repositoryName() string {
