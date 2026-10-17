@@ -20,6 +20,10 @@ const codexLaunchTimeTolerance = 10 * time.Second
 // codexPatchedFile finds the files an apply_patch call changes.
 var codexPatchedFile = regexp.MustCompile(`\*\*\* (?:Update|Add) File: (\S+)`)
 
+// codexReadSkill finds the skill a tool call loads: Codex runs a skill, asked for with $name or picked by the agent,
+// by reading its SKILL.md.
+var codexReadSkill = regexp.MustCompile(`/skills/([A-Za-z0-9][A-Za-z0-9_-]*)/SKILL\.md`)
+
 type Codex struct{}
 
 type codexSessionStart struct {
@@ -38,10 +42,11 @@ type codexSessionStart struct {
 type codexEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 	Payload   struct {
-		Type    string `json:"type"`
-		Role    string `json:"role"`
-		Input   string `json:"input"`
-		Content []struct {
+		Type      string `json:"type"`
+		Role      string `json:"role"`
+		Input     string `json:"input"`
+		Arguments string `json:"arguments"`
+		Content   []struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"payload"`
@@ -285,9 +290,16 @@ func readCodexDigest(filePath string) Digest {
 					break
 				}
 			}
-		case "custom_tool_call":
-			for _, match := range codexPatchedFile.FindAllStringSubmatch(event.Payload.Input, -1) {
+		case "custom_tool_call", "function_call":
+			call := event.Payload.Input + event.Payload.Arguments
+			patched := codexPatchedFile.FindAllStringSubmatch(call, -1)
+			for _, match := range patched {
 				digest.TouchedFiles = appendOnce(digest.TouchedFiles, match[1])
+			}
+			if len(patched) == 0 {
+				for _, match := range codexReadSkill.FindAllStringSubmatch(call, -1) {
+					digest.UsedSkills = appendOnce(digest.UsedSkills, match[1])
+				}
 			}
 		}
 		return true

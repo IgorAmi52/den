@@ -352,3 +352,27 @@ func appendOnce(values []string, value string) []string {
 func oneLine(text string) string {
 	return strings.Join(strings.Fields(text), " ")
 }
+
+// SkillFile finds the file of a skill or slash command of the user's: in the repo, or in their own claude, codex
+// or shared agents directory. Built-in commands, like Claude's /compact, have none.
+func SkillFile(name string, repositoryPath string) (string, bool) {
+	if strings.ContainsAny(name, "/:") || strings.HasPrefix(name, ".") {
+		return "", false
+	}
+	homePath, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	claudeDirectory, _ := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
+	codexDirectory, _ := homeDirectory("CODEX_HOME", ".codex")
+	directories := []string{filepath.Join(repositoryPath, ".claude"), filepath.Join(repositoryPath, ".codex"), filepath.Join(repositoryPath, ".agents"),
+		claudeDirectory, codexDirectory, filepath.Join(homePath, ".agents")}
+	for _, directory := range directories {
+		for _, candidate := range []string{filepath.Join(directory, "skills", name, "SKILL.md"), filepath.Join(directory, "commands", name+".md")} {
+			if information, err := os.Stat(candidate); err == nil && !information.IsDir() {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
+}

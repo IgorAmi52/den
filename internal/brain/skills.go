@@ -10,22 +10,22 @@ import (
 	"github.com/IgorAmi52/den/internal/store"
 )
 
-// minimumSkillUses is how often a skill of the user's has to run in this repo's sessions before den offers it a folder.
-const minimumSkillUses = 3
+// minimumSkillSessions is in how many of this repo's sessions a skill of the user's has to run before den offers it a folder.
+const minimumSkillSessions = 3
 
 // skillFolders offers a skill folder for a skill or slash command the user keeps running, with the skill's own file
 // copied as its context, so den never has to write the instructions itself.
 func skillFolders(observation Observation) []store.Suggestion {
 	repository := observation.Repository
-	uses := map[string]int{}
+	sessionsUsing := map[string]int{}
 	for _, digest := range observation.Digests {
-		for _, name := range digest.UsedSkills {
-			uses[name]++
+		for _, name := range slices.Compact(slices.Sorted(slices.Values(digest.UsedSkills))) {
+			sessionsUsing[name]++
 		}
 	}
 	var names []string
-	for name, count := range uses {
-		if count >= minimumSkillUses {
+	for name, count := range sessionsUsing {
+		if count >= minimumSkillSessions {
 			names = append(names, name)
 		}
 	}
@@ -49,8 +49,8 @@ func skillFolders(observation Observation) []store.Suggestion {
 			FolderName:   folderName,
 			Skill:        true,
 			ProposedText: string(text),
-			Source:       "/" + name,
-			Reason:       fmt.Sprintf("You've run /%s %d times here; a folder would start every session in it.", name, uses[name]),
+			Source:       "your " + name + " skill",
+			Reason:       fmt.Sprintf("You've used %s in %d sessions here; a folder starts each new one with it.", name, sessionsUsing[name]),
 		}
 		if !repository.IsRejected(suggestion) {
 			suggestions = append(suggestions, suggestion)

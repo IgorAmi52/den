@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -309,21 +308,4 @@ func slashCommandIn(content json.RawMessage) string {
 		return match[1]
 	}
 	return ""
-}
-
-// SkillFile finds the file of a skill or slash command of the user's, in the repo or in their own claude directory.
-// Claude's built-in commands, like /compact, have none.
-func SkillFile(name string, repositoryPath string) (string, bool) {
-	configurationDirectory, err := homeDirectory("CLAUDE_CONFIG_DIR", ".claude")
-	if err != nil || strings.ContainsAny(name, "/:") {
-		return "", false
-	}
-	for _, directory := range []string{filepath.Join(repositoryPath, ".claude"), configurationDirectory} {
-		for _, candidate := range []string{filepath.Join(directory, "skills", name, "SKILL.md"), filepath.Join(directory, "commands", name+".md")} {
-			if information, err := os.Stat(candidate); err == nil && !information.IsDir() {
-				return candidate, true
-			}
-		}
-	}
-	return "", false
 }
