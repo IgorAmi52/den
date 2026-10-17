@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -48,6 +49,8 @@ type pastSessionsMessage struct {
 	optionKeyEnabled bool
 	// modelError says why den's model couldn't judge the sessions, so the local rule did.
 	modelError string
+	// call is den's model call that judged them, for the call log.
+	call *store.Call
 }
 
 func newWelcomeState() *welcomeState {
@@ -78,10 +81,15 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 		scanned := pastSessionsMessage{arrivals: brain.ArrivalsWithoutModel(newest)}
 		if helperCaller != nil && len(newest) > 0 {
 			var answer brain.FirstRunAnswer
-			if _, err := helperCaller.Call(brain.FirstRunRequest(newest, &repository, time.Now()), &answer); err != nil {
-				scanned.modelError = err.Error()
+			request := brain.FirstRunRequest(newest, &repository, time.Now())
+			usage, err := helperCaller.Call(request, &answer)
+			scanned.call = &store.Call{Job: "first run", Model: helperCaller.Name(), PromptVersion: promptVersion(request.System), Prompt: request.Prompt,
+				InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens, CostDollars: usage.CostDollars, Milliseconds: usage.Duration.Milliseconds()}
+			if err != nil {
+				scanned.modelError, scanned.call.Error = err.Error(), err.Error()
 			} else {
 				scanned.arrivals = brain.ArrivalsFromModel(answer, newest, &repository)
+				scanned.call.Answer, _ = json.Marshal(answer)
 			}
 		}
 		if isAppleTerminal() {
@@ -105,6 +113,9 @@ func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Mo
 	state := currentModel.welcome
 	if state == nil {
 		return currentModel, nil
+	}
+	if scanned.call != nil {
+		currentModel.reportError(currentModel.repository.LogCall(*scanned.call))
 	}
 	state.arrivals = scanned.arrivals
 	state.optionKeyProfile, state.optionKeyEnabled = scanned.optionKeyProfile, scanned.optionKeyEnabled
@@ -210,9 +221,11 @@ func (currentModel *model) applyWelcome() {
 			Title:            arrival.Title,
 			TitledAtPrompt:   digest.PromptCount,
 			ReviewedAtPrompt: digest.PromptCount,
-			Summary:          arrival.Why,
-			CreatedAt:        now,
-			LastActivityAt:   digest.LastActivityAt,
+			// The first run already judged it whole, so it gets no review of the whole session until it has new prompts.
+			QuietReviewedAtPrompt: digest.PromptCount,
+			Summary:               arrival.Why,
+			CreatedAt:             now,
+			LastActivityAt:        digest.LastActivityAt,
 		})
 		if arrival.Suggestion != nil {
 			currentModel.repository.Offer(*arrival.Suggestion)

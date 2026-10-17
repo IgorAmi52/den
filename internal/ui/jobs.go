@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -17,8 +20,12 @@ import (
 const (
 	// reviewEvery is how many new prompts make a session worth another look while its agent is open.
 	reviewEvery = 2
-	// baselineAfter is how old a session's last activity is for den to start counting from now instead of reviewing it.
-	baselineAfter = time.Hour
+	// reviewTurns is how many of the latest turns a review reads, the new ones marked, so it sees where they came from.
+	reviewTurns = 10
+	// quietAfter is how long a session sits idle before den reviews all of it once.
+	quietAfter = 20 * time.Minute
+	// minimumQuietPrompts keeps the review of a whole session to sessions with real work in them.
+	minimumQuietPrompts = 3
 	// maximumTitleLength drops titles that ignored the naming rules.
 	maximumTitleLength = 40
 	// maximumHelperFailures turns the model off for the rest of the run, so a broken login doesn't fail every 20 seconds.
@@ -45,6 +52,8 @@ type job struct {
 	kind         jobKind
 	sessionId    string
 	suggestionId string
+	// wholeSession makes a review look at all of a session that went quiet, not only its latest turns.
+	wholeSession bool
 }
 
 type jobDoneMessage struct {
@@ -53,6 +62,7 @@ type jobDoneMessage struct {
 	promptCount int
 	answer      any
 	chatInput   brain.ChatInput
+	request     helper.Request
 	usage       helper.Usage
 	err         error
 }
@@ -94,7 +104,7 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 	caller := *currentModel.helperCaller
 	run := func(request helper.Request, answer any, done jobDoneMessage) tea.Cmd {
 		return func() tea.Msg {
-			done.answer = answer
+			done.answer, done.request = answer, request
 			done.usage, done.err = caller.Call(request, answer)
 			return done
 		}
@@ -111,19 +121,27 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 			return nil
 		}
 		turns, err := adapter.Turns(session.SessionId)
-		if err != nil || len(turns) <= session.ReviewedAtPrompt {
+		if err != nil || len(turns) == 0 || (!next.wholeSession && len(turns) <= session.ReviewedAtPrompt) {
 			return nil
 		}
-		request := brain.ReviewRequest(brain.ReviewInput{
+		firstTurn := max(len(turns)-reviewTurns, 0)
+		input := brain.ReviewInput{
 			Session:         *session,
 			Digest:          currentModel.digests[session.SessionId],
-			Turns:           turns[session.ReviewedAtPrompt:],
-			FirstTurn:       session.ReviewedAtPrompt,
+			Turns:           turns[firstTurn:],
+			FirstTurn:       firstTurn,
+			NewFromTurn:     session.ReviewedAtPrompt,
 			Repository:      repository,
 			FolderNotes:     currentModel.folderNotesText(session.FolderId),
 			RepositoryNotes: repository.ReadContext(""),
 			LaptopRules:     currentModel.laptopRulesText(),
-		})
+		}
+		if next.wholeSession {
+			for _, turn := range turns {
+				input.AllPrompts = append(input.AllPrompts, turn.User)
+			}
+		}
+		request := brain.ReviewRequest(input)
 		return run(request, &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: len(turns)})
 	case contextJob:
 		input := currentModel.contextPaneInput()
@@ -145,6 +163,7 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 // finishJob applies what the model answered, then starts the next job.
 func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	currentModel.runningJob = nil
+	currentModel.logCall(done)
 	if done.err != nil {
 		currentModel.helperFailures++
 		switch done.job.kind {
@@ -176,7 +195,7 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	currentModel.helperUsage.CostDollars += done.usage.CostDollars
 	switch answer := done.answer.(type) {
 	case *brain.ReviewAnswer:
-		currentModel.keepingSelection(func() { currentModel.applyReview(done.job.sessionId, done.promptCount, *answer) })
+		currentModel.keepingSelection(func() { currentModel.applyReview(done.job, done.promptCount, *answer) })
 	case *brain.ChatAnswer:
 		if done.job.kind == reviseJob {
 			currentModel.applyReviseAnswer(done.job, *answer, done.chatInput)
@@ -203,36 +222,46 @@ func isRewording(currentTitle string, newTitle string) bool {
 }
 
 // queueReviewIfDue reviews a session after its first prompt, even while its agent runs, so it gets a name right away,
-// then every few prompts while its agent waits, and once more when it closes with prompts not looked at.
-// It reports whether it changed the session.
+// then every few prompts while its agent waits, and once all of it when it goes quiet: idle for a while.
+// Sessions last active before den started watching the repo start counting from now. It reports whether it changed the session.
 func (currentModel *model) queueReviewIfDue(session *store.Session, digest agent.Digest) bool {
-	unreviewed := digest.PromptCount - session.ReviewedAtPrompt
-	if session.Archived || unreviewed <= 0 {
+	if session.Archived || digest.PromptCount == 0 {
 		return false
 	}
 	open := currentModel.openAgentFor(session.SessionId)
-	if session.ReviewedAtPrompt == 0 && open == nil && time.Since(session.LastActivityAt) > baselineAfter {
-		session.ReviewedAtPrompt = digest.PromptCount
+	if session.ReviewedAtPrompt == 0 && open == nil && session.LastActivityAt.Before(currentModel.repository.TrackedSince) {
+		session.ReviewedAtPrompt, session.QuietReviewedAtPrompt = digest.PromptCount, digest.PromptCount
 		return true
 	}
 	if session.ReviewedAtPrompt > 0 && open != nil && open.status == "running" {
 		return false
 	}
-	if session.ReviewedAtPrompt == 0 || unreviewed >= reviewEvery || open == nil {
+	// Agents started outside den have no status den can read, so going quiet is going idle for a while, for every session.
+	isQuiet := time.Since(session.LastActivityAt) > quietAfter
+	if isQuiet && digest.PromptCount >= minimumQuietPrompts && session.QuietReviewedAtPrompt < digest.PromptCount {
+		currentModel.queueJob(job{kind: reviewJob, sessionId: session.SessionId, wholeSession: true})
+		return false
+	}
+	unreviewed := digest.PromptCount - session.ReviewedAtPrompt
+	if unreviewed > 0 && (session.ReviewedAtPrompt == 0 || unreviewed >= reviewEvery) {
 		currentModel.queueJob(job{kind: reviewJob, sessionId: session.SessionId})
 	}
 	return false
 }
 
 // applyReview carries out a review: a new name right away, and what's worth keeping as a suggestion. Everything is logged.
-func (currentModel *model) applyReview(sessionId string, promptCount int, answer brain.ReviewAnswer) {
+func (currentModel *model) applyReview(done job, promptCount int, answer brain.ReviewAnswer) {
 	repository := &currentModel.repository
+	sessionId := done.sessionId
 	session := repository.FindSession(sessionId)
 	if session == nil {
 		return
 	}
 	wasTitled := session.TitledAtPrompt > 0
 	session.ReviewedAtPrompt, session.TitledAtPrompt = promptCount, promptCount
+	if done.wholeSession {
+		session.QuietReviewedAtPrompt = promptCount
+	}
 	if summary := strings.TrimSpace(answer.Summary); summary != "" {
 		session.Summary = summary
 	}
@@ -253,13 +282,19 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 			currentModel.retitle(session, title)
 		}
 	}
-	if answer.Keep.Kind != "" && answer.Keep.Kind != "none" {
-		suggestion, outcome := brain.KeepSuggestion(answer.Keep, *session, currentModel.digests[sessionId], repository)
-		if outcome == "proposed" && !repository.Offer(suggestion) {
-			outcome = "withheld: already rejected, or enough waiting"
-		}
-		logDecision("keep "+answer.Keep.Kind, fmt.Sprintf("%s (%.2f)", answer.Keep.Reason, answer.Keep.Confidence), outcome)
+	keepKind := answer.Keep.Kind
+	if keepKind == "" {
+		keepKind = "none"
 	}
+	suggestion, outcome := brain.KeepSuggestion(answer.Keep, *session, currentModel.digests[sessionId], repository)
+	if outcome == "proposed" && !repository.Offer(suggestion) {
+		outcome = "withheld: already rejected, or enough waiting"
+	}
+	scope := "latest turns"
+	if done.wholeSession {
+		scope = "whole session"
+	}
+	logDecision("keep "+keepKind, fmt.Sprintf("%s (%.2f, %s)", answer.Keep.Reason, answer.Keep.Confidence, scope), outcome)
 	if strings.TrimSpace(answer.Rule.Rule) != "" {
 		suggestion, outcome := brain.RuleSuggestion(answer.Rule, *session, currentModel.laptopTexts())
 		if outcome == "proposed" && !repository.Offer(suggestion) {
@@ -293,4 +328,44 @@ func (currentModel model) laptopRulesText() string {
 // folderNotesText is what a folder's context says.
 func (currentModel model) folderNotesText(folderId string) string {
 	return strings.TrimSpace(currentModel.repository.ReadContext(folderId))
+}
+
+// logCall keeps every model call whole in calls.jsonl, its prompt, answer, cost and time, for evaluating den later.
+func (currentModel *model) logCall(done jobDoneMessage) {
+	if done.request.Prompt == "" {
+		return
+	}
+	call := store.Call{
+		Job:           done.job.kind.String(),
+		SessionId:     done.job.sessionId,
+		Model:         currentModel.helperName(),
+		PromptVersion: promptVersion(done.request.System),
+		Prompt:        done.request.Prompt,
+		InputTokens:   done.usage.InputTokens,
+		OutputTokens:  done.usage.OutputTokens,
+		CostDollars:   done.usage.CostDollars,
+		Milliseconds:  done.usage.Duration.Milliseconds(),
+	}
+	if done.job.wholeSession {
+		call.Job = "review whole session"
+	}
+	if done.err != nil {
+		call.Error = done.err.Error()
+	} else if answer, err := json.Marshal(done.answer); err == nil {
+		call.Answer = answer
+	}
+	currentModel.reportError(currentModel.repository.LogCall(call))
+}
+
+func (currentModel model) helperName() string {
+	if currentModel.helperCaller == nil {
+		return ""
+	}
+	return currentModel.helperCaller.Name()
+}
+
+// promptVersion is a short hash of a system prompt, which changes whenever the prompt does.
+func promptVersion(system string) string {
+	hash := sha256.Sum256([]byte(system))
+	return hex.EncodeToString(hash[:4])
 }

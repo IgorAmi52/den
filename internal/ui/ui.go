@@ -100,10 +100,15 @@ type openAgent struct {
 
 type tickMessage struct{}
 
-// observedMessage carries what den read from transcripts in the background.
+// observedMessage carries what den read from transcripts in the background: the tracked sessions,
+// and sessions started outside den in the repo's worktrees since den started watching it.
 type observedMessage struct {
-	digests map[string]agent.Digest
+	digests    map[string]agent.Digest
+	discovered []agent.Digest
 }
+
+// claimWindow is how close to a den pane's launch a session must start to be that pane's, which den tracks itself.
+const claimWindow = 2 * time.Minute
 
 // laptopFile is one of the user's own rule files, which the tool loads in every repo; den shows it beside the repo's context.
 type laptopFile struct {
@@ -231,7 +236,12 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	if repository.ForgetExpiredArchive(time.Now()) > 0 {
+	forgotten := repository.ForgetExpiredArchive(time.Now())
+	isFirstWatch := repository.TrackedSince.IsZero()
+	if isFirstWatch {
+		repository.TrackedSince = time.Now()
+	}
+	if forgotten > 0 || isFirstWatch {
 		if err := repository.Save(); err != nil {
 			return err
 		}
@@ -590,24 +600,76 @@ func (currentModel *model) trackNewSessions() error {
 	return nil
 }
 
-// observe reads every session's transcript in the background.
+// observe reads every session's transcript in the background, and finds sessions started outside den in the repo's
+// worktrees since den started watching it, leaving out the ones the user deleted and the ones den's own panes are starting.
 func (currentModel model) observe() tea.Cmd {
 	type sessionReference struct{ tool, sessionId string }
 	var references []sessionReference
+	known := map[string]bool{}
 	for _, session := range currentModel.repository.Sessions {
 		references = append(references, sessionReference{tool: session.Tool, sessionId: session.SessionId})
+		known[session.SessionId] = true
 	}
+	for _, sessionId := range currentModel.repository.IgnoredSessionIds {
+		known[sessionId] = true
+	}
+	var unclaimedPanes []openAgent
+	for _, open := range currentModel.openAgents {
+		known[open.sessionId] = true
+		if open.sessionId == "" || currentModel.repository.FindSession(open.sessionId) == nil {
+			unclaimedPanes = append(unclaimedPanes, open)
+		}
+	}
+	repositoryPath, trackedSince, installedAgents := currentModel.repository.RepositoryPath, currentModel.repository.TrackedSince, currentModel.installedAgents
 	return func() tea.Msg {
-		digests := map[string]agent.Digest{}
+		observed := observedMessage{digests: map[string]agent.Digest{}}
 		for _, reference := range references {
-			if adapter, known := agent.ByName(reference.tool); known {
+			if adapter, found := agent.ByName(reference.tool); found {
 				if digest, found, err := adapter.Digest(reference.sessionId); err == nil && found {
-					digests[reference.sessionId] = digest
+					observed.digests[reference.sessionId] = digest
 				}
 			}
 		}
-		return observedMessage{digests: digests}
+		worktrees := git.Worktrees(repositoryPath)
+		for _, adapter := range installedAgents {
+			pastSessions, _ := adapter.PastSessions(worktrees)
+			for _, digest := range pastSessions {
+				isClaimed := slices.ContainsFunc(unclaimedPanes, func(open openAgent) bool {
+					return open.tool == digest.Tool && digest.StartedAt.Sub(open.launchedAt).Abs() < claimWindow
+				})
+				if !known[digest.SessionId] && !isClaimed && digest.PromptCount > 0 && digest.StartedAt.After(trackedSince) {
+					observed.discovered = append(observed.discovered, digest)
+				}
+			}
+		}
+		return observed
 	}
+}
+
+// trackDiscovered adds sessions started outside den to the Inbox, so den reviews them like its own. It reports how many it added.
+func (currentModel *model) trackDiscovered(discovered []agent.Digest) int {
+	added := 0
+	for _, digest := range discovered {
+		if currentModel.repository.FindSession(digest.SessionId) != nil {
+			continue
+		}
+		title := digest.AgentTitle
+		if title == "" {
+			title = truncate(oneLine(digest.FirstPrompt), 120)
+		}
+		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
+			Tool:             digest.Tool,
+			SessionId:        digest.SessionId,
+			WorkingDirectory: digest.WorkingDirectory,
+			Branch:           digest.Branch,
+			Title:            title,
+			CreatedAt:        time.Now(),
+			LastActivityAt:   digest.LastActivityAt,
+		})
+		currentModel.digests[digest.SessionId] = digest
+		added++
+	}
+	return added
 }
 
 // applyObservation keeps session details current from their transcripts, reviews sessions when due,
@@ -615,6 +677,10 @@ func (currentModel model) observe() tea.Cmd {
 func (currentModel *model) applyObservation(observed observedMessage) {
 	currentModel.digests = observed.digests
 	changed := false
+	if added := currentModel.trackDiscovered(observed.discovered); added > 0 {
+		changed = true
+		currentModel.setStatus(fmt.Sprintf("picked up %s started outside den · in the Inbox", countedSessions(added)))
+	}
 	for index := range currentModel.repository.Sessions {
 		session := &currentModel.repository.Sessions[index]
 		digest, found := observed.digests[session.SessionId]

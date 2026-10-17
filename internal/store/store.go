@@ -34,6 +34,8 @@ type Session struct {
 	TitledAtPrompt int `json:"titledAtPrompt,omitempty"`
 	// ReviewedAtPrompt is the prompt count when den's model last reviewed the session.
 	ReviewedAtPrompt int `json:"reviewedAtPrompt,omitempty"`
+	// QuietReviewedAtPrompt is the prompt count when den last reviewed the whole session after it went quiet.
+	QuietReviewedAtPrompt int `json:"quietReviewedAtPrompt,omitempty"`
 	// Summary is den's one sentence on what the session is doing and where it stands.
 	Summary string `json:"summary,omitempty"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
@@ -62,6 +64,10 @@ type Repository struct {
 	Suggestions []Suggestion `json:"suggestions,omitempty"`
 	// RejectedKeys remembers rejected suggestions, so the same one is never offered again.
 	RejectedKeys []string `json:"rejectedKeys,omitempty"`
+	// TrackedSince is when den started watching the repo: sessions started after it outside den are picked up too.
+	TrackedSince time.Time `json:"trackedSince,omitzero"`
+	// IgnoredSessionIds are sessions the user deleted, or den forgot, so they aren't picked up again.
+	IgnoredSessionIds []string `json:"ignoredSessionIds,omitempty"`
 }
 
 // DataDirectory is ~/.den, or DEN_HOME when set.
@@ -255,7 +261,11 @@ func (repository *Repository) ArchiveIdle(now time.Time, openSessionIds map[stri
 func (repository *Repository) ForgetExpiredArchive(now time.Time) int {
 	before := len(repository.Sessions)
 	repository.Sessions = slices.DeleteFunc(repository.Sessions, func(session Session) bool {
-		return session.Archived && !session.ArchivedAt.IsZero() && now.Sub(session.ArchivedAt) > ArchiveKeepsFor
+		isExpired := session.Archived && !session.ArchivedAt.IsZero() && now.Sub(session.ArchivedAt) > ArchiveKeepsFor
+		if isExpired {
+			repository.IgnoredSessionIds = append(repository.IgnoredSessionIds, session.SessionId)
+		}
+		return isExpired
 	})
 	for index := range repository.Sessions {
 		if session := &repository.Sessions[index]; session.Archived && session.ArchivedAt.IsZero() {

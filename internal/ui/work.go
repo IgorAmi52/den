@@ -306,6 +306,7 @@ func (currentModel *model) askToDeleteSessions(sessionIds []string) {
 				currentModel.reportError(tmux.KillPane(open.paneId))
 			}
 			currentModel.repository.ForgetSessionSuggestions(sessionId)
+			currentModel.repository.IgnoredSessionIds = append(currentModel.repository.IgnoredSessionIds, sessionId)
 		}
 		currentModel.repository.Sessions = slices.DeleteFunc(currentModel.repository.Sessions, func(saved store.Session) bool {
 			return slices.Contains(sessionIds, saved.SessionId)

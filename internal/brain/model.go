@@ -14,8 +14,11 @@ import (
 
 const (
 	maximumTurnsPerReview = 10
-	maximumChatSessions   = 60
-	maximumChatMessages   = 12
+	// maximumWholeSessionPrompts and wholeSessionPromptLength keep a whole-session review to the user's prompts, briefly.
+	maximumWholeSessionPrompts = 40
+	wholeSessionPromptLength   = 240
+	maximumChatSessions        = 60
+	maximumChatMessages        = 12
 	// maximumChatTranscripts and maximumChatTurns are how much of the sessions' conversations a chat reads,
 	// so "make this chat the folder's context" has the chat to work from.
 	maximumChatTranscripts = 3
@@ -92,10 +95,14 @@ const firstRunSystem = "You are den, opened for the first time in a repo. You lo
 
 // ReviewInput is what a review looks at: one session, the turns since den last looked, and the folders.
 type ReviewInput struct {
-	Session         store.Session
-	Digest          agent.Digest
-	Turns           []agent.Turn
-	FirstTurn       int
+	Session store.Session
+	Digest  agent.Digest
+	// Turns are the latest turns, numbered from FirstTurn; the ones from NewFromTurn on are new since den last looked.
+	Turns       []agent.Turn
+	FirstTurn   int
+	NewFromTurn int
+	// AllPrompts are every prompt of the session, for the review of a whole session once it went quiet.
+	AllPrompts      []string
 	Repository      *store.Repository
 	FolderNotes     string
 	RepositoryNotes string
@@ -121,8 +128,15 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	fmt.Fprintf(&prompt, "title: %s\nfolder: %s\n", title, repository.FolderName(input.Session.FolderId))
 	writeField(&prompt, "first prompt", startOfText(input.Digest.FirstPrompt, 600))
 	writeField(&prompt, "files edited", strings.Join(relativePaths(repository.RepositoryPath, input.Digest.TouchedFiles, 15), ", "))
-	prompt.WriteString("\nTURNS SINCE DEN LAST LOOKED\n")
-	writeTurns(&prompt, input.Turns, input.FirstTurn, maximumTurnsPerReview)
+	writeField(&prompt, "den's summary so far", input.Session.Summary)
+	if len(input.AllPrompts) > 0 {
+		prompt.WriteString("\nTHE SESSION WENT QUIET, SO THIS IS A LOOK AT ALL OF IT. EVERY PROMPT THE USER TYPED\n")
+		for index, userPrompt := range input.AllPrompts[max(len(input.AllPrompts)-maximumWholeSessionPrompts, 0):] {
+			fmt.Fprintf(&prompt, "%d. %s\n", index+1, startOfText(userPrompt, wholeSessionPromptLength))
+		}
+	}
+	fmt.Fprintf(&prompt, "\nLATEST TURNS (turns marked new came after den last looked)\n")
+	writeTurns(&prompt, input.Turns, input.FirstTurn, maximumTurnsPerReview, input.NewFromTurn)
 	writeField(&prompt, "agent's latest reply", input.Digest.LastAgentMessage)
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
 	if input.Session.FolderId != "" {
@@ -137,14 +151,20 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	}
 }
 
-// writeTurns writes the last few turns, numbered from the start of the session.
-func writeTurns(prompt *strings.Builder, turns []agent.Turn, firstTurn int, maximum int) {
+// writeTurns writes the last few turns, numbered from the start of the session, marking the ones from newFromTurn on
+// as new; a negative newFromTurn marks none.
+func writeTurns(prompt *strings.Builder, turns []agent.Turn, firstTurn int, maximum int, newFromTurn int) {
 	if len(turns) > maximum {
 		firstTurn += len(turns) - maximum
 		turns = turns[len(turns)-maximum:]
 	}
 	for index, turn := range turns {
-		fmt.Fprintf(prompt, "turn %d\n", firstTurn+index+1)
+		number := firstTurn + index
+		mark := ""
+		if newFromTurn >= 0 && number >= newFromTurn {
+			mark = " (new)"
+		}
+		fmt.Fprintf(prompt, "turn %d%s\n", number+1, mark)
 		writeField(prompt, "agent", turn.Agent)
 		writeField(prompt, "user", turn.User)
 	}
@@ -312,7 +332,7 @@ func ChatRequest(input ChatInput) helper.Request {
 			continue
 		}
 		fmt.Fprintf(&prompt, "\nTRANSCRIPT OF s%d \"%s\" (its latest turns)\n", slices.Index(sessionIds, transcript.SessionId)+1, session.Title)
-		writeTurns(&prompt, transcript.Turns, 0, maximumChatTurns)
+		writeTurns(&prompt, transcript.Turns, 0, maximumChatTurns, -1)
 		writeField(&prompt, "agent's latest reply", transcript.LastAgentMessage)
 	}
 	switch {
