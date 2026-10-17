@@ -62,7 +62,7 @@ func (currentModel *model) askForNewFolder(parentId string) tea.Cmd {
 		currentModel.saveRepository()
 		folderId := folder.Id
 		currentModel.cursorTo(func(row listRow) bool { return row.kind == folderRow && row.folder.Id == folderId })
-		currentModel.setStatus("made " + name + " · e to give it context")
+		currentModel.setStatus("made " + name + " · → gives it context")
 	})
 }
 

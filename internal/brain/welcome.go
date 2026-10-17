@@ -23,13 +23,11 @@ const (
 )
 
 // Arrival is one past session as the first run sees it: whether to bring it in, under which name, and why.
-// Suggestion is what to keep from it, when den's model found something.
 type Arrival struct {
-	Digest     agent.Digest
-	Verdict    string
-	Title      string
-	Why        string
-	Suggestion *store.Suggestion
+	Digest  agent.Digest
+	Verdict string
+	Title   string
+	Why     string
 }
 
 // NewestSessions are the most recently used sessions, newest first, at most FirstRunSessions.
@@ -73,12 +71,6 @@ func ArrivalsFromModel(answer FirstRunAnswer, digests []agent.Digest, repository
 		}
 		if verdict.Verdict == VerdictContinue || verdict.Verdict == VerdictKeep {
 			arrival.Verdict = verdict.Verdict
-		}
-		if arrival.Verdict == VerdictKeep {
-			session := store.Session{SessionId: digest.SessionId, Title: arrival.Title}
-			if suggestion, outcome := KeepSuggestion(verdict.Keep, session, digest, repository); outcome == "proposed" {
-				arrival.Suggestion = &suggestion
-			}
 		}
 		arrivals = append(arrivals, arrival)
 	}

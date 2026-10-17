@@ -112,7 +112,7 @@ func (currentModel model) currentDockItem() (dockItem, bool) {
 func (currentModel *model) focusDock() tea.Cmd {
 	item, exists := currentModel.currentDockItem()
 	if !exists {
-		currentModel.setStatus("nothing waiting · den suggests only when it's sure")
+		currentModel.setStatus("all quiet · den speaks up only when it's sure")
 		return nil
 	}
 	currentModel.dock.focused = true
@@ -236,14 +236,19 @@ func (currentModel *model) answerDockItem(item dockItem, accepted bool) {
 // Unless den kept the suggestion itself, the user changed it, which counts as a no to the original.
 func (currentModel *model) applyDockReply(item dockItem, actions []brain.ChatAction) {
 	keepsOriginal := slices.ContainsFunc(actions, func(action brain.ChatAction) bool { return action.Kind == "acceptSuggestion" })
-	others := slices.DeleteFunc(slices.Clone(actions), func(action brain.ChatAction) bool { return action.Kind == "acceptSuggestion" })
+	others := slices.DeleteFunc(slices.Clone(actions), func(action brain.ChatAction) bool {
+		return action.Kind == "acceptSuggestion" || action.Kind == "withdrawSuggestion"
+	})
 	answered := currentModel.repository.FindSuggestion(item.suggestionId) != nil
 	if answered {
 		currentModel.answerDockItem(item, keepsOriginal)
 	}
 	done := currentModel.doChatActions(others)
-	if keepsOriginal {
+	switch {
+	case keepsOriginal:
 		done = append([]string{"did what den suggested"}, done...)
+	case len(others) == 0:
+		done = []string{"dropped it · den won't offer it again"}
 	}
 	currentModel.setStatus("done: " + strings.Join(done, "; "))
 }
@@ -263,6 +268,9 @@ func (currentModel model) reviseInput() (brain.ChatInput, bool) {
 	}
 	if why != "" {
 		about += "\nwhy: " + why
+	}
+	if len(suggestion.Evidence) > 0 {
+		about += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(suggestion.Evidence, "\n- ")
 	}
 	if suggestion.ProposedText != "" {
 		about += "\nthe whole proposed text:\n" + suggestion.ProposedText
@@ -441,6 +449,9 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 			keepIn = repository.FolderName(session.FolderId)
 		}
 		details = []string{theme.dim.Render("  agents follow it in every repo · or tell den \"keep it in " + keepIn + "\"")}
+	}
+	for _, quote := range suggestion.Evidence {
+		details = append(details, hangingIndent("“"+quote+"”", theme.faint, width, "  ", "   ")...)
 	}
 	return tag, subject, details, why
 }

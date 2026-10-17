@@ -246,6 +246,10 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			if input.About != "" {
 				actions = append(actions, ChatAction{Kind: "acceptSuggestion", Description: "do what den suggested"})
 			}
+		case "withdrawSuggestion":
+			if input.About != "" {
+				actions = append(actions, ChatAction{Kind: "withdrawSuggestion", Description: "drop this suggestion; den won't offer it again"})
+			}
 		case "moveNotes":
 			from := findFolder(proposed.From)
 			if from != nil && folder != nil && from.Id != folder.Id {

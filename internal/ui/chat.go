@@ -162,6 +162,9 @@ func (currentModel model) chatInput() brain.ChatInput {
 	if state.about != nil {
 		label, summary := currentModel.suggestionSummary(*state.about)
 		input.About = label + ": " + summary + ". " + state.about.Reason
+		if len(state.about.Evidence) > 0 {
+			input.About += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(state.about.Evidence, "\n- ")
+		}
 	}
 	if state.subject.folderId != "" {
 		input.SubjectNotes = currentModel.folderNotesText(state.subject.folderId)

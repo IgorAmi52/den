@@ -39,6 +39,8 @@ type Suggestion struct {
 	Source       string `json:"source,omitempty"`
 	// LinkedPath is the file a link proposes, or a new folder's linked context.
 	LinkedPath string `json:"linkedPath,omitempty"`
+	// Evidence are the quotes from the session den based the suggestion on, so it can show and explain them.
+	Evidence []string `json:"evidence,omitempty"`
 	// Rule is the line a rule adds; FilePaths are the laptop files that don't have it yet.
 	Rule      string    `json:"rule,omitempty"`
 	FilePaths []string  `json:"filePaths,omitempty"`

@@ -353,7 +353,7 @@ func (currentModel *model) acceptSuggestion(suggestionId string) {
 func (currentModel *model) rejectSuggestion(suggestionId string) {
 	currentModel.repository.Reject(suggestionId)
 	currentModel.saveRepository()
-	currentModel.setStatus("rejected · den won't offer that again")
+	currentModel.setStatus("noted · den won't bring that up again")
 }
 
 func (currentModel model) describeDone(suggestion store.Suggestion) string {

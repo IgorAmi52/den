@@ -200,7 +200,7 @@ func (currentModel *model) finishWelcome(apply bool) {
 	currentModel.refreshContextTokens()
 	currentModel.closeScreen()
 	if apply {
-		currentModel.setStatus("den is set up · n starts a session")
+		currentModel.setStatus("den's all set · n starts a session")
 	}
 }
 
@@ -213,7 +213,7 @@ func (currentModel *model) applyWelcome() {
 		if !state.accepted[index] || currentModel.repository.FindSession(digest.SessionId) != nil {
 			continue
 		}
-		currentModel.repository.Sessions = append(currentModel.repository.Sessions, store.Session{
+		session := store.Session{
 			Tool:             digest.Tool,
 			SessionId:        digest.SessionId,
 			WorkingDirectory: digest.WorkingDirectory,
@@ -221,15 +221,18 @@ func (currentModel *model) applyWelcome() {
 			Title:            arrival.Title,
 			TitledAtPrompt:   digest.PromptCount,
 			ReviewedAtPrompt: digest.PromptCount,
-			// The first run already judged it whole, so it gets no review of the whole session until it has new prompts.
-			QuietReviewedAtPrompt: digest.PromptCount,
-			Summary:               arrival.Why,
-			CreatedAt:             now,
-			LastActivityAt:        digest.LastActivityAt,
-		})
-		if arrival.Suggestion != nil {
-			currentModel.repository.Offer(*arrival.Suggestion)
+			Summary:          arrival.Why,
+			CreatedAt:        now,
+			LastActivityAt:   digest.LastActivityAt,
 		}
+		// The first run sees only a session's start and end, so one worth keeping gets a full review of all its prompts;
+		// the rest wait for new prompts.
+		if arrival.Verdict != brain.VerdictKeep {
+			session.QuietReviewedAtPrompt = digest.PromptCount
+		}
+		currentModel.repository.Sessions = append(currentModel.repository.Sessions, session)
+		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "first run", SessionId: digest.SessionId,
+			Action: "verdict " + arrival.Verdict, Detail: arrival.Title + " · " + arrival.Why, Outcome: "brought in"}))
 	}
 }
 
@@ -317,12 +320,12 @@ func (currentModel model) welcomeSessionsBody(width int) []string {
 		if arrival.Why != "" && arrival.Verdict != brain.VerdictDone {
 			lines = append(lines, theme.faint.Render(truncate("    "+arrival.Why, width)))
 		}
-		if arrival.Suggestion != nil && state.accepted[index] {
+		if arrival.Verdict == brain.VerdictKeep && state.accepted[index] {
 			offered++
 		}
 	}
 	if offered > 0 {
-		lines = append(lines, "", theme.suggestion.Render(fmt.Sprintf("✦ den will also suggest what to keep from %s, in the dock below the tree.", countedSessions(offered))))
+		lines = append(lines, "", theme.suggestion.Render(fmt.Sprintf("✦ den reads all of %s next, and suggests what's worth keeping.", countedSessions(offered))))
 	}
 	lines = append(lines, "")
 	lines = append(lines, currentModel.hintLines([]key.Binding{relabeled(currentModel.keys.yes, "bring them in"), currentModel.keys.toggle,

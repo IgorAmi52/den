@@ -10,6 +10,7 @@ import (
 
 const (
 	minimumKeepConfidence   = 0.8
+	maximumEvidence         = 3
 	maximumKeepLines        = 3
 	maximumFolderNameLength = 30
 	// findingsSection is where kept findings go in a folder's notes.
@@ -34,7 +35,10 @@ const keepRules = "keep: whether this session produced something worth keeping a
 	"markdown starting with \"# <name>\", under 120 words, only from what the user asked for.\n" +
 	"Never propose a folder or skill an existing folder already covers. Use only facts from the session; never invent. " +
 	"confidence: 0 to 1 that the user will say yes. reason: one sentence of at most 14 words the user reads first, " +
-	"naming the concrete thing worth keeping, like \"Pagination breaks past 500 issues; the fix is still open.\" Never generic."
+	"concise with a light, friendly touch but never cute, " +
+	"naming the concrete thing worth keeping, like \"Pagination breaks past 500 issues; the fix is still open.\" Never generic. " +
+	"evidence: for anything but none, 1-3 short quotes from the session that show it, each starting with its turn and speaker, " +
+	"like \"turn 12, user: let's keep cursor paging\". No evidence in the session means kind none."
 
 // ruleRules tell the model when a correction is a rule for every repo. The user can still move it into a folder instead.
 const ruleRules = "rule: a rule for the user's own files that agents load in every repo (CLAUDE.md, AGENTS.md). Only from a clear " +
@@ -75,7 +79,8 @@ func RuleSuggestion(rule Rule, session store.Session, laptopTexts map[string]str
 	}
 	slices.Sort(filePaths)
 	reason := "You said: \"" + strings.Trim(strings.TrimSpace(rule.Evidence), "\"'“”") + "\""
-	return store.Suggestion{Kind: store.SuggestRule, Rule: line, FilePaths: filePaths, SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason}, "proposed"
+	return store.Suggestion{Kind: store.SuggestRule, Rule: line, FilePaths: filePaths, SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason,
+		Evidence: []string{strings.TrimSpace(rule.Evidence)}}, "proposed"
 }
 
 // Keep is what the model answers about keeping something from a session.
@@ -87,6 +92,7 @@ type Keep struct {
 	File       string   `json:"file"`
 	Confidence float64  `json:"confidence"`
 	Reason     string   `json:"reason"`
+	Evidence   []string `json:"evidence"`
 }
 
 func keepSchema() map[string]any {
@@ -98,6 +104,7 @@ func keepSchema() map[string]any {
 		"file":       stringSchema(),
 		"confidence": map[string]any{"type": "number"},
 		"reason":     stringSchema(),
+		"evidence":   arraySchema(stringSchema()),
 	})
 }
 
@@ -112,8 +119,16 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 		return store.Suggestion{}, "withheld: not sure enough"
 	case reason == "":
 		return store.Suggestion{}, "dropped: no reason"
+	case len(keep.Evidence) == 0:
+		return store.Suggestion{}, "dropped: no evidence"
 	}
-	base := store.Suggestion{SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason}
+	var evidence []string
+	for _, quote := range keep.Evidence[:min(len(keep.Evidence), maximumEvidence)] {
+		if quote = strings.TrimSpace(quote); quote != "" {
+			evidence = append(evidence, quote)
+		}
+	}
+	base := store.Suggestion{SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason, Evidence: evidence}
 	if keep.Kind == "notes" {
 		return notesSuggestion(base, keep, session, repository)
 	}
