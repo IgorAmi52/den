@@ -303,11 +303,11 @@ func (currentModel *model) applyReview(sessionId string, promptCount int, answer
 		reason := "You said: \"" + quotedEvidence(proposed.Evidence) + "\""
 		switch {
 		case proposed.Target == "laptop":
-			currentModel.offerLaptopRule(rule, reason+". A rule for every repo.")
+			currentModel.offerLaptopRule(rule, reason+".")
 		case proposed.Target == "folder" && session.FolderId != "":
-			currentModel.offerRule(session.FolderId, rule, reason+". A rule for every session in "+repository.FolderName(session.FolderId)+".", session.Title)
+			currentModel.offerRule(session.FolderId, rule, reason+".", session.Title)
 		default:
-			currentModel.offerRule("", rule, reason+". A rule for every session in "+currentModel.repositoryName()+".", session.Title)
+			currentModel.offerRule("", rule, reason+".", session.Title)
 		}
 		logDecision("addRule", proposed.Target+": "+rule, "proposed")
 	}
@@ -387,7 +387,7 @@ func (currentModel *model) applyDraft(folderId string, answer brain.DraftAnswer)
 			suggestion.ByModel = true
 			if notes := strings.TrimSpace(answer.Notes); notes != "" {
 				suggestion.ProposedText = notes + "\n"
-				suggestion.Reason = "New sessions in " + currentModel.repository.FolderName(folderId) + " will start with these."
+				suggestion.Reason = "Drafted from its sessions."
 			}
 		}
 	}

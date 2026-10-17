@@ -108,16 +108,16 @@ func (currentModel model) proposalReason(suggestion store.Suggestion, row listRo
 	case store.SuggestCleanup:
 		if row.kind == sessionRow {
 			if currentModel.mergedBranches[row.session.Branch] {
-				return fmt.Sprintf("Its branch merged. Archived sessions stay resumable for %d days.", archiveKeepDays())
+				return "Its branch merged."
 			}
 			if brain.OnlyAskedQuestions(currentModel.digests, row.session.SessionId) {
-				return fmt.Sprintf("It only asked questions; no files changed. Archived sessions stay resumable for %d days.", archiveKeepDays())
+				return "It only asked questions."
 			}
-			return fmt.Sprintf("Untouched for %d days. Archived sessions stay resumable for %d more.", int(time.Since(row.session.LastActivityAt).Hours()/24), archiveKeepDays())
+			return fmt.Sprintf("Untouched for %d days.", int(time.Since(row.session.LastActivityAt).Hours()/24))
 		}
 	case store.SuggestContext:
 		reason := suggestion.Reason
-		if suggestion.Source != "" && suggestion.Starter == "" {
+		if suggestion.Source != "" && suggestion.Starter == "" && !strings.HasPrefix(reason, "You said") {
 			reason = "Learned in " + suggestion.Source + ". " + reason
 		}
 		if !currentModel.isWide() {

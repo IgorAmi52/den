@@ -167,7 +167,7 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 	state := &currentModel.chat
 	state.thinking = false
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
-	text := strings.TrimSpace(answer.Reply)
+	text := replyText(answer.Reply, actions)
 	if len(actions) > 0 {
 		var listed []string
 		for _, action := range actions {
@@ -274,6 +274,21 @@ func (currentModel *model) moveNotes(fromFolderId string, toFolderId string) {
 	if from != nil && to != nil && from.LinkedPath != "" && to.LinkedPath == "" {
 		to.LinkedPath, from.LinkedPath = from.LinkedPath, ""
 	}
+}
+
+// replyText is den's reply as shown. With changes listed under it, only its first sentence stays,
+// since the list says the rest.
+func replyText(reply string, actions []brain.ChatAction) string {
+	reply = strings.TrimSpace(reply)
+	if len(actions) == 0 {
+		return reply
+	}
+	for index, character := range reply {
+		if (character == '.' || character == '!' || character == '?') && index+1 < len(reply) && reply[index+1] == ' ' {
+			return reply[:index+1]
+		}
+	}
+	return reply
 }
 
 func boolOrder(value bool) int {

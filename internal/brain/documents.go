@@ -84,7 +84,7 @@ func documentSuggestions(observation Observation) []store.Suggestion {
 	for _, group := range documentGroups(observation) {
 		fileName := filepath.Base(group.filePath)
 		if existing := documentSubfolder(repository, group.folderId, group.filePath); existing != nil {
-			reason := fmt.Sprintf("%s is the subfolder for sessions that start from %s.", existing.Name, fileName)
+			reason := fmt.Sprintf("It starts from %s.", fileName)
 			suggestions = append(suggestions, store.Suggestion{Kind: store.SuggestMove, SessionIds: group.sessionIds, FolderId: existing.Id, Reason: reason, Habit: HabitStartingDocuments})
 			continue
 		}
@@ -98,7 +98,7 @@ func documentSuggestions(observation Observation) []store.Suggestion {
 				FolderId:   folder.Id,
 				LinkedPath: group.filePath,
 				Habit:      HabitStartingDocuments,
-				Reason:     fmt.Sprintf("All %d sessions in %s start from %s. Linked, new sessions there get it without you pointing at it.", len(group.sessionIds), folder.Name, fileName),
+				Reason:     fmt.Sprintf("All %d sessions here start from it.", len(group.sessionIds)),
 			})
 			continue
 		}
@@ -109,8 +109,7 @@ func documentSuggestions(observation Observation) []store.Suggestion {
 			LinkedPath:     group.filePath,
 			FolderName:     documentFolderName(group.filePath),
 			Habit:          HabitStartingDocuments,
-			Reason: fmt.Sprintf("%d sessions in %s start from %s. Grouped, the folder uses it as context, so new sessions there get it without you pointing at it.",
-				len(group.sessionIds), repository.FolderName(group.folderId), fileName),
+			Reason:         fmt.Sprintf("They all start from %s.", fileName),
 		})
 	}
 	return suggestions

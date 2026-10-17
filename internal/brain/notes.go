@@ -87,8 +87,7 @@ func writtenNotes(observation Observation, folder store.Folder, sessions []store
 				FolderId:   folder.Id,
 				LinkedPath: filePath,
 				Source:     session.Title,
-				Reason: fmt.Sprintf("An agent wrote it in \"%s\". Linked, every new session in %s starts with it, and you keep editing it as usual. den never writes it.",
-					truncateText(session.Title, 40), folder.Name),
+				Reason:     fmt.Sprintf("An agent wrote it in \"%s\".", truncateText(session.Title, 40)),
 			}, true
 		}
 	}
@@ -108,7 +107,7 @@ func approvedPlan(observation Observation, folder store.Folder, sessions []store
 			FolderId:     folder.Id,
 			ProposedText: plan + "\n",
 			Source:       session.Title,
-			Reason:       fmt.Sprintf("You approved this plan in \"%s\". Saved as %s's notes, every new session here starts with it.", truncateText(session.Title, 40), folder.Name),
+			Reason:       fmt.Sprintf("You approved it in \"%s\".", truncateText(session.Title, 40)),
 		}, true
 	}
 	return store.Suggestion{}, false
@@ -139,7 +138,7 @@ func draftNotes(observation Observation, folder store.Folder, sessions []store.S
 		Starter:      store.StarterDraft,
 		FolderId:     folder.Id,
 		ProposedText: draft.String(),
-		Reason:       fmt.Sprintf("%s here and no notes yet. New sessions in %s will start with these.", countedSessions(len(worked), "session"), folder.Name),
+		Reason:       fmt.Sprintf("%s here, no notes yet.", countedSessions(len(worked), "session")),
 	}, true
 }
 

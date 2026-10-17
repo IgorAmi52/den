@@ -84,8 +84,7 @@ func questions(observation Observation) []store.Suggestion {
 			Kind:     store.SuggestQuestion,
 			Habit:    HabitStartingDocuments,
 			Question: "Give sessions the doc they start from as context, grouped by it?",
-			Reason: fmt.Sprintf("%d sessions start from %s. Yes, and den links each such doc to its sessions' folder, so you stop pointing agents at it; no, and it won't ask again.",
-				len(largest.sessionIds), relativeTo(repository.RepositoryPath, largest.filePath)),
+			Reason:   fmt.Sprintf("%d sessions start from %s.", len(largest.sessionIds), relativeTo(repository.RepositoryPath, largest.filePath)),
 		}}
 	}
 	if habit := repository.FindHabit(HabitIssueSubfolders); habit != nil && habit.State == store.HabitNoticed && habit.Seen >= minimumQuestionEvidence {
@@ -97,8 +96,7 @@ func questions(observation Observation) []store.Suggestion {
 			Kind:     store.SuggestQuestion,
 			Habit:    HabitIssueSubfolders,
 			Question: "Group each issue's sessions in its own subfolder?",
-			Reason: fmt.Sprintf("%s each have more than one session. Yes, and den proposes a subfolder per issue from now on; no, and it won't ask again.",
-				strings.Join(keys[:min(2, len(keys))], " and ")),
+			Reason:   fmt.Sprintf("%s each have several sessions.", strings.Join(keys[:min(2, len(keys))], " and ")),
 		}}
 	}
 	style := commitStyle(observation.CommitSubjects)
@@ -109,8 +107,7 @@ func questions(observation Observation) []store.Suggestion {
 			Habit:    HabitIssueKeyTitles,
 			Question: "Should commits and PR titles start with the issue key, like YT-123: …?",
 			Rule:     issueKeyTitleRule,
-			Reason: fmt.Sprintf("%d of your last %d commits here name an issue, the rest don't. Yes adds that rule to this repo's context.md.",
-				style.issueKeyCount, style.subjectCount),
+			Reason:   fmt.Sprintf("%d of your last %d commits name one, the rest don't.", style.issueKeyCount, style.subjectCount),
 		}}
 	}
 	return nil
@@ -126,7 +123,7 @@ func issueSubfolders(observation Observation) []store.Suggestion {
 	var suggestions []store.Suggestion
 	for _, group := range issueGroups(observation) {
 		if existing := issueSubfolder(repository, group.folderId, group.issueKey); existing != nil {
-			reason := fmt.Sprintf("⎇ %s is the subfolder for %s.", existing.Name, group.issueKey)
+			reason := fmt.Sprintf("It's about %s.", group.issueKey)
 			suggestions = append(suggestions, store.Suggestion{Kind: store.SuggestMove, SessionIds: group.sessionIds, FolderId: existing.Id, Reason: reason, Habit: HabitIssueSubfolders})
 			continue
 		}
@@ -140,7 +137,7 @@ func issueSubfolders(observation Observation) []store.Suggestion {
 			IssueKey:       group.issueKey,
 			FolderName:     group.issueKey,
 			Habit:          HabitIssueSubfolders,
-			Reason:         fmt.Sprintf("%d sessions in %s are about %s. You group work by issue.", len(group.sessionIds), repository.FolderName(group.folderId), group.issueKey),
+			Reason:         fmt.Sprintf("They're all about %s.", group.issueKey),
 		})
 	}
 	return suggestions
@@ -224,7 +221,7 @@ func laptopRules(observation Observation) []store.Suggestion {
 		Kind:      store.SuggestLaptopRule,
 		Rule:      conventionalCommitRule,
 		FilePaths: filePaths,
-		Reason: fmt.Sprintf("Your commits here and in %s are conventional commits, and %s doesn't say so yet. Agents read it in every repo, even new ones with no history.",
-			strings.Join(observation.ConventionalRepositories[:min(2, len(observation.ConventionalRepositories))], " and "), strings.Join(names, " and ")),
+		Reason: fmt.Sprintf("Your commits here and in %s already follow it.",
+			strings.Join(observation.ConventionalRepositories[:min(2, len(observation.ConventionalRepositories))], " and ")),
 	}}
 }

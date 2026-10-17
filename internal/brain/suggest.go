@@ -62,7 +62,7 @@ func fileByBranch(observation Observation) []store.Suggestion {
 		}
 		branch := branchOf(session, observation.Digests)
 		if folderId, count := folderHoldingBranch(repository, branch, session.SessionId, observation.Digests); folderId != "" {
-			reason := fmt.Sprintf("%s on %s %s in %s.", countedSessions(count, "other session"), branch, isOrAre(count), repository.FolderName(folderId))
+			reason := fmt.Sprintf("%s on %s %s there.", countedSessions(count, "other session"), branch, isOrAre(count))
 			suggestions = append(suggestions, store.Suggestion{Kind: store.SuggestMove, SessionIds: []string{session.SessionId}, FolderId: folderId, Reason: reason})
 			continue
 		}
@@ -98,7 +98,7 @@ func branchSubfolders(observation Observation) []store.Suggestion {
 		for _, branch := range branches {
 			sessionIds := sessionIdsByBranch[branch]
 			if existing := branchSubfolder(repository, folder.Id, branch); existing != nil {
-				reason := fmt.Sprintf("%s is the subfolder for %s.", "⎇ "+existing.Name, branch)
+				reason := fmt.Sprintf("It's on %s.", branch)
 				suggestions = append(suggestions, store.Suggestion{Kind: store.SuggestMove, SessionIds: sessionIds, FolderId: existing.Id, Reason: reason})
 				continue
 			}
@@ -111,7 +111,7 @@ func branchSubfolders(observation Observation) []store.Suggestion {
 				ParentFolderId: folder.Id,
 				Branch:         branch,
 				FolderName:     ShortBranch(branch),
-				Reason:         fmt.Sprintf("%d sessions in %s are on %s.", len(sessionIds), folder.Name, branch),
+				Reason:         fmt.Sprintf("They're all on %s.", branch),
 			})
 		}
 	}

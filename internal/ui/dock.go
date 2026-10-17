@@ -304,7 +304,7 @@ func (currentModel *model) applyReviseAnswer(done job, answer brain.ChatAnswer, 
 		return
 	}
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
-	text := strings.TrimSpace(answer.Reply)
+	text := replyText(answer.Reply, actions)
 	for _, action := range actions {
 		text += "\n· " + action.Description
 		if action.Kind == "editNotes" {
