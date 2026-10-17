@@ -16,6 +16,9 @@ import (
 // previewColumnLines show the selected row in full beside the tree, when wide: a proposal first when there is one,
 // then the session, the folder's context or the file.
 func (currentModel model) previewColumnLines(width int, height int) []string {
+	if currentModel.contextPane.open {
+		return currentModel.contextPaneLines(width, height)
+	}
 	innerWidth := width - 2
 	header, body := currentModel.rowPreview(innerWidth)
 	offset := min(currentModel.previewOffset, max(len(body)-1, 0))
@@ -108,40 +111,22 @@ func (currentModel model) folderContextPreview(folder *store.Folder, width int) 
 	for _, ancestor := range currentModel.repository.FolderPath(folder.ParentId) {
 		inherits = append(inherits, ancestor.Name)
 	}
-	contextPath, _ := currentModel.repository.ContextPath(folder.Id)
-	notes := currentModel.repository.ReadContext(folder.Id)
-	linked := ""
-	if folder.LinkedPath != "" {
-		linked = store.ReadText(folder.LinkedPath)
-	}
-	var lines []string
-	if strings.TrimSpace(notes) == "" && folder.LinkedPath == "" {
-		lines = append(lines, theme.bold.Render(folder.Name), "", theme.dim.Render("No context yet. Sessions here start with the context of "+strings.Join(inherits, " and ")+"."), "")
-		lines = append(lines, theme.dim.Render("Ask den to write it: c opens the chat about this folder, then for example:"))
-		lines = append(lines, theme.text.Render("  make the context from the latest session"), theme.text.Render("  link docs/PLAN.md"), "")
-		lines = append(lines, theme.key.Render("e")+theme.action.Render(" writes den's notes for it instead"))
+	text := currentModel.repository.ReadContext(folder.Id)
+	if strings.TrimSpace(text) == "" {
+		lines := []string{theme.bold.Render(folder.Name), "", theme.dim.Render("No context yet. Sessions here start with the context of " + strings.Join(inherits, " and ") + "."), ""}
+		lines = append(lines, theme.key.Render("→")+theme.action.Render(" opens it here: ask den to write it, or write it by hand"))
 		return wrapAll(lines, width)
 	}
+	filePath, _ := currentModel.repository.FolderContextPath(folder.Id)
+	owner := "den's file"
 	if folder.LinkedPath != "" {
-		size := segment{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(linked)), style: theme.dim}
-		if strings.TrimSpace(linked) == "" {
-			size = segment{text: "missing", style: theme.errorText}
-		}
-		lines = append(lines, currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · " + filepath.Base(folder.LinkedPath) + " · linked", style: theme.dim}},
-			[]segment{size}, width, false), "")
-		lines = append(lines, currentModel.markdownLines(linked)...)
-		lines = append(lines, "", currentModel.fileLink(folder.LinkedPath, width), theme.faint.Render("yours: den only proposes changes · \"unlink "+folder.Name+"\" in the chat takes it off"))
+		owner = "your file " + filepath.Base(filePath)
 	}
-	if strings.TrimSpace(notes) != "" {
-		if len(lines) > 0 {
-			lines = append(lines, "")
-		}
-		lines = append(lines, currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · den's notes", style: theme.dim}},
-			[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(notes)), style: theme.dim}}, width, false), "")
-		lines = append(lines, currentModel.markdownLines(notes)...)
-		lines = append(lines, "", currentModel.fileLink(contextPath, width))
-	}
-	lines = append(lines, theme.dim.Render("loads after "+strings.Join(inherits, ", ")))
+	lines := []string{currentModel.layoutRow([]segment{{text: "◆ " + folder.Name, style: theme.bold}, {text: " · " + owner, style: theme.dim}},
+		[]segment{{text: fmt.Sprintf("~%d tokens", store.EstimatedTokens(text)), style: theme.dim}}, width, false), ""}
+	lines = append(lines, currentModel.markdownLines(text)...)
+	lines = append(lines, "", currentModel.fileLink(filePath, width), theme.dim.Render("loads after "+strings.Join(inherits, ", ")))
+	lines = append(lines, theme.key.Render("→")+theme.action.Render(" edit it here, by hand or by asking den"))
 	return wrapAll(lines, width)
 }
 

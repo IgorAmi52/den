@@ -32,10 +32,12 @@ const (
 	chatJob
 	// reviseJob answers what the user told den about one of its suggestions in the dock.
 	reviseJob
+	// contextJob answers what the user asked to change in a folder's context pane.
+	contextJob
 )
 
 func (kind jobKind) String() string {
-	return [...]string{"review", "chat", "revise"}[kind]
+	return [...]string{"review", "chat", "revise", "context"}[kind]
 }
 
 // job is one model call. Its input is built when it starts, so it sees the latest state.
@@ -68,7 +70,7 @@ func (currentModel *model) queueJob(next job) {
 			return
 		}
 	}
-	if next.kind == chatJob || next.kind == reviseJob {
+	if next.kind == chatJob || next.kind == reviseJob || next.kind == contextJob {
 		currentModel.jobQueue = append([]job{next}, currentModel.jobQueue...)
 		return
 	}
@@ -123,6 +125,9 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 			LaptopRules:     currentModel.laptopRulesText(),
 		})
 		return run(request, &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: len(turns)})
+	case contextJob:
+		input := currentModel.contextPaneInput()
+		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
 	case chatJob:
 		input := currentModel.chatInput()
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
@@ -149,6 +154,9 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		case reviseJob:
 			currentModel.dock.thinking = false
 			currentModel.dock.reply = &brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()}
+		case contextJob:
+			currentModel.contextPane.thinking = false
+			currentModel.contextPane.reply = &brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()}
 		}
 		if done.job.kind == reviewJob {
 			if session := currentModel.repository.FindSession(done.job.sessionId); session != nil {
@@ -172,6 +180,8 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	case *brain.ChatAnswer:
 		if done.job.kind == reviseJob {
 			currentModel.applyReviseAnswer(done.job, *answer, done.chatInput)
+		} else if done.job.kind == contextJob {
+			currentModel.applyContextPaneAnswer(*answer, done.chatInput)
 		} else {
 			currentModel.applyChatAnswer(*answer, done.chatInput)
 		}
@@ -279,13 +289,7 @@ func (currentModel model) laptopRulesText() string {
 	return strings.Join(texts, "\n\n")
 }
 
-// folderNotesText is everything a folder's context says: its linked file, then den's notes.
+// folderNotesText is what a folder's context says.
 func (currentModel model) folderNotesText(folderId string) string {
-	var texts []string
-	for _, filePath := range currentModel.repository.ContextFilePaths(folderId) {
-		if text := strings.TrimSpace(store.ReadText(filePath)); text != "" {
-			texts = append(texts, text)
-		}
-	}
-	return strings.Join(texts, "\n\n")
+	return strings.TrimSpace(currentModel.repository.ReadContext(folderId))
 }

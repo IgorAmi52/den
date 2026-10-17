@@ -24,7 +24,13 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 			updated, command = currentModel.updateMouse(typedMessage)
 		}
 	default:
-		if currentModel.prompt != nil {
+		if currentModel.contextPane.open && currentModel.contextPane.mode == contextPaneEditing {
+			currentModel.contextPane.editor, command = currentModel.contextPane.editor.Update(message)
+			updated = currentModel
+		} else if currentModel.contextPane.open && currentModel.contextPane.mode == contextPaneAsking {
+			currentModel.contextPane.prompt, command = currentModel.contextPane.prompt.Update(message)
+			updated = currentModel
+		} else if currentModel.prompt != nil {
 			updated, command = currentModel.updatePrompt(message)
 		} else if currentModel.filtering {
 			currentModel.filter, command = currentModel.filter.Update(message)
@@ -54,6 +60,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		return currentModel.updatePicker(keyPress)
 	case currentModel.picker != nil:
 		return currentModel.updateFolderPicker(keyPress)
+	case currentModel.contextPane.open:
+		return currentModel.updateContextPane(keyPress)
 	case currentModel.dock.focused:
 		return currentModel.updateDock(keyPress)
 	}
@@ -104,6 +112,9 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		}
 		currentModel.setStatus("select a folder to add a subfolder to it")
 	case !exists:
+	case keyPress.String() == "right" && hasContextPane(selected):
+		currentModel.openContextPane(selected.folderId())
+		return currentModel, nil
 	case key.Matches(keyPress, keys.open):
 		return currentModel, currentModel.openRow(selected)
 	case key.Matches(keyPress, keys.move):

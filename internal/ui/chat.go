@@ -281,26 +281,32 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 	return done
 }
 
-// moveNotes puts one folder's den notes at the end of another's and empties the first.
-// A linked file moves too, when the receiving folder has none.
+// moveNotes moves one folder's context into another's. A linked file moves as the link when the receiving folder
+// has no context; otherwise its text is added there. den's own file is removed after; the user's file never is.
 func (currentModel *model) moveNotes(fromFolderId string, toFolderId string) {
 	repository := &currentModel.repository
-	moved := strings.TrimSpace(repository.ReadContext(fromFolderId))
-	if moved != "" {
-		receiving := strings.TrimRight(repository.ReadContext(toFolderId), "\n")
-		if strings.TrimSpace(receiving) != "" {
-			moved = receiving + "\n\n" + moved
-		}
-		if currentModel.reportError(repository.WriteContext(toFolderId, moved)) {
-			return
-		}
-		if contextPath, err := repository.ContextPath(fromFolderId); err == nil {
-			os.Remove(contextPath)
-		}
-	}
 	from, to := repository.FindFolder(fromFolderId), repository.FindFolder(toFolderId)
-	if from != nil && to != nil && from.LinkedPath != "" && to.LinkedPath == "" {
+	moved := strings.TrimSpace(repository.ReadContext(fromFolderId))
+	receiving := strings.TrimSpace(repository.ReadContext(toFolderId))
+	if from != nil && from.LinkedPath != "" && to != nil && receiving == "" {
 		to.LinkedPath, from.LinkedPath = from.LinkedPath, ""
+		return
+	}
+	if moved == "" {
+		return
+	}
+	if receiving != "" {
+		moved = receiving + "\n\n" + moved
+	}
+	if currentModel.reportError(repository.WriteContext(toFolderId, moved)) {
+		return
+	}
+	if from != nil && from.LinkedPath != "" {
+		from.LinkedPath = ""
+		return
+	}
+	if contextPath, err := repository.ContextPath(fromFolderId); err == nil {
+		os.Remove(contextPath)
 	}
 }
 

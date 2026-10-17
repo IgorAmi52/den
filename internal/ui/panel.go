@@ -16,9 +16,7 @@ import (
 const (
 	// wideMinimumWidth is the panel width from which it shows the preview beside the tree.
 	wideMinimumWidth = 80
-	// footerHeight is the rule plus two lines of keys.
-	footerHeight = 3
-	ghostWidth   = 12
+	ghostWidth       = 12
 )
 
 // treeLine is one screen line of the tree: a row, or with rowIndex -1, a line explaining the selected row's proposal.
@@ -75,7 +73,7 @@ func (currentModel model) treeTop() int {
 }
 
 func (currentModel model) treeHeight() int {
-	return max(currentModel.height-currentModel.treeTop()-footerHeight-len(currentModel.dockLines(currentModel.panelWidth())), 1)
+	return max(currentModel.height-currentModel.treeTop()-currentModel.footerHeight()-len(currentModel.dockLines(currentModel.panelWidth())), 1)
 }
 
 func (currentModel model) treeView() string {
@@ -360,10 +358,14 @@ func (currentModel model) footer(width int) []string {
 	keys := currentModel.keys
 	width -= len(currentModel.footerMargin())
 	hints := func(bindings ...key.Binding) []string {
-		return currentModel.hintLines(bindings, width, 2)
+		return currentModel.hintLines(bindings, width, currentModel.footerKeyLines())
 	}
 	var lines []string
 	switch {
+	case currentModel.contextPane.open && currentModel.statusMessage != "":
+		lines = []string{theme.dim.Render(truncate(currentModel.statusMessage, width))}
+	case currentModel.contextPane.open:
+		lines = []string{theme.dim.Render(truncate("editing "+currentModel.contextHeading(currentModel.contextPane.folderId)+"'s context on the right", width))}
 	case currentModel.dock.focused:
 		lines = hints(currentModel.dockHints()...)
 	case currentModel.filtering:
@@ -383,14 +385,27 @@ func (currentModel model) footer(width int) []string {
 		if currentModel.statusIsError {
 			style = theme.errorText
 		}
-		lines = append([]string{style.Render(truncate(currentModel.statusMessage, width))}, currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, 1)...)
+		lines = append([]string{style.Render(truncate(currentModel.statusMessage, width))}, currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, currentModel.footerKeyLines()-1)...)
 	default:
-		lines = currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, 2)
+		lines = currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, currentModel.footerKeyLines())
 	}
-	for len(lines) < 2 {
+	for len(lines) < currentModel.footerKeyLines() {
 		lines = append(lines, "")
 	}
-	return lines[:2]
+	return lines[:currentModel.footerKeyLines()]
+}
+
+// footerKeyLines is how many lines of keys the footer has: three in the narrow panel, where they wrap the most, two when wide.
+func (currentModel model) footerKeyLines() int {
+	if currentModel.isWide() {
+		return 2
+	}
+	return 3
+}
+
+// footerHeight is the rule above the footer plus its lines of keys.
+func (currentModel model) footerHeight() int {
+	return 1 + currentModel.footerKeyLines()
 }
 
 // rowHints are the keys that do something for the selected row, most useful first.
@@ -415,9 +430,9 @@ func (currentModel model) rowHints() []key.Binding {
 		case newAgentRow:
 			bindings = append(bindings, relabeled(keys.open, "focus"), keys.move, relabeled(keys.delete, "close"))
 		case folderRow:
-			bindings = append(bindings, relabeled(keys.open, "open"), relabeled(keys.newSession, "new here"), keys.move, keys.editContext, keys.rename, keys.newSubfolder, keys.delete)
+			bindings = append(bindings, relabeled(keys.open, "open"), hint("→", "context"), relabeled(keys.newSession, "new here"), keys.move, keys.rename, keys.newSubfolder, keys.delete)
 		case repositoryRow:
-			bindings = append(bindings, relabeled(keys.open, "show files"), relabeled(keys.editContext, "repo context"))
+			bindings = append(bindings, hint("→", "repo context"), relabeled(keys.open, "show files"))
 		case contextFileRow:
 			bindings = append(bindings, relabeled(keys.open, "edit"))
 		case inboxRow, archiveRow:

@@ -248,7 +248,7 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			from := findFolder(proposed.From)
 			if from != nil && folder != nil && from.Id != folder.Id {
 				actions = append(actions, ChatAction{Kind: "moveNotes", FromFolderId: from.Id, FolderId: folder.Id,
-					Description: "move the notes of " + from.Name + " into " + folder.Name})
+					Description: "move the context of " + from.Name + " into " + folder.Name})
 			}
 		case "editNotes":
 			text := strings.TrimSpace(proposed.Text)
@@ -256,7 +256,7 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			if text != "" && (folder != nil || isRepository) {
 				action := ChatAction{Kind: "editNotes", Text: text + "\n", Description: "rewrite the repo's context to:"}
 				if folder != nil {
-					action.FolderId, action.Description = folder.Id, "rewrite the notes of "+folder.Name+" to:"
+					action.FolderId, action.Description = folder.Id, "rewrite the context of "+folder.Name+" to:"
 				}
 				actions = append(actions, action)
 			}

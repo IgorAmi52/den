@@ -78,6 +78,17 @@ func KillWindow(windowId string) error {
 	return err
 }
 
+// HideStatusLineOfDenSession turns tmux's status line off when the window is in a session den made for itself,
+// named den-<repo>, so the panel gets that row. In a session of the user's, the status line stays.
+func HideStatusLineOfDenSession(windowId string) error {
+	sessionName, err := run("display-message", "-p", "-t", windowId, "#{session_name}")
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(sessionName), "den-") {
+		return err
+	}
+	_, err = run("set-option", "-t", strings.TrimSpace(sessionName), "status", "off")
+	return err
+}
+
 func SetWindowOption(windowId string, option string, value string) error {
 	_, err := run("set-option", "-w", "-t", windowId, option, value)
 	return err

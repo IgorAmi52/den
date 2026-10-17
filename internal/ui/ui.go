@@ -166,9 +166,10 @@ type model struct {
 	dragging      func(listRow) bool
 	dropTargetRow int
 
-	dock    dockState
-	welcome *welcomeState
-	chat    chatState
+	dock        dockState
+	welcome     *welcomeState
+	chat        chatState
+	contextPane contextPaneState
 
 	digests map[string]agent.Digest
 	// contextTokens holds the size of each folder's context, the top level's under "", with no entry when empty.
@@ -201,6 +202,9 @@ func Run() error {
 		}
 	}
 	if err := tmux.SetPaneOption(panelPaneId, PanelMarkerOption, "1"); err != nil {
+		return err
+	}
+	if err := tmux.HideStatusLineOfDenSession(windowId); err != nil {
 		return err
 	}
 	executable, err := os.Executable()
@@ -257,6 +261,7 @@ func Run() error {
 		filter:           newFilterInput(),
 		dock:             newDockState(),
 		chat:             newChatState(),
+		contextPane:      newContextPaneState(),
 	}
 	if err := initialModel.refreshAgents(); err != nil {
 		return err
@@ -682,14 +687,12 @@ func (currentModel *model) refreshContextTokens() {
 		folderIds = append(folderIds, folder.Id)
 	}
 	for _, folderId := range folderIds {
-		var size int64
-		for _, filePath := range currentModel.repository.ContextFilePaths(folderId) {
-			if information, err := os.Stat(filePath); err == nil && information.Size() > 1 {
-				size += information.Size()
-			}
+		filePath, err := currentModel.repository.FolderContextPath(folderId)
+		if err != nil {
+			continue
 		}
-		if size > 0 {
-			contextTokens[folderId] = int(size+3) / 4
+		if information, err := os.Stat(filePath); err == nil && information.Size() > 1 {
+			contextTokens[folderId] = int(information.Size()+3) / 4
 		}
 	}
 	currentModel.contextTokens = contextTokens

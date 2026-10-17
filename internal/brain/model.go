@@ -45,9 +45,9 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"because den shows the actions in a plan card under it: never repeat them, never say you did them, never explain how to confirm. When you answer a question, use at most 3 short sentences, from the facts given; when they don't say, " +
 	"say you don't know. Call sessions by their title, never by their id. " +
 	"You never run code and never touch the repo.\n\n" +
-	"How context works: a folder's context is its linked file, when it has one, plus den's notes for it. A session starts with the repo's notes, " +
-	"then the context of each folder above it, then its own folder's. Linking a file adds it next to den's notes; it never replaces them. " +
-	"FOLDERS says where each folder's context comes from.\n\n" +
+	"How context works: each folder has one context file. By default it's den's own; linking a file of the user's, like docs/PLAN.md, " +
+	"makes that file the context instead, and unlinking brings den's back. A session starts with the repo's notes, " +
+	"then the context of each folder above it, then its own folder's. editNotes rewrites whichever file a folder's context is.\n\n" +
 	"Writing context is your main job: people rarely write it themselves, they ask you to. When asked to make context from a chat or a session, " +
 	"write it from TRANSCRIPTS: what someone continuing the work, or working this way again, needs to know. Markdown starting with \"# <folder name>\", " +
 	"only sections you have facts for (## Goal, ## Findings, ## Decisions, ## Open questions, ## Pointers; for a skill, ## How to work), " +
@@ -67,8 +67,8 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"- archive: (session)\n" +
 	"- addRule: a rule for agents (target folder, repo or laptop, where laptop is the user's CLAUDE.md and AGENTS.md for every repo; " +
 	"folder when the target is folder; rule). When the user says a rule den suggested belongs in a folder or the repo instead, use this with that target.\n" +
-	"- moveNotes: move den's notes, and a linked file, from one folder into another (from, folder)\n" +
-	"- editNotes: rewrite den's notes for a folder, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
+	"- moveNotes: move one folder's context into another (from, folder)\n" +
+	"- editNotes: rewrite a folder's context, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
 	"- acceptSuggestion: do den's suggestion the chat is about, as it is"
 
 const firstRunSystem = "You are den, opened for the first time in a repo. You look at the developer's most recent AI coding agent sessions " +
@@ -213,6 +213,8 @@ type ChatInput struct {
 	SubjectNotes    string
 	RepositoryNotes string
 	Transcripts     []Transcript
+	// EditingContext is set when the user asks from a folder's context pane, so the answer is a change to that context.
+	EditingContext bool
 }
 
 type ChatAnswer struct {
@@ -270,6 +272,11 @@ func ChatRequest(input ChatInput) helper.Request {
 	repository := input.Repository
 	var prompt strings.Builder
 	switch {
+	case input.EditingContext && input.SubjectFolder == "":
+		prompt.WriteString("THE USER IS EDITING THE REPO'S CONTEXT. Do what they ask with one editNotes action, folder \"repo\", holding the whole new text.\n")
+	case input.EditingContext:
+		prompt.WriteString("THE USER IS EDITING THE CONTEXT OF FOLDER " + repository.FolderName(input.SubjectFolder) +
+			". Do what they ask with one editNotes action for that folder, holding the whole new text.\n")
 	case input.About != "":
 		prompt.WriteString("THE CHAT IS ABOUT THIS SUGGESTION OF DEN'S\n" + input.About + "\n")
 	case input.SubjectSession != "":
@@ -353,15 +360,14 @@ func folderOverview(repository *store.Repository) string {
 			}
 		}
 		fmt.Fprintf(&overview, "- %s (%d sessions)", name, repository.SessionCount(folder.Id))
-		if folder.LinkedPath != "" {
-			fmt.Fprintf(&overview, " | linked file: %s, starts: %s", relativeTo(repository.RepositoryPath, folder.LinkedPath),
-				startOfText(store.ReadText(folder.LinkedPath), contextHeadLength))
-		}
-		if notes := strings.TrimSpace(repository.ReadContext(folder.Id)); notes != "" {
-			fmt.Fprintf(&overview, " | den's notes: %s", startOfText(notes, contextHeadLength))
-		}
-		if folder.LinkedPath == "" && strings.TrimSpace(repository.ReadContext(folder.Id)) == "" {
+		context := strings.TrimSpace(repository.ReadContext(folder.Id))
+		switch {
+		case context == "":
 			overview.WriteString(" | no context")
+		case folder.LinkedPath != "":
+			fmt.Fprintf(&overview, " | context, the user's file %s: %s", relativeTo(repository.RepositoryPath, folder.LinkedPath), startOfText(context, contextHeadLength))
+		default:
+			fmt.Fprintf(&overview, " | context: %s", startOfText(context, contextHeadLength))
 		}
 		if len(titles) > 0 {
 			fmt.Fprintf(&overview, " | sessions: %s", strings.Join(titles, "; "))

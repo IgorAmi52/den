@@ -30,33 +30,37 @@ func (repository Repository) ContextPath(folderId string) (string, error) {
 	return filepath.Join(directory, "folders", folderId, "context.md"), nil
 }
 
+// FolderContextPath is the one file a folder's context lives in: the file linked to it, or else den's context.md,
+// which den creates when it first writes context for the folder. The top level's is the repo's context.md.
+func (repository Repository) FolderContextPath(folderId string) (string, error) {
+	if folder := repository.FindFolder(folderId); folder != nil && folder.LinkedPath != "" {
+		return folder.LinkedPath, nil
+	}
+	return repository.ContextPath(folderId)
+}
+
+// IsLinked tells whether a folder's context is a file of the user's rather than den's own.
+func (repository Repository) IsLinked(folderId string) bool {
+	folder := repository.FindFolder(folderId)
+	return folder != nil && folder.LinkedPath != ""
+}
+
+// ReadContext reads a folder's context, from whichever file it lives in.
 func (repository Repository) ReadContext(folderId string) string {
-	filePath, err := repository.ContextPath(folderId)
+	filePath, err := repository.FolderContextPath(folderId)
 	if err != nil {
 		return ""
 	}
 	return ReadText(filePath)
 }
 
+// WriteContext writes a folder's context to whichever file it lives in.
 func (repository Repository) WriteContext(folderId string, text string) error {
-	filePath, err := repository.ContextPath(folderId)
+	filePath, err := repository.FolderContextPath(folderId)
 	if err != nil {
 		return err
 	}
 	return WriteText(filePath, text)
-}
-
-// ContextFilePaths are the files a folder's context comes from: the linked file first, then den's notes.
-// The top level has only the repo's context.md.
-func (repository *Repository) ContextFilePaths(folderId string) []string {
-	var filePaths []string
-	if folder := repository.FindFolder(folderId); folder != nil && folder.LinkedPath != "" {
-		filePaths = append(filePaths, folder.LinkedPath)
-	}
-	if contextPath, err := repository.ContextPath(folderId); err == nil {
-		filePaths = append(filePaths, contextPath)
-	}
-	return filePaths
 }
 
 // contextLayer is one file a session starts with, under a heading that names it.
@@ -79,11 +83,8 @@ func (repository *Repository) contextLayers(folderId string) []contextLayer {
 		addLayer(filepath.Base(repository.RepositoryPath)+", whole repo", contextPath, true)
 	}
 	for _, folder := range repository.FolderPath(folderId) {
-		if folder.LinkedPath != "" {
-			addLayer(folder.Name, folder.LinkedPath, false)
-		}
-		if contextPath, err := repository.ContextPath(folder.Id); err == nil {
-			addLayer(folder.Name, contextPath, true)
+		if contextPath, err := repository.FolderContextPath(folder.Id); err == nil {
+			addLayer(folder.Name, contextPath, folder.LinkedPath == "")
 		}
 	}
 	return layers

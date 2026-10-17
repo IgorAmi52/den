@@ -361,7 +361,7 @@ func (currentModel model) dockLines(width int) []string {
 		input.Placeholder = "or tell den more…"
 	}
 	footer = append(footer, input.View())
-	bodyHeight := max(currentModel.height-currentModel.treeTop()-footerHeight-minimumTreeLinesBesideDock-len(header)-len(footer), 3)
+	bodyHeight := max(currentModel.height-currentModel.treeTop()-currentModel.footerHeight()-minimumTreeLinesBesideDock-len(header)-len(footer), 3)
 	if len(body) > bodyHeight {
 		offset := min(state.bodyOffset, len(body)-bodyHeight+1)
 		shown := body[offset : offset+bodyHeight-1]
