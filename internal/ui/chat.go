@@ -366,7 +366,7 @@ func (currentModel model) chatView() string {
 		}
 	} else if session := currentModel.repository.FindSession(state.subject.sessionId); session != nil {
 		pinned = []string{theme.bold.Render("about this session"), theme.text.Render(truncate(session.Title, contentWidth-2)),
-			theme.dim.Render(session.Tool + " · in " + currentModel.repository.FolderName(session.FolderId))}
+			theme.dim.Render(session.Tool + " agent · in " + currentModel.repository.FolderName(session.FolderId))}
 	} else if folder := currentModel.repository.FindFolder(state.subject.folderId); folder != nil {
 		pinned = []string{theme.bold.Render("about ◆ " + folder.Name), theme.dim.Render(fmt.Sprintf("%s · what you ask is about this folder", countedSessions(currentModel.repository.SessionCount(folder.Id))))}
 	}

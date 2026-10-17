@@ -25,12 +25,16 @@ const keepRules = "keep: whether this session produced something worth keeping a
 	"- notes: only for a session in a folder. It found or decided something whoever continues that folder's work needs: " +
 	"a finding with its cause, a decision the user made or confirmed, a problem left open. lines: at most 3 short factual lines, " +
 	"each clear on its own. Never implementation steps, file edits, or what the notes already say.\n" +
-	"- folder: it started a piece of work that will clearly go on in more sessions: a feature, an investigation, a plan. " +
-	"name: 1-3 words in title case naming the work. context: what a new session on this work needs, markdown starting " +
-	"with \"# <name>\", only sections you have facts for (## Goal, ## Findings, ## Decisions, ## Open questions, ## Pointers), " +
-	"under 150 words. file: the path of a plan or spec markdown file the session wrote that should be the context instead, from the files edited, or \"\".\n" +
+	"- folder: it started one piece of work that will clearly go on in more sessions: a feature, an investigation, a plan. " +
+	"The work must be narrower than the repo itself and than the session's whole range: a long session that touched many parts of the repo " +
+	"is not a folder, and neither is a topic named after where the session happened to start. " +
+	"name: 1-3 words in title case naming the work. context: what a new session on this work needs that will still be true next week, " +
+	"markdown starting with \"# <name>\", only sections you have facts for (## Goal, ## Findings, ## Decisions, ## Pointers), " +
+	"under 150 words. Never progress reports, to-dos, what is or isn't implemented yet, or questions the user asked the agent. " +
+	"file: the path of a plan or spec markdown file the session wrote that should be the context instead, from the files edited, or \"\".\n" +
 	"- skill: the user set up a way of working they'll want again in other sessions, not a one-off instruction: " +
 	"a mode like research without code changes, a review checklist, which sources to search and how to report. " +
+	"The strongest sign is the user giving the same kind of setup instructions again, in this session or as an existing folder's sessions show. " +
 	"name: 1-3 words naming the mode, like Exploration or Paper search. context: the instructions an agent follows in this mode, " +
 	"markdown starting with \"# <name>\", under 120 words, only from what the user asked for.\n" +
 	"Never propose a folder or skill an existing folder already covers. Use only facts from the session; never invent. " +

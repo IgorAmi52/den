@@ -183,13 +183,21 @@ func (repository *Repository) MoveFolder(folderId string, parentId string) error
 	return nil
 }
 
-// DeleteFolder removes only the folder: its subfolders and sessions move up to its parent.
+// DeleteFolder removes only the folder: its subfolders and sessions move up to its parent. It counts as rejecting
+// that folder, so den never proposes it, or a folder for its sessions, again.
 func (repository *Repository) DeleteFolder(folderId string) {
 	folder := repository.FindFolder(folderId)
 	if folder == nil {
 		return
 	}
 	parentId := folder.ParentId
+	deletedFolder := Suggestion{Kind: SuggestFolder, FolderName: folder.Name}
+	for _, session := range repository.Sessions {
+		if session.FolderId == folderId {
+			deletedFolder.SessionIds = append(deletedFolder.SessionIds, session.SessionId)
+		}
+	}
+	repository.RejectedKeys = append(repository.RejectedKeys, deletedFolder.RejectionKeys()...)
 	for index := range repository.Folders {
 		if repository.Folders[index].ParentId == folderId {
 			repository.Folders[index].ParentId = parentId

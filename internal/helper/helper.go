@@ -1,5 +1,5 @@
 // Package helper makes den's one-shot model calls through an agent CLI the user already has, with its own login.
-// A call has no tools, loads none of the user's customizations, saves no session, and answers in JSON.
+// A call has no tools beyond reading the repo when asked, loads none of the user's customizations, saves no session, and answers in JSON.
 package helper
 
 import (
@@ -45,7 +45,8 @@ type codexModel struct {
 }
 
 var codexModels = map[Tier]codexModel{
-	Light:     {name: "gpt-6-luna", reasoningEffort: "none", inputPrice: 0.10, cachedPrice: 0.01, cacheWritePrice: 0.125, outputPrice: 0.50},
+	// Light runs on sol too until the call log shows luna ({name: "gpt-6-luna", reasoningEffort: "none", prices 0.10, 0.01, 0.125, 0.50}) judges as well.
+	Light:     {name: "gpt-6.1-sol", reasoningEffort: "low", inputPrice: 2, cachedPrice: 0.20, cacheWritePrice: 2.50, outputPrice: 10},
 	Reasoning: {name: "gpt-6.1-sol", reasoningEffort: "low", inputPrice: 2, cachedPrice: 0.20, cacheWritePrice: 2.50, outputPrice: 10},
 }
 
@@ -61,6 +62,8 @@ type Request struct {
 	Prompt string
 	Schema map[string]any
 	Tier   Tier
+	// ReadsRepository is the repo a call may read files of, or "" for a call with no tools at all.
+	ReadsRepository string
 }
 
 // Usage is what a call cost and which model made it.
@@ -76,6 +79,9 @@ type Usage struct {
 func (caller Caller) Name() string {
 	if caller.Tool == "claude" {
 		return "claude " + claudeModel
+	}
+	if codexModels[Light].name == codexModels[Reasoning].name {
+		return "codex " + codexModels[Reasoning].name
 	}
 	return "codex " + codexModels[Light].name + " · " + codexModels[Reasoning].name
 }
@@ -121,9 +127,14 @@ func callClaude(deadline context.Context, directory string, request Request) ([]
 	if err != nil {
 		return nil, Usage{}, err
 	}
-	command := exec.CommandContext(deadline, "claude", "-p", "--safe-mode", "--model", claudeModel,
-		"--settings", `{"alwaysThinkingEnabled":false}`, "--system-prompt", request.System, "--tools", "", "--strict-mcp-config",
-		"--no-session-persistence", "--output-format", "json", "--json-schema", string(schema))
+	tools := []string{"--tools", ""}
+	if request.ReadsRepository != "" {
+		tools = []string{"--tools", "Read,Glob,Grep", "--add-dir", request.ReadsRepository}
+	}
+	arguments := append([]string{"-p", "--safe-mode", "--model", claudeModel, "--settings", `{"alwaysThinkingEnabled":false}`,
+		"--system-prompt", request.System}, tools...)
+	arguments = append(arguments, "--strict-mcp-config", "--no-session-persistence", "--output-format", "json", "--json-schema", string(schema))
+	command := exec.CommandContext(deadline, "claude", arguments...)
 	command.Dir = directory
 	command.Stdin = strings.NewReader(request.Prompt)
 	output, err := runCommand(command)

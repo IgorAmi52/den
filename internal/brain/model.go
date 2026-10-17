@@ -65,7 +65,8 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"When you propose actions, the reply is one short question of at most 8 words asking the user to confirm, like \"Make the Exploration folder?\", " +
 	"because den shows the actions in a plan card under it: never repeat them, never say you did them, never explain how to confirm. When you answer a question, use at most 3 short sentences, from the facts given; when they don't say, " +
 	"say you don't know. Call sessions by their title, never by their id. " +
-	"You never run code and never touch the repo.\n\n" +
+	"You never run code and never change the repo. You can read the repo's files, at REPO PATH, but only when the user asks you to " +
+	"look at a file or at what the repo says, like \"put PLAN.md into its context\"; otherwise answer from the facts given.\n\n" +
 	"How context works: each folder has one context file. By default it's den's own; linking a file of the user's, like docs/PLAN.md, " +
 	"makes that file the context instead, and unlinking brings den's back. A session starts with the repo's notes, " +
 	"then the context of each folder above it, then its own folder's. editNotes rewrites whichever file a folder's context is.\n\n" +
@@ -332,6 +333,7 @@ func ChatRequest(input ChatInput) helper.Request {
 	default:
 		prompt.WriteString("THE CHAT IS ABOUT THE WHOLE REPO " + filepath.Base(repository.RepositoryPath) + "\n")
 	}
+	prompt.WriteString("\nREPO PATH\n" + repository.RepositoryPath + "\n")
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
 	prompt.WriteString("\nSESSIONS (id | title | folder | files edited | latest prompt)\n")
 	sessionIds := ChatSessionIds(input)
@@ -371,9 +373,10 @@ func ChatRequest(input ChatInput) helper.Request {
 		fmt.Fprintf(&prompt, "%s: %s\n", speaker, message.Text)
 	}
 	return helper.Request{
-		System: chatSystem,
-		Prompt: prompt.String(),
-		Tier:   helper.Reasoning,
+		System:          chatSystem,
+		Prompt:          prompt.String(),
+		Tier:            helper.Reasoning,
+		ReadsRepository: repository.RepositoryPath,
 		Schema: objectSchema(map[string]any{
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{
