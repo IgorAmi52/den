@@ -40,7 +40,11 @@ func (currentModel model) planCard(actions []brain.ChatAction, outcome string, c
 	lines := []string{currentModel.layoutRow(header, nil, innerWidth, false), ""}
 	for _, action := range actions {
 		lines = append(lines, hangingIndent(capitalized(action.Description), theme.bold, innerWidth, "▸ ", "  ")...)
-		for _, textLine := range splitLines(strings.TrimSpace(action.Text)) {
+		shownText := action.Text
+		if action.Change != "" {
+			shownText = action.Change
+		}
+		for _, textLine := range splitLines(strings.TrimSpace(shownText)) {
 			style, continuation := theme.text, "    "
 			if strings.HasPrefix(textLine, "#") {
 				style = theme.bold

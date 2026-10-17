@@ -22,7 +22,13 @@ const (
 	maximumChatTurns       = 12
 	contextHeadLength      = 300
 	notesExcerptLength     = 1500
+	// maximumEditedContextLength is how much of a context den reads when asked to change it: all of any sensible one.
+	maximumEditedContextLength = 60000
 )
+
+// editingInstructions tell den how to change a context it was given in full, so a small change never rewrites the rest.
+const editingInstructions = "Do what they ask with one action: replaceText to change a passage, with from an exact passage of the current text " +
+	"and text what replaces it, or editNotes only when the whole text should be rewritten. To change a title, replace just that line."
 
 const titleRules = "A title is 2-4 words in sentence case and at most 28 characters, like \"Fix duplicate coupons\". It starts with an imperative verb (Fix, Add, Remove, Refactor, " +
 	"Investigate, Review, Explain, Plan, Write, Design), names the session's goal rather than its latest step, is specific enough " +
@@ -68,6 +74,8 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"- addRule: a rule for agents (target folder, repo or laptop, where laptop is the user's CLAUDE.md and AGENTS.md for every repo; " +
 	"folder when the target is folder; rule). When the user says a rule den suggested belongs in a folder or the repo instead, use this with that target.\n" +
 	"- moveNotes: move one folder's context into another (from, folder)\n" +
+	"- replaceText: change one passage of a folder's context, or the repo's with folder \"repo\" (folder, from: the exact current passage, " +
+	"text: what replaces it). Prefer it to editNotes for any change that leaves the rest as it is.\n" +
 	"- editNotes: rewrite a folder's context, or the repo's with folder \"repo\" (folder, text: the whole new notes in markdown)\n" +
 	"- acceptSuggestion: do den's suggestion the chat is about, as it is"
 
@@ -273,10 +281,9 @@ func ChatRequest(input ChatInput) helper.Request {
 	var prompt strings.Builder
 	switch {
 	case input.EditingContext && input.SubjectFolder == "":
-		prompt.WriteString("THE USER IS EDITING THE REPO'S CONTEXT. Do what they ask with one editNotes action, folder \"repo\", holding the whole new text.\n")
+		prompt.WriteString("THE USER IS EDITING THE REPO'S CONTEXT, folder \"repo\". " + editingInstructions + "\n")
 	case input.EditingContext:
-		prompt.WriteString("THE USER IS EDITING THE CONTEXT OF FOLDER " + repository.FolderName(input.SubjectFolder) +
-			". Do what they ask with one editNotes action for that folder, holding the whole new text.\n")
+		prompt.WriteString("THE USER IS EDITING THE CONTEXT OF FOLDER " + repository.FolderName(input.SubjectFolder) + ". " + editingInstructions + "\n")
 	case input.About != "":
 		prompt.WriteString("THE CHAT IS ABOUT THIS SUGGESTION OF DEN'S\n" + input.About + "\n")
 	case input.SubjectSession != "":
@@ -308,7 +315,10 @@ func ChatRequest(input ChatInput) helper.Request {
 		writeTurns(&prompt, transcript.Turns, 0, maximumChatTurns)
 		writeField(&prompt, "agent's latest reply", transcript.LastAgentMessage)
 	}
-	if input.SubjectNotes != "" {
+	switch {
+	case input.EditingContext:
+		prompt.WriteString("\nTHE WHOLE CURRENT CONTEXT BEING EDITED\n" + orNone(truncateText(input.SubjectNotes, maximumEditedContextLength)) + "\n")
+	case input.SubjectNotes != "":
 		prompt.WriteString("\nCONTEXT OF THE FOLDER THE CHAT IS ABOUT\n" + notesExcerpt(input.SubjectNotes) + "\n")
 	}
 	prompt.WriteString("\nREPO NOTES\n" + orNone(notesExcerpt(input.RepositoryNotes)) + "\n")
@@ -328,7 +338,7 @@ func ChatRequest(input ChatInput) helper.Request {
 			"reply": stringSchema(),
 			"actions": arraySchema(objectSchema(map[string]any{
 				"type": enumSchema("link", "unlink", "move", "renameSession", "renameFolder", "createFolder", "archive", "addRule",
-					"moveNotes", "editNotes", "acceptSuggestion"),
+					"moveNotes", "replaceText", "editNotes", "acceptSuggestion"),
 				"target":  enumSchema("", "folder", "repo", "laptop"),
 				"rule":    stringSchema(),
 				"from":    stringSchema(),

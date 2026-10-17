@@ -45,7 +45,9 @@ type ChatAction struct {
 	// FromFolderId is where notes move from; Text is a folder's whole new notes, or a new folder's.
 	FromFolderId string
 	Text         string
-	Description  string
+	// Change is the passage as it becomes, for a change to part of a context; a plan shows it instead of the whole text.
+	Change      string
+	Description string
 }
 
 // ChatContext is what den reads to answer without a model.
@@ -260,6 +262,22 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 				}
 				actions = append(actions, action)
 			}
+		case "replaceText":
+			isRepository := strings.EqualFold(strings.TrimSpace(proposed.Folder), "repo")
+			if folder == nil && !isRepository {
+				break
+			}
+			folderId, name := "", filepath.Base(repository.RepositoryPath)
+			if folder != nil {
+				folderId, name = folder.Id, folder.Name
+			}
+			current := repository.ReadContext(folderId)
+			// The passage must be there exactly once, or the change can't be placed safely.
+			if proposed.From == "" || strings.Count(current, proposed.From) != 1 {
+				break
+			}
+			actions = append(actions, ChatAction{Kind: "editNotes", FolderId: folderId, Text: strings.Replace(current, proposed.From, proposed.Text, 1),
+				Change: proposed.Text, Description: "change " + name + "'s context to:"})
 		}
 	}
 	return actions

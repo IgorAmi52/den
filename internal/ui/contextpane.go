@@ -114,6 +114,12 @@ func (currentModel model) updateContextPrompt(keyPress tea.KeyPressMsg) (tea.Mod
 	pane := &currentModel.contextPane
 	isEmpty := pane.prompt.Value() == ""
 	switch {
+	case keyPress.String() == "pgdown":
+		pane.offset += 5
+		return currentModel, nil
+	case keyPress.String() == "pgup":
+		pane.offset = max(pane.offset-5, 0)
+		return currentModel, nil
 	case keyPress.String() == "esc", keyPress.String() == "up" && isEmpty:
 		pane.prompt.Blur()
 		pane.mode = contextPaneReading
@@ -224,13 +230,13 @@ func (currentModel model) contextPaneLines(width int, height int) []string {
 		input := pane.prompt
 		input.SetWidth(innerWidth - 3)
 		bottom = append(bottom, input.View())
-		hints := []key.Binding{hint("↵", "send"), hint("↑", "back")}
+		hints := []key.Binding{hint("↵", "send"), hint("↑", "back"), hint("pgup/pgdn", "scroll")}
 		if pane.reply != nil && len(pane.reply.Actions) > 0 {
 			hints = []key.Binding{hint("↵", "confirm"), hint("⌫", "discard"), hint("type", "to change it")}
 		}
 		bottom = append(bottom, currentModel.hintLines(hints, innerWidth, 1)...)
 	default:
-		bottom = append(bottom, currentModel.hintLines([]key.Binding{hint("↓", "ask den"), hint("↑", "edit by hand"), hint("←", "back to the tree")}, innerWidth, 1)...)
+		bottom = append(bottom, currentModel.hintLines([]key.Binding{hint("↓", "ask den"), hint("↑", "edit by hand"), hint("←", "back"), hint("pgup/pgdn", "scroll")}, innerWidth, 1)...)
 	}
 	bodyHeight := max(height-1-len(bottom), 1)
 	offset := min(pane.offset, max(len(body)-bodyHeight, 0))
