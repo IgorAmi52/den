@@ -93,7 +93,7 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 	case key.Matches(keyPress, keys.wide):
 		currentModel.toggleWide()
 	case key.Matches(keyPress, keys.chat):
-		return currentModel, currentModel.openChatAbout(selected, exists)
+		return currentModel, currentModel.openChat(nil)
 	case key.Matches(keyPress, keys.help):
 		currentModel.openScreen(helpScreen)
 	case key.Matches(keyPress, keys.filter):

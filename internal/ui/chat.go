@@ -26,8 +26,6 @@ type chatState struct {
 	input    textinput.Model
 	// about is the suggestion the chat was opened on, pinned above the conversation.
 	about *store.Suggestion
-	// subject is the folder or session the chat was opened on, so what the user asks is about it without naming it.
-	subject chatSubject
 	// scrollOffset is how many lines the conversation is scrolled up from the newest message.
 	scrollOffset int
 	// pendingActions are changes den offered for what the user asked; enter on an empty line makes them.
@@ -54,34 +52,9 @@ func (state *chatState) addMessage(message brain.ChatMessage) {
 	state.scrollOffset = 0
 }
 
-// chatSubject is a folder, or a session and its folder; empty means the whole repo.
-type chatSubject struct {
-	folderId  string
-	sessionId string
-}
-
-// openChatAbout starts a chat about the selected folder or session. From the repo, Inbox or Archive rows,
-// the chat is about the whole repo.
-func (currentModel *model) openChatAbout(row listRow, exists bool) tea.Cmd {
-	var subject chatSubject
-	switch {
-	case exists && row.kind == folderRow:
-		subject = chatSubject{folderId: row.folder.Id}
-	case exists && row.kind == sessionRow:
-		subject = chatSubject{folderId: row.session.FolderId, sessionId: row.session.SessionId}
-	}
-	return currentModel.startChat(nil, subject)
-}
-
-// openChat starts a chat about a suggestion.
+// openChat starts a chat about the whole repo, or about a suggestion; the conversation carries over until the user starts a new one.
 func (currentModel *model) openChat(about *store.Suggestion) tea.Cmd {
-	return currentModel.startChat(about, chatSubject{})
-}
-
-// startChat opens the chat on a subject; the conversation carries over until the user starts a new one.
-func (currentModel *model) startChat(about *store.Suggestion, subject chatSubject) tea.Cmd {
 	state := &currentModel.chat
-	state.subject = subject
 	state.about = nil
 	if about != nil {
 		pinned := *about
@@ -127,7 +100,6 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 				Repository:       &currentModel.repository,
 				Digests:          currentModel.digests,
 				WorkingDirectory: currentModel.workingDirectory,
-				FolderId:         state.subject.folderId,
 			}))
 			return currentModel, nil
 		case key.Matches(keyPress, keys.newChat):
@@ -153,8 +125,6 @@ func (currentModel model) chatInput() brain.ChatInput {
 		Conversation:    state.messages,
 		Repository:      &currentModel.repository,
 		Digests:         currentModel.digests,
-		SubjectFolder:   state.subject.folderId,
-		SubjectSession:  state.subject.sessionId,
 		RepositoryNotes: currentModel.repository.ReadContext(""),
 		Now:             time.Now(),
 		AgentStatuses:   map[string]string{},
@@ -178,10 +148,7 @@ func (currentModel model) chatInput() brain.ChatInput {
 			input.About += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(state.about.Evidence, "\n- ")
 		}
 	}
-	if state.subject.folderId != "" {
-		input.SubjectNotes = currentModel.folderNotesText(state.subject.folderId)
-	}
-	input.Transcripts = currentModel.chatTranscripts(state.subject.folderId, state.subject.sessionId)
+	input.Transcripts = currentModel.chatTranscripts("", "")
 	return input
 }
 
@@ -401,11 +368,6 @@ func (currentModel model) chatView() string {
 		if state.about.Reason != "" {
 			pinned = append(pinned, theme.dim.Render(truncate(state.about.Reason, contentWidth-2)))
 		}
-	} else if session := currentModel.repository.FindSession(state.subject.sessionId); session != nil {
-		pinned = []string{theme.bold.Render("about this session"), theme.text.Render(truncate(session.Title, contentWidth-2)),
-			theme.dim.Render(session.Tool + " agent · in " + currentModel.repository.FolderName(session.FolderId))}
-	} else if folder := currentModel.repository.FindFolder(state.subject.folderId); folder != nil {
-		pinned = []string{theme.bold.Render("about ◆ " + folder.Name), theme.dim.Render(fmt.Sprintf("%s · what you ask is about this folder", countedSessions(currentModel.repository.SessionCount(folder.Id))))}
 	}
 	if len(pinned) > 0 {
 		top = append(top, "")
@@ -438,19 +400,19 @@ func (currentModel model) conversationLines(width int) []string {
 	theme := currentModel.theme
 	if len(currentModel.chat.messages) == 0 {
 		lines := wrapAll([]string{
-			theme.text.Render("Ask den where you left off, and pick the work back up: it starts a new session with a handoff of where things stand. Or tell it what to change: write a folder's context, make a folder, move a session."),
-			theme.dim.Render("den reads " + currentModel.chatReadsText() + ". It never touches your repo or runs anything, and every change waits in a plan card for your enter."),
-			theme.faint.Render("Each chat lasts until you close den or press ⌥L, and reads the row you opened it on; den remembers its last 12 messages."),
+			theme.text.Render("Ask den about your sessions."),
+			"",
+			theme.dim.Render("  recall    ask where any session left off"),
+			theme.dim.Render("  resume    start a new session that picks the work back up"),
+			theme.dim.Render("  organize  make folders, write their context, move sessions"),
+			"",
+			theme.faint.Render("den only changes things after you approve a plan card. It never edits your repo or runs commands."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
 		examples := []string{"where did I leave off yesterday?", "start a session that picks up where that stopped", "make an Exploration skill folder: research only, no code changes"}
 		switch {
 		case currentModel.chat.about != nil:
 			examples = []string{"call the folder Eval pagination instead", "why do you think it's worth keeping?"}
-		case currentModel.chat.subject.sessionId != "":
-			examples = []string{"where did this session leave off?", "start a new session that picks this up", "make a folder for this with its findings as context"}
-		case currentModel.chat.subject.folderId != "":
-			examples = []string{"where did I leave off here?", "start a session here that continues the latest one", "make the context from the latest session"}
 		}
 		for _, example := range examples {
 			lines = append(lines, theme.dim.Render("  "+example))
@@ -483,16 +445,4 @@ func (currentModel model) conversationLines(width int) []string {
 		lines = append(lines, "", theme.denLabel.Render(padRight("den", chatLabelWidth))+theme.faint.Render("thinking…"))
 	}
 	return lines
-}
-
-// chatReadsText says what den reads to answer, for the chat it's about.
-func (currentModel model) chatReadsText() string {
-	reads := "where every session stands and, when it needs them, their whole conversations, every folder, and the repo's notes"
-	switch {
-	case currentModel.chat.subject.sessionId != "":
-		return "this session's latest turns, its folder's context, " + reads
-	case currentModel.chat.subject.folderId != "":
-		return "this folder's context, the latest turns of its newest sessions, " + reads
-	}
-	return reads
 }

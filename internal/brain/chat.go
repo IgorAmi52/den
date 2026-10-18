@@ -57,8 +57,6 @@ type ChatContext struct {
 	Repository       *store.Repository
 	Digests          map[string]agent.Digest
 	WorkingDirectory string
-	// FolderId is the folder the chat is about, which a request that names no folder means.
-	FolderId string
 }
 
 // Reply answers the user in the chat. Without a model, den understands linking a file as a folder's context,
@@ -111,9 +109,6 @@ func linkReply(conversation []ChatMessage, chatContext ChatContext) (ChatMessage
 				filePath = mentioned[0]
 			}
 		}
-	}
-	if folder == nil {
-		folder = repository.FindFolder(chatContext.FolderId)
 	}
 	reply := func(text string, action ChatAction) (ChatMessage, bool) {
 		return ChatMessage{FromDen: true, Text: text, Actions: []ChatAction{action}}, true
