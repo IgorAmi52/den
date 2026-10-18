@@ -37,6 +37,17 @@ func (currentModel model) helpGroups() []helpGroup {
 			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview,
 			relabeled(keys.chat, "ask den"), keys.quit,
 		}},
+		{title: "MARKS", bindings: []key.Binding{
+			optionKey("1●", "agent 1 is working"), optionKey("1!", "agent 1 waits for you"),
+			optionKey("1✓", "agent 1 is done, your turn"), optionKey("✦", "den has a suggestion for it"),
+			optionKey("◆", "the folder has context"), optionKey("3d", "left in the archive"),
+		}},
+		{title: "SESSION KINDS", bindings: []key.Binding{
+			optionKey("🔍", "investigate, explore, review"), optionKey("🐛", "fix something broken"),
+			optionKey("✨", "build something new"), optionKey("🧹", "refactor or clean up"),
+			optionKey("📋", "plan or design"), optionKey("📝", "docs, notes or prompts"),
+			optionKey("💬", "a quick question"),
+		}},
 	}
 }
 
