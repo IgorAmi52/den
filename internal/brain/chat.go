@@ -234,10 +234,10 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			brief := strings.TrimSpace(proposed.Text)
 			isInbox := strings.EqualFold(strings.TrimSpace(proposed.Folder), "Inbox") || strings.TrimSpace(proposed.Folder) == ""
 			isNewFolder := createdNames[strings.ToLower(strings.TrimSpace(proposed.Folder))]
-			if brief == "" || (folder == nil && !isInbox && !isNewFolder) {
+			if folder == nil && !isInbox && !isNewFolder {
 				break
 			}
-			action := ChatAction{Kind: "startSession", Text: brief + "\n", Description: "start a session in Inbox"}
+			action := ChatAction{Kind: "startSession", Description: "start a session in Inbox"}
 			switch {
 			case folder != nil:
 				action.FolderId, action.Description = folder.Id, "start a session in "+folder.Name
@@ -248,7 +248,10 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 				action.SessionId = session.SessionId
 				action.Description += " picking up \"" + session.Title + "\""
 			}
-			action.Description += ", starting with this handoff:"
+			if brief != "" {
+				action.Text = brief + "\n"
+				action.Description += ", starting with this handoff:"
+			}
 			actions = append(actions, action)
 		case "addRule":
 			rule := strings.TrimSpace(proposed.Rule)

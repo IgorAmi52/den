@@ -386,7 +386,7 @@ func (currentModel model) welcomeKeysBody(width int) []string {
 		keyLine("click", "focus any pane"),
 		"", theme.columnHeader.Render("IN DEN"),
 		keyLine("n", "new agent in the selected folder, starting with its context"),
-		keyLine("c", "ask den: write a folder's context, make a folder, move things"),
+		keyLine("c", "ask den where you left off, and pick it back up in a new agent"),
 		keyLine("⇥", "den's suggestions: ↵ yes, ⌫ no, or type to tell den"),
 		keyLine("↵", "open, or yes when den asks"),
 		keyLine("esc", "back out without changing anything"),

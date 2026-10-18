@@ -39,7 +39,7 @@ type chatState struct {
 func newChatState() chatState {
 	input := textinput.New()
 	input.Prompt = "› "
-	input.Placeholder = "ask den, or tell it what to change"
+	input.Placeholder = "where did I leave off? or tell den what to change"
 	input.CharLimit = 2000
 	return chatState{input: input}
 }
@@ -296,6 +296,11 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 				folderId = currentModel.folderNamed(action.Name)
 			}
 			currentModel.startNewSession(folderId, false, action.Text)
+			// Back to the tree, where the agent picker shows and the new agent's row appears.
+			currentModel.chat.input.Blur()
+			for len(currentModel.screens) > 0 {
+				currentModel.closeScreen()
+			}
 		case "addRule":
 			currentModel.addRuleNow(action)
 		case "moveNotes":
@@ -433,19 +438,19 @@ func (currentModel model) conversationLines(width int) []string {
 	theme := currentModel.theme
 	if len(currentModel.chat.messages) == 0 {
 		lines := wrapAll([]string{
-			theme.text.Render("Ask den about your sessions and folders, or tell it what to change: write a folder's context, make a folder, move a session."),
+			theme.text.Render("Ask den where you left off, and pick the work back up: it starts a new session with a handoff of where things stand. Or tell it what to change: write a folder's context, make a folder, move a session."),
 			theme.dim.Render("den reads " + currentModel.chatReadsText() + ". It never touches your repo or runs anything, and every change waits in a plan card for your enter."),
 			theme.faint.Render("Each chat lasts until you close den or press ⌥L, and reads the row you opened it on; den remembers its last 12 messages."),
 		}, width)
 		lines = append(lines, "", theme.faint.Render("try:"))
-		examples := []string{"make an Exploration skill folder: research only, no code changes", "which sessions worked on the eval loader?", "link docs/PLAN.md to Eval"}
+		examples := []string{"where did I leave off yesterday?", "start a session that picks up where that stopped", "make an Exploration skill folder: research only, no code changes"}
 		switch {
 		case currentModel.chat.about != nil:
 			examples = []string{"call the folder Eval pagination instead", "why do you think it's worth keeping?"}
 		case currentModel.chat.subject.sessionId != "":
-			examples = []string{"make a folder for this with its findings as context", "add what this session decided to its folder's notes"}
+			examples = []string{"where did this session leave off?", "start a new session that picks this up", "make a folder for this with its findings as context"}
 		case currentModel.chat.subject.folderId != "":
-			examples = []string{"make the context from the latest session", "link docs/PLAN.md"}
+			examples = []string{"where did I leave off here?", "start a session here that continues the latest one", "make the context from the latest session"}
 		}
 		for _, example := range examples {
 			lines = append(lines, theme.dim.Render("  "+example))
@@ -482,12 +487,12 @@ func (currentModel model) conversationLines(width int) []string {
 
 // chatReadsText says what den reads to answer, for the chat it's about.
 func (currentModel model) chatReadsText() string {
-	reads := "every folder and session by name, and the repo's notes"
+	reads := "where every session stands and, when it needs them, their whole conversations, every folder, and the repo's notes"
 	switch {
 	case currentModel.chat.subject.sessionId != "":
 		return "this session's latest turns, its folder's context, " + reads
 	case currentModel.chat.subject.folderId != "":
 		return "this folder's context, the latest turns of its newest sessions, " + reads
 	}
-	return "your latest session's turns, " + reads
+	return reads
 }

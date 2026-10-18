@@ -24,7 +24,8 @@ const keepRules = "keep: whether this session produced something worth keeping a
 	"- none: the normal answer. Routine work, small fixes, a question answered, anything finished that nobody needs next week.\n" +
 	"- notes: only for a session in a folder. It found or decided something whoever continues that folder's work needs: " +
 	"a finding with its cause, a decision the user made or confirmed, a problem left open. lines: at most 3 short factual lines, " +
-	"each clear on its own. Never implementation steps, file edits, or what the notes already say.\n" +
+	"each clear on its own. Never implementation steps, file edits, or what the notes already say. Never a decision about how the " +
+	"code or a tool should behave that the session itself went on to build: once built, the code says it, and a note would only go stale.\n" +
 	"- folder: it started one piece of work that will clearly go on in more sessions: a feature, an investigation, a plan. " +
 	"The work must be narrower than the repo itself and than the session's whole range: a long session that touched many parts of the repo " +
 	"is not a folder, and neither is a topic named after where the session happened to start. " +
