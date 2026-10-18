@@ -1,5 +1,6 @@
-// Package terminal reads and changes the one Terminal.app setting den depends on:
-// "Use Option as Meta key". Without it, Option types characters like å, and den's Option keys never reach tmux.
+// Package terminal reads and changes the one terminal setting den depends on: Option sending Meta,
+// "Use Option as Meta key" in Terminal.app and macos-option-as-alt in Ghostty. Without it, Option types characters like å,
+// and den's Option keys never reach tmux.
 package terminal
 
 import (
@@ -61,4 +62,32 @@ func exportPreferences() (string, func(), error) {
 // escaped quotes a profile name for a PlistBuddy entry path, where spaces and colons separate parts.
 func escaped(profile string) string {
 	return strings.NewReplacer(`\`, `\\`, " ", `\ `, ":", `\:`).Replace(profile)
+}
+
+// EnableGhosttyOptionKey makes Ghostty send Option as Alt, by adding the setting to the end of its config, where it wins.
+// The macOS config is loaded after the XDG one, so it is used when it exists.
+func EnableGhosttyOptionKey() error {
+	homeDirectory, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	configurationDirectory := os.Getenv("XDG_CONFIG_HOME")
+	if configurationDirectory == "" {
+		configurationDirectory = filepath.Join(homeDirectory, ".config")
+	}
+	configurationPath := filepath.Join(configurationDirectory, "ghostty", "config")
+	macConfigurationPath := filepath.Join(homeDirectory, "Library", "Application Support", "com.mitchellh.ghostty", "config")
+	if _, err := os.Stat(macConfigurationPath); err == nil {
+		configurationPath = macConfigurationPath
+	}
+	if err := os.MkdirAll(filepath.Dir(configurationPath), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(configurationPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = file.WriteString("\n# added by den, so its ⌥ keys reach it\nmacos-option-as-alt = true\n")
+	return err
 }

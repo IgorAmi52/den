@@ -26,7 +26,7 @@ type welcomeStep int
 const (
 	scanningStep welcomeStep = iota
 	sessionsStep
-	// keysStep teaches the keys and offers to turn on Terminal.app's Option key, which den's ⌥ keys need.
+	// keysStep teaches the keys and checks that the Option key reaches den, which its ⌥ keys need, offering to turn it on.
 	keysStep
 )
 
@@ -43,6 +43,11 @@ type welcomeState struct {
 	// optionKeyProfile is Terminal.app's profile for new windows, when den runs in Terminal.app.
 	optionKeyProfile string
 	optionKeyEnabled bool
+	// terminalProgram is the terminal den shows in, like Apple_Terminal, iTerm.app or ghostty.
+	terminalProgram string
+	// optionKeyTyped is what arrived when the user pressed ⌥L to check the Option key: empty until they did,
+	// "alt+l" when it reached den, or the character the terminal typed instead.
+	optionKeyTyped string
 }
 
 type pastSessionsMessage struct {
@@ -57,7 +62,7 @@ type pastSessionsMessage struct {
 }
 
 func newWelcomeState() *welcomeState {
-	return &welcomeState{spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot))}
+	return &welcomeState{spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot)), terminalProgram: currentTerminalProgram()}
 }
 
 // scanPastSessions reads the newest sessions the installed agents recorded in this repo's worktrees,
@@ -66,6 +71,7 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 	repository := currentModel.repository
 	installedAgents := currentModel.installedAgents
 	helperCaller := currentModel.helperCaller
+	isAppleTerminal := currentModel.welcome.terminalProgram == "Apple_Terminal"
 	tracked := map[string]bool{}
 	for _, session := range repository.Sessions {
 		tracked[session.SessionId] = true
@@ -108,21 +114,21 @@ func (currentModel model) scanPastSessions() tea.Cmd {
 				scanned.call.Answer, _ = json.Marshal(answer)
 			}
 		}
-		if isAppleTerminal() {
+		if isAppleTerminal {
 			scanned.optionKeyProfile, scanned.optionKeyEnabled, _ = terminal.OptionKey()
 		}
 		return scanned
 	}
 }
 
-// isAppleTerminal tells whether den shows in Terminal.app. Inside tmux, TERM_PROGRAM names tmux,
+// currentTerminalProgram names the terminal den shows in. Inside tmux, TERM_PROGRAM names tmux,
 // so the environment the tmux server started with, which came from the terminal, is asked instead.
-func isAppleTerminal() bool {
+func currentTerminalProgram() string {
 	terminalProgram := os.Getenv("TERM_PROGRAM")
 	if terminalProgram == "tmux" {
 		terminalProgram = tmux.GlobalEnvironment("TERM_PROGRAM")
 	}
-	return terminalProgram == "Apple_Terminal"
+	return terminalProgram
 }
 
 func (currentModel model) updateWelcomeScan(scanned pastSessionsMessage) (tea.Model, tea.Cmd) {
@@ -184,19 +190,28 @@ func (currentModel model) updateWelcome(message tea.Msg) (tea.Model, tea.Cmd) {
 	return currentModel, nil
 }
 
-// updateWelcomeKeysStep finishes the setup; enter also turns on Terminal.app's Option key when it is off.
+// updateWelcomeKeysStep checks the Option key with ⌥L and finishes the setup; enter also turns the Option key on
+// in Terminal.app or Ghostty when it types characters.
 func (currentModel model) updateWelcomeKeysStep(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	state := currentModel.welcome
 	keys := currentModel.keys
 	switch {
+	case keyPress.String() == "alt+l":
+		state.optionKeyTyped = "alt+l"
 	case key.Matches(keyPress, keys.yes):
 		profile, needsOptionKey := state.optionKeyProfile, currentModel.needsOptionKey()
+		needsGhosttyOptionKey := currentModel.optionKeyTypesCharacters() && state.terminalProgram == "ghostty"
 		currentModel.finishWelcome(true)
 		if needsOptionKey && !currentModel.reportError(terminal.EnableOptionKey(profile)) {
 			currentModel.setStatus("Option keys on for new Terminal windows · open one to use ⌥")
 		}
+		if needsGhosttyOptionKey && !currentModel.reportError(terminal.EnableGhosttyOptionKey()) {
+			currentModel.setStatus("Option keys on in Ghostty's config · reload it with ⌘⇧, to use ⌥")
+		}
 	case key.Matches(keyPress, keys.no), key.Matches(keyPress, keys.back):
 		currentModel.finishWelcome(true)
+	case keyPress.Text != "" && state.optionKeyProfile == "":
+		state.optionKeyTyped = keyPress.Text
 	}
 	return currentModel, nil
 }
@@ -204,6 +219,12 @@ func (currentModel model) updateWelcomeKeysStep(keyPress tea.KeyPressMsg) (tea.M
 // needsOptionKey is true in Terminal.app when its profile still types characters with Option.
 func (currentModel model) needsOptionKey() bool {
 	return currentModel.welcome.optionKeyProfile != "" && !currentModel.welcome.optionKeyEnabled
+}
+
+// optionKeyTypesCharacters is true once ⌥L typed a character instead of reaching den.
+func (currentModel model) optionKeyTypesCharacters() bool {
+	typed := currentModel.welcome.optionKeyTyped
+	return typed != "" && typed != "alt+l"
 }
 
 // finishWelcome brings in the sessions the user kept, in the Inbox, and offers what den found worth keeping in them.
@@ -403,8 +424,29 @@ func (currentModel model) welcomeKeysBody(width int) []string {
 	case state.optionKeyProfile != "":
 		lines = append(lines, theme.running.Render("✓ ")+theme.dim.Render(fmt.Sprintf("Option keys work: \"Use Option as Meta key\" is on in Terminal.app (%s).", state.optionKeyProfile)))
 		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
+	case state.optionKeyTyped == "alt+l":
+		lines = append(lines, theme.running.Render("✓ ")+theme.dim.Render("Option keys work: ⌥L reached den."))
+		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
+	case currentModel.optionKeyTypesCharacters() && state.terminalProgram == "ghostty":
+		lines = append(lines, wrapAll([]string{
+			theme.suggestionBold.Render(fmt.Sprintf("✦ ⌥L typed \"%s\", so Ghostty types characters with Option and the ⌥ keys can't reach den.", state.optionKeyTyped)),
+			theme.dim.Render("Enter adds macos-option-as-alt = true to Ghostty's config. Reload it with ⌘⇧, and Option stops typing characters like å."),
+		}, width)...)
+		finishHints = []key.Binding{relabeled(keys.yes, "turn it on and finish"), relabeled(keys.no, "leave it off")}
+	case currentModel.optionKeyTypesCharacters() && state.terminalProgram == "iTerm.app":
+		lines = append(lines, wrapAll([]string{
+			theme.suggestionBold.Render(fmt.Sprintf("✦ ⌥L typed \"%s\", so iTerm2 types characters with Option and the ⌥ keys can't reach den.", state.optionKeyTyped)),
+			theme.dim.Render("In iTerm2, open Settings → Profiles → Keys and set Left Option key to Esc+. Then press ⌥L again."),
+		}, width)...)
+		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
+	case currentModel.optionKeyTypesCharacters():
+		lines = append(lines, wrapAll([]string{
+			theme.suggestionBold.Render(fmt.Sprintf("✦ ⌥L typed \"%s\", so your terminal types characters with Option and the ⌥ keys can't reach den.", state.optionKeyTyped)),
+			theme.dim.Render("Set your terminal's Option key to send Alt, Meta or Esc+. Then press ⌥L again."),
+		}, width)...)
+		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
 	default:
-		lines = append(lines, wrapAll([]string{theme.dim.Render("In iTerm2 set Option to send Esc+, in Ghostty set macos-option-as-alt, so the ⌥ keys reach den.")}, width)...)
+		lines = append(lines, wrapAll([]string{theme.text.Render("Press ⌥L to check that the ⌥ keys reach den.")}, width)...)
 		finishHints = []key.Binding{relabeled(keys.yes, "finish")}
 	}
 	return append(lines, "", strings.Join(currentModel.hintLines(finishHints, width, 1), ""))
