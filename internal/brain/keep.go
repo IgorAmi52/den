@@ -37,7 +37,15 @@ const keepRules = "keep: whether this session produced something worth keeping a
 	"a mode like research without code changes, a review checklist, which sources to search and how to report. " +
 	"The strongest sign is the user giving the same kind of setup instructions again, in this session or as an existing folder's sessions show. " +
 	"name: 1-3 words naming the mode, like Exploration or Paper search. context: the instructions an agent follows in this mode, " +
-	"markdown starting with \"# <name>\", under 120 words, only from what the user asked for.\n" +
+	"markdown starting with \"# <name>\", under 120 words, only from what the user asked for. " +
+	"A skill file listed under SKILL FILES THIS SESSION WROTE is a skill the user had written on purpose: offer it as kind skill, " +
+	"with its path as file and context \"\", unless an existing folder already holds it. " +
+	"place: where the skill goes, by who should start with it.\n" +
+	"  - here: every session in the session's own folder should start with it, because that folder is this way of working, " +
+	"and the folder has no context yet. The skill becomes that folder's context.\n" +
+	"  - inside: it serves the work of the session's folder, but only some sessions there should start with it. A new folder under it.\n" +
+	"  - top: it's useful beyond that folder's work, or the session has no folder. A new top-level folder.\n" +
+	"For kind folder, place is inside; for notes and none, \"\".\n" +
 	"Never propose a folder or skill an existing folder already covers. Use only facts from the session; never invent. " +
 	"confidence: 0 to 1 that the user will say yes. reason: one sentence of at most 14 words the user reads first, " +
 	"concise with a light, friendly touch but never cute, " +
@@ -98,6 +106,8 @@ type Keep struct {
 	Confidence float64  `json:"confidence"`
 	Reason     string   `json:"reason"`
 	Evidence   []string `json:"evidence"`
+	// Place is where a skill goes: here in the session's folder, inside it as a new folder, or a new top-level folder.
+	Place string `json:"place"`
 }
 
 func keepSchema() map[string]any {
@@ -107,6 +117,7 @@ func keepSchema() map[string]any {
 		"lines":      arraySchema(stringSchema()),
 		"context":    stringSchema(),
 		"file":       stringSchema(),
+		"place":      enumSchema("", "here", "inside", "top"),
 		"confidence": map[string]any{"type": "number"},
 		"reason":     stringSchema(),
 		"evidence":   arraySchema(stringSchema()),
@@ -143,9 +154,25 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 	if file := strings.TrimSpace(keep.File); file != "" && keep.Kind == "folder" {
 		for _, touched := range digest.TouchedFiles {
 			candidate := absoluteIn(digest.WorkingDirectory, touched)
-			if (candidate == file || strings.HasSuffix(candidate, "/"+strings.TrimPrefix(file, "./"))) && isNotesFile(repository, candidate) {
+			if isSamePath(candidate, file) && isNotesFile(repository, candidate) {
 				linkedPath = candidate
 			}
+		}
+	}
+	if file := strings.TrimSpace(keep.File); file != "" && keep.Kind == "skill" {
+		for _, skillFile := range writtenSkillFiles(digest) {
+			if isSamePath(skillFile, file) && !slices.ContainsFunc(repository.Folders, func(folder store.Folder) bool { return folder.LinkedPath == skillFile }) {
+				linkedPath = skillFile
+			}
+		}
+	}
+	parentFolderId := session.FolderId
+	if keep.Kind == "skill" {
+		switch keep.Place {
+		case "here":
+			return skillHere(base, session, context, linkedPath, repository)
+		case "top":
+			parentFolderId = ""
 		}
 	}
 	switch {
@@ -156,12 +183,35 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 	case context == "" && linkedPath == "":
 		return store.Suggestion{}, "dropped: no context"
 	}
-	base.Kind, base.FolderName, base.ParentFolderId, base.Skill = store.SuggestFolder, name, session.FolderId, keep.Kind == "skill"
+	base.Kind, base.FolderName, base.ParentFolderId, base.Skill = store.SuggestFolder, name, parentFolderId, keep.Kind == "skill"
 	base.LinkedPath = linkedPath
 	if linkedPath == "" {
 		base.ProposedText = context + "\n"
 	}
 	return base, "proposed"
+}
+
+// skillHere makes a skill the context of the session's own folder: its skill file linked, or the instructions den wrote.
+func skillHere(base store.Suggestion, session store.Session, context string, linkedPath string, repository *store.Repository) (store.Suggestion, string) {
+	folder := repository.FindFolder(session.FolderId)
+	switch {
+	case folder == nil:
+		return store.Suggestion{}, "dropped: no folder to put the skill in"
+	case strings.TrimSpace(repository.ReadContext(folder.Id)) != "":
+		return store.Suggestion{}, "dropped: the folder already has context"
+	case linkedPath != "":
+		base.Kind, base.FolderId, base.LinkedPath = store.SuggestLink, folder.Id, linkedPath
+	case context != "":
+		base.Kind, base.FolderId, base.ProposedText = store.SuggestContext, folder.Id, context+"\n"
+	default:
+		return store.Suggestion{}, "dropped: no context"
+	}
+	return base, "proposed"
+}
+
+// isSamePath tells whether a file the model named, maybe relative, is this absolute path.
+func isSamePath(absolutePath string, named string) bool {
+	return absolutePath == named || strings.HasSuffix(absolutePath, "/"+strings.TrimPrefix(named, "./"))
 }
 
 // notesSuggestion adds the kept lines to den's notes of the session's folder, under Findings.

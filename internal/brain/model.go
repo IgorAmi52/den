@@ -195,6 +195,12 @@ func ReviewRequest(input ReviewInput) helper.Request {
 		}
 	}
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
+	if skillFiles := writtenSkillFiles(input.Digest); len(skillFiles) > 0 {
+		prompt.WriteString("\nSKILL FILES THIS SESSION WROTE\n")
+		for _, skillFile := range skillFiles {
+			fmt.Fprintf(&prompt, "- %s: %s\n", relativeTo(repository.RepositoryPath, skillFile), orNone(skillDescription(skillFile)))
+		}
+	}
 	if input.Session.FolderId != "" {
 		prompt.WriteString("\nTHIS FOLDER'S CONTEXT\n" + orNone(notesExcerpt(input.FolderNotes)) + "\n")
 	}
