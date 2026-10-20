@@ -1,6 +1,7 @@
 package store
 
 import (
+	"path/filepath"
 	"slices"
 	"time"
 )
@@ -47,6 +48,34 @@ type Suggestion struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// CallId is the model call that proposed it, for the decision log.
 	CallId string `json:"callId,omitempty"`
+	// KeepKind is what a card review card keeps: notes, folder, skill or rule. A session has at most one waiting card of each,
+	// and cards from den's free rules have none.
+	KeepKind string `json:"keepKind,omitempty"`
+}
+
+// maximumCardRecords is how many of a session's cards it remembers.
+const maximumCardRecords = 10
+
+// CardSummary is a card in one line, for the card review to read what it already proposed.
+func CardSummary(suggestion Suggestion) string {
+	var what string
+	switch suggestion.Kind {
+	case SuggestFolder:
+		what = "new folder " + suggestion.FolderName
+		if suggestion.Skill {
+			what = "new skill folder " + suggestion.FolderName
+		}
+	case SuggestRule:
+		what = "rule for every repo: " + suggestion.Rule
+	case SuggestLink:
+		what = "link " + filepath.Base(suggestion.LinkedPath) + " as a folder's context"
+	default:
+		what = "notes for a folder's context"
+	}
+	if suggestion.Reason == "" {
+		return what
+	}
+	return what + " · " + suggestion.Reason
 }
 
 // RejectionKeys identify what was rejected, so the same suggestion is never offered again.
@@ -80,8 +109,8 @@ func (repository *Repository) IsRejected(suggestion Suggestion) bool {
 }
 
 // Offer queues a suggestion unless it was rejected before, the same one is already waiting, its session already has one
-// waiting, or enough are waiting already. A rule stands beside a session's other suggestion, since it's about the user,
-// not the work. It reports whether the queue changed.
+// of the same kind waiting, another one waits to change the same folder's context, or enough are waiting already.
+// A rule stands beside a session's other suggestions, since it's about the user, not the work. It reports whether the queue changed.
 func (repository *Repository) Offer(suggestion Suggestion) bool {
 	if repository.IsRejected(suggestion) || len(repository.Suggestions) >= maximumPendingSuggestions {
 		return false
@@ -91,7 +120,8 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 			return false
 		}
 		isAboutWork := suggestion.Kind != SuggestRule && pending.Kind != SuggestRule
-		if isAboutWork && slices.ContainsFunc(suggestion.SessionIds, func(sessionId string) bool { return slices.Contains(pending.SessionIds, sessionId) }) {
+		sharesSession := slices.ContainsFunc(suggestion.SessionIds, func(sessionId string) bool { return slices.Contains(pending.SessionIds, sessionId) })
+		if isAboutWork && sharesSession && pending.KeepKind == suggestion.KeepKind {
 			return false
 		}
 		if isAboutWork && suggestion.Kind != SuggestFolder && pending.Kind != SuggestFolder && pending.FolderId == suggestion.FolderId {
@@ -103,7 +133,59 @@ func (repository *Repository) Offer(suggestion Suggestion) bool {
 		suggestion.CreatedAt = time.Now()
 	}
 	repository.Suggestions = append(repository.Suggestions, suggestion)
+	if suggestion.KeepKind != "" {
+		for _, sessionId := range suggestion.SessionIds {
+			if session := repository.FindSession(sessionId); session != nil {
+				session.Cards = append(session.Cards, CardRecord{SuggestionId: suggestion.Id, Kind: suggestion.KeepKind, Summary: CardSummary(suggestion), Outcome: "waiting"})
+				session.Cards = session.Cards[max(len(session.Cards)-maximumCardRecords, 0):]
+			}
+		}
+	}
 	return true
+}
+
+// Replace offers a suggestion in place of a waiting one, which goes only if the new one is offered. It reports whether it was.
+func (repository *Repository) Replace(waitingId string, suggestion Suggestion) bool {
+	waiting := repository.FindSuggestion(waitingId)
+	if waiting == nil {
+		return repository.Offer(suggestion)
+	}
+	kept := *waiting
+	repository.Dismiss(waitingId)
+	if !repository.Offer(suggestion) {
+		repository.Suggestions = append(repository.Suggestions, kept)
+		return false
+	}
+	repository.recordCardOutcome(waitingId, "replaced")
+	return true
+}
+
+// Withdraw drops a waiting suggestion den itself no longer stands behind. Unlike a rejection, nothing is remembered against it.
+func (repository *Repository) Withdraw(suggestionId string) {
+	repository.recordCardOutcome(suggestionId, "withdrawn")
+	repository.Dismiss(suggestionId)
+}
+
+// WaitingFor returns the waiting suggestions that came from a session, oldest first.
+func (repository *Repository) WaitingFor(sessionId string) []Suggestion {
+	var waiting []Suggestion
+	for _, suggestion := range repository.Suggestions {
+		if slices.Contains(suggestion.SessionIds, sessionId) {
+			waiting = append(waiting, suggestion)
+		}
+	}
+	return waiting
+}
+
+// recordCardOutcome notes what became of a card in the history of the sessions it came from.
+func (repository *Repository) recordCardOutcome(suggestionId string, outcome string) {
+	for index := range repository.Sessions {
+		for cardIndex := range repository.Sessions[index].Cards {
+			if repository.Sessions[index].Cards[cardIndex].SuggestionId == suggestionId {
+				repository.Sessions[index].Cards[cardIndex].Outcome = outcome
+			}
+		}
+	}
 }
 
 func (repository *Repository) FindSuggestion(suggestionId string) *Suggestion {
@@ -126,6 +208,7 @@ func (repository *Repository) Reject(suggestionId string) {
 	if suggestion := repository.FindSuggestion(suggestionId); suggestion != nil {
 		repository.RejectedKeys = append(repository.RejectedKeys, suggestion.RejectionKeys()...)
 	}
+	repository.recordCardOutcome(suggestionId, "rejected")
 	repository.Dismiss(suggestionId)
 }
 
@@ -167,6 +250,7 @@ func (repository *Repository) Accept(suggestionId string) (string, error) {
 			}
 		}
 	}
+	repository.recordCardOutcome(suggestionId, "accepted")
 	repository.Dismiss(suggestionId)
 	return folderId, nil
 }
@@ -181,10 +265,10 @@ func (repository *Repository) Unlink(folderId string) {
 	folder.LinkedPath = ""
 }
 
-// PendingFor returns the waiting suggestion about the work of this session, if any.
-func (repository *Repository) PendingFor(sessionId string) *Suggestion {
+// PendingFolderFor returns the waiting new folder for this session, if any.
+func (repository *Repository) PendingFolderFor(sessionId string) *Suggestion {
 	for index := range repository.Suggestions {
-		if repository.Suggestions[index].Kind != SuggestRule && slices.Contains(repository.Suggestions[index].SessionIds, sessionId) {
+		if repository.Suggestions[index].Kind == SuggestFolder && slices.Contains(repository.Suggestions[index].SessionIds, sessionId) {
 			return &repository.Suggestions[index]
 		}
 	}

@@ -15,7 +15,7 @@ func (currentModel model) proposalFor(row listRow) *store.Suggestion {
 	repository := &currentModel.repository
 	switch row.kind {
 	case sessionRow:
-		if suggestion := repository.PendingFor(row.session.SessionId); suggestion != nil && suggestion.Kind == store.SuggestFolder {
+		if suggestion := repository.PendingFolderFor(row.session.SessionId); suggestion != nil {
 			return suggestion
 		}
 	case folderRow:
@@ -39,7 +39,7 @@ func (currentModel model) proposalFor(row listRow) *store.Suggestion {
 
 // ghostText is the short form of a session's proposal, in faint text on its row: the folder den would make for it.
 func (currentModel model) ghostText(sessionId string) string {
-	if suggestion := currentModel.repository.PendingFor(sessionId); suggestion != nil && suggestion.Kind == store.SuggestFolder {
+	if suggestion := currentModel.repository.PendingFolderFor(sessionId); suggestion != nil {
 		return "→ " + suggestion.FolderName
 	}
 	return ""

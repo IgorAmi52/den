@@ -34,8 +34,20 @@ type Session struct {
 	TitledAtPrompt int `json:"titledAtPrompt,omitempty"`
 	// ReviewedAtPrompt is the prompt count when den's model last reviewed the session.
 	ReviewedAtPrompt int `json:"reviewedAtPrompt,omitempty"`
-	// QuietReviewedAtPrompt is the prompt count when den last reviewed the whole session after it went quiet.
-	QuietReviewedAtPrompt int `json:"quietReviewedAtPrompt,omitempty"`
+	// CheckedAtPrompt is the prompt count whose reply den's local check last looked at, so each reply is checked once.
+	CheckedAtPrompt int `json:"checkedAtPrompt,omitempty"`
+	// CheckedFileCount and CheckedPlan are how many files the session had edited and a hash of its approved plan at that check,
+	// so the next check sees what the reply added.
+	CheckedFileCount int    `json:"checkedFileCount,omitempty"`
+	CheckedPlan      string `json:"checkedPlan,omitempty"`
+	// GatedAtPrompt is the prompt count up to which the gate check read the replies; the ones after wait for the next check.
+	GatedAtPrompt int `json:"gatedAtPrompt,omitempty"`
+	// CardReviewDue is set once a check found something worth a card review, and cleared when the card review runs.
+	CardReviewDue bool `json:"cardReviewDue,omitempty"`
+	// CardReviewedAtPrompt is the prompt count when the card review last looked at the session.
+	CardReviewedAtPrompt int `json:"cardReviewedAtPrompt,omitempty"`
+	// Cards are the cards den proposed from this session and what became of them, newest last.
+	Cards []CardRecord `json:"cards,omitempty"`
 	// Progress is den's note on where the session stands, updated by every review rather than rewritten.
 	Progress Progress `json:"progress,omitzero"`
 	// WithoutContext is set for sessions started with N, so resuming them leaves the folder's context out too.
@@ -45,6 +57,16 @@ type Session struct {
 	// CreatedAt is when den started tracking the session, so an imported old session gets its days before the archive.
 	CreatedAt      time.Time `json:"createdAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
+}
+
+// CardRecord is a card den proposed from a session and what became of it, so later card reviews don't propose it again.
+type CardRecord struct {
+	SuggestionId string `json:"suggestionId"`
+	// Kind is what the card keeps: notes, folder, skill or rule.
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
+	// Outcome is waiting, accepted, rejected, withdrawn or replaced.
+	Outcome string `json:"outcome"`
 }
 
 // Progress is what a session is after, what it got done so far, and what comes next; Next is empty when nothing is left.

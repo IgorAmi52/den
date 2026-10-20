@@ -20,12 +20,18 @@ const (
 // keepRules tell the model what is worth keeping from a session. Sessions are archived a few days after their last use,
 // so only what den keeps outlives them. The bar is high: every suggestion costs the user's attention.
 const keepRules = "keep: whether this session produced something worth keeping after it ends. Sessions are archived a few days " +
-	"after their last use, and only what you keep survives. The bar is high: every suggestion interrupts the user. kind is one of:\n" +
-	"- none: the normal answer. Routine work, small fixes, a question answered, anything finished that nobody needs next week.\n" +
+	"after their last use, and only what you keep survives. Ask: would a future session make a worse decision or repeat meaningful work " +
+	"without this information, and is it missing from the context already available? Judge usefulness to a person or agent continuing " +
+	"the work, not whether the user will approve a card. Require concrete evidence of future use, not merely something that could " +
+	"conceivably be useful. The bar is high: every suggestion interrupts the user. kind is one of:\n" +
+	"- none: the normal answer. Routine work, small fixes, or questions answered without new information useful to future work. " +
+	"Finishing the work does not by itself make its findings or reasoning disposable.\n" +
 	"- notes: only for a session in a folder. It found or decided something whoever continues that folder's work needs: " +
 	"a finding with its cause, a decision the user made or confirmed, a problem left open. lines: at most 3 short factual lines, " +
-	"each clear on its own. Never implementation steps, file edits, or what the notes already say. Never a decision about how the " +
-	"code or a tool should behave that the session itself went on to build: once built, the code says it, and a note would only go stale.\n" +
+	"each clear on its own. Preserve useful rationale, tradeoffs, rejected alternatives and constraints even after a decision is " +
+	"implemented: code can show what was built without explaining why. Keep only reasoning supported by the session. " +
+	"Never implementation steps, file edit reports, restatements of implemented behavior without useful reasoning, or what the " +
+	"available context already says.\n" +
 	"- folder: it started one piece of work that will clearly go on in more sessions: a feature, an investigation, a plan. " +
 	"The work must be narrower than the repo itself and than the session's whole range: a long session that touched many parts of the repo " +
 	"is not a folder, and neither is a topic named after where the session happened to start. " +
@@ -47,7 +53,8 @@ const keepRules = "keep: whether this session produced something worth keeping a
 	"  - top: it's useful beyond that folder's work, or the session has no folder. A new top-level folder.\n" +
 	"For kind folder, place is inside; for notes and none, \"\".\n" +
 	"Never propose a folder or skill an existing folder already covers. Use only facts from the session; never invent. " +
-	"confidence: 0 to 1 that the user will say yes. reason: one sentence of at most 14 words the user reads first, " +
+	"confidence: 0 to 1 that the evidence supports retaining this information for future use and it adds to the available context. " +
+	"reason: one sentence of at most 14 words the user reads first, " +
 	"concise with a light, friendly touch but never cute, " +
 	"naming the concrete thing worth keeping, like \"Pagination breaks past 500 issues; the fix is still open.\" Never generic. " +
 	"evidence: for anything but none, 1-3 short quotes from the session that show it, each starting with its turn and speaker, " +

@@ -39,13 +39,15 @@ type Call struct {
 	// Files are the files the call could read, by name, so a replay gives the model the same ones.
 	Files map[string]string `json:"files,omitempty"`
 	// DenVersion is the commit den was built from, since the code builds most of the prompt.
-	DenVersion   string          `json:"denVersion,omitempty"`
-	Answer       json.RawMessage `json:"answer,omitempty"`
-	Error        string          `json:"error,omitempty"`
-	InputTokens  int             `json:"inputTokens"`
-	OutputTokens int             `json:"outputTokens"`
-	CostDollars  float64         `json:"costDollars"`
-	Milliseconds int64           `json:"milliseconds"`
+	DenVersion string          `json:"denVersion,omitempty"`
+	Answer     json.RawMessage `json:"answer,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	// SlimFailure is why a slim codex call failed before den made it again the usual way.
+	SlimFailure  string  `json:"slimFailure,omitempty"`
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	CostDollars  float64 `json:"costDollars"`
+	Milliseconds int64   `json:"milliseconds"`
 }
 
 // LogDecision appends to decisions.jsonl beside den.json.

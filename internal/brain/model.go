@@ -57,9 +57,16 @@ const progressReviewSystem = reviewIntroduction + "You look at one session and a
 	"at most 12 words, or \"\" when nothing is left. Like goal \"Stop coupons applying twice\", done \"Fixed the double apply; " +
 	"tests pass\", next \"Handle mixed-case coupon codes\"."
 
-// cardReviewSystem looks at all of a session once it went quiet, and decides whether any of it is worth a card.
-const cardReviewSystem = reviewIntroduction + "The session went quiet, and you look at all of it to answer two things. " +
-	"Most of the time nothing is worth keeping: return kind none and an empty rule.\n\n" + keepRules + "\n\n" + ruleRules
+// cardReviewSystem looks at a session once a check found something in its latest turns, and decides what's worth a card,
+// and which of its waiting cards no longer hold.
+const cardReviewSystem = reviewIntroduction + "A check found something in this session's latest turns that may be worth keeping, " +
+	"and you look at the session to answer three things. Most of the time nothing is worth keeping: return no keeps, nothing to withdraw " +
+	"and an empty rule.\n\n" +
+	"keeps: at most one of each kind, judged mostly by the turns marked new, against everything before them. Never propose again what " +
+	"CARDS FROM THIS SESSION shows, whatever became of it, unless the session changed it. A new card replaces the session's waiting card " +
+	"of its kind, so put in it whatever of that card still holds. Each keep:\n" + keepRules + "\n\n" +
+	"withdraw: the labels of waiting cards, like c1, that the session moved past: what they keep was undone, fixed, or turned out wrong. " +
+	"A waiting card that still holds stays out of both keeps and withdraw.\n\n" + ruleRules
 
 // denVoice is how den talks to the user, wherever it does: concise and clear first, with a light, upbeat personality.
 // It never applies to titles or context files, which are working material.
@@ -143,9 +150,14 @@ type ReviewInput struct {
 	Turns       []agent.Turn
 	FirstTurn   int
 	NewFromTurn int
-	// AllPrompts are every prompt of the session. Given, the review is the card review of a session that went quiet;
+	// CardReview makes the review the card review, which also reads AllPrompts, every prompt of the session, and its cards;
 	// otherwise it's the progress review of its latest turns.
-	AllPrompts      []string
+	CardReview bool
+	AllPrompts []string
+	// WaitingCards are the session's cards still waiting for the user, under the labels the answer withdraws them by.
+	WaitingCards []LabeledCard
+	// PastCards are the session's earlier cards and what became of them.
+	PastCards       []store.CardRecord
 	Repository      *store.Repository
 	FolderNotes     string
 	RepositoryNotes string
@@ -155,10 +167,19 @@ type ReviewInput struct {
 	Lessons string
 }
 
+// LabeledCard is a waiting card as the card review sees it.
+type LabeledCard struct {
+	Label   string
+	Kind    string
+	Summary string
+	Content string
+}
+
 type ReviewAnswer struct {
 	Title    string         `json:"title"`
 	Progress store.Progress `json:"progress"`
-	Keep     Keep           `json:"keep"`
+	Keeps    []Keep         `json:"keeps"`
+	Withdraw []string       `json:"withdraw"`
 	Rule     Rule           `json:"rule"`
 }
 
@@ -176,7 +197,7 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	writeField(&prompt, "goal so far", input.Session.Progress.Goal)
 	writeField(&prompt, "done so far", input.Session.Progress.Done)
 	writeField(&prompt, "next so far", input.Session.Progress.Next)
-	isCardReview := len(input.AllPrompts) > 0
+	isCardReview := input.CardReview
 	if isCardReview {
 		prompt.WriteString("\nEVERY PROMPT THE USER TYPED\n")
 		for index, userPrompt := range input.AllPrompts[max(len(input.AllPrompts)-maximumWholeSessionPrompts, 0):] {
@@ -192,6 +213,19 @@ func ReviewRequest(input ReviewInput) helper.Request {
 			Prompt: prompt.String(),
 			Schema: objectSchema(map[string]any{"title": stringSchema(), "progress": objectSchema(map[string]any{"goal": stringSchema(), "done": stringSchema(), "next": stringSchema()})}),
 			Tier:   helper.Light,
+		}
+	}
+	prompt.WriteString("\nCARDS FROM THIS SESSION\n")
+	if len(input.WaitingCards) == 0 && len(input.PastCards) == 0 {
+		prompt.WriteString("(none)\n")
+	}
+	for _, card := range input.WaitingCards {
+		fmt.Fprintf(&prompt, "- %s, waiting: %s · %s\n", card.Label, card.Kind, card.Summary)
+		writeField(&prompt, "proposed content", card.Content)
+	}
+	for _, card := range input.PastCards {
+		if card.Outcome != "waiting" {
+			fmt.Fprintf(&prompt, "- %s: %s · %s\n", card.Outcome, card.Kind, card.Summary)
 		}
 	}
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
@@ -210,7 +244,7 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	return helper.Request{
 		System: cardReviewSystem,
 		Prompt: prompt.String(),
-		Schema: objectSchema(map[string]any{"keep": keepSchema(), "rule": ruleSchema()}),
+		Schema: objectSchema(map[string]any{"keeps": arraySchema(keepSchema()), "withdraw": arraySchema(stringSchema()), "rule": ruleSchema()}),
 		Tier:   helper.Reasoning,
 	}
 }

@@ -207,6 +207,8 @@ type model struct {
 	// helperUsage and helperCalls add up what this run's model calls cost.
 	helperUsage helper.Usage
 	helperCalls int
+	// cardReviewTimes are when this run's card reviews were queued, for the hourly cap.
+	cardReviewTimes []time.Time
 }
 
 func Run() error {
@@ -738,7 +740,7 @@ func (currentModel *model) applyObservation(observed observedMessage) {
 			session.LastActivityAt, changed = digest.LastActivityAt, true
 		}
 		if currentModel.helperCaller != nil {
-			changed = currentModel.queueReviewIfDue(session, digest) || changed
+			changed = currentModel.queueReviewsIfDue(session, digest) || changed
 		} else if title, due := brain.Retitle(*session, digest); due {
 			session.TitledAtPrompt, changed = digest.PromptCount, true
 			if title != "" {

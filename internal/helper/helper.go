@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -44,6 +45,17 @@ type codexModel struct {
 	outputPrice     float64
 }
 
+// slimCodexArguments switch off what codex adds to a call that reads no files: its tools, plugins, hooks, and the instructions
+// that go with them. Together with den's instructions in place of codex's own, a call drops from about 13k tokens of codex's
+// to about 6k, which codex has no switch for.
+var slimCodexArguments = []string{
+	"--disable", "plugins", "--disable", "hooks", "--disable", "shell_tool", "--disable", "unified_exec", "--disable", "apps",
+	"--disable", "browser_use", "--disable", "computer_use", "--disable", "multi_agent", "--disable", "image_generation",
+	"--disable", "goals", "--disable", "view_image", "--disable", "sleep_tool",
+	"-c", "include_permissions_instructions=false", "-c", "include_apps_instructions=false",
+	"-c", "include_collaboration_mode_instructions=false", "-c", "include_environment_context=false",
+}
+
 var codexModels = map[Tier]codexModel{
 	Light:     {name: "gpt-6-luna", reasoningEffort: "none", inputPrice: 0.10, cachedPrice: 0.01, cacheWritePrice: 0.125, outputPrice: 0.50},
 	Reasoning: {name: "gpt-6.1-sol", reasoningEffort: "low", inputPrice: 2, cachedPrice: 0.20, cacheWritePrice: 2.50, outputPrice: 10},
@@ -69,7 +81,9 @@ type Request struct {
 
 // Usage is what a call cost and which model made it.
 type Usage struct {
-	Model        string
+	Model string
+	// SlimFailure is why a slim codex call failed before den made it again the usual way, or "".
+	SlimFailure  string
 	InputTokens  int
 	OutputTokens int
 	CostDollars  float64
@@ -172,27 +186,52 @@ func callClaude(deadline context.Context, callDirectory string, request Request)
 	return result.StructuredOutput, usage, nil
 }
 
+// callCodex runs a call through codex. One that reads no files runs slim, with den's instructions in place of codex's;
+// if that fails, say because a newer codex renamed a switch, it runs once more the usual way.
 func callCodex(deadline context.Context, callDirectory string, request Request) ([]byte, Usage, error) {
 	model := codexModels[request.Tier]
-	usage := Usage{Model: model.name}
 	schema, err := json.Marshal(request.Schema)
 	if err != nil {
-		return nil, usage, err
+		return nil, Usage{Model: model.name}, err
 	}
-	schemaPath, answerPath := filepath.Join(callDirectory, "schema.json"), filepath.Join(callDirectory, "answer.json")
+	schemaPath := filepath.Join(callDirectory, "schema.json")
 	if err := os.WriteFile(schemaPath, schema, 0o644); err != nil {
-		return nil, usage, err
+		return nil, Usage{Model: model.name}, err
 	}
-	command := exec.CommandContext(deadline, "codex", "exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
-		"-m", model.name, "-c", "model_reasoning_effort="+model.reasoningEffort, "--json",
-		"-C", callDirectory, "--output-schema", schemaPath, "-o", answerPath, "-")
+	slimFailure := ""
+	if request.ReadsRepository == "" {
+		instructionsPath := filepath.Join(callDirectory, "instructions.md")
+		if err := os.WriteFile(instructionsPath, []byte(request.System), 0o644); err != nil {
+			return nil, Usage{Model: model.name}, err
+		}
+		arguments := append(slices.Clone(slimCodexArguments), "-c", fmt.Sprintf("model_instructions_file=%q", instructionsPath))
+		answer, usage, err := runCodex(deadline, callDirectory, model, schemaPath, arguments, request.Prompt)
+		if err == nil || deadline.Err() != nil {
+			return answer, usage, err
+		}
+		slimFailure = err.Error()
+	}
+	answer, usage, err := runCodex(deadline, callDirectory, model, schemaPath, nil, request.System+"\n\n"+request.Prompt)
+	usage.SlimFailure = slimFailure
+	return answer, usage, err
+}
+
+// runCodex makes one codex exec call with the given extra arguments and stdin, and reads its answer and usage.
+func runCodex(deadline context.Context, callDirectory string, model codexModel, schemaPath string, extraArguments []string, input string) ([]byte, Usage, error) {
+	answerPath := filepath.Join(callDirectory, "answer.json")
+	os.Remove(answerPath)
+	arguments := []string{"exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check",
+		"-m", model.name, "-c", "model_reasoning_effort=" + model.reasoningEffort, "--json",
+		"-C", callDirectory, "--output-schema", schemaPath, "-o", answerPath}
+	arguments = append(append(arguments, extraArguments...), "-")
+	command := exec.CommandContext(deadline, "codex", arguments...)
 	command.Dir = callDirectory
-	command.Stdin = strings.NewReader(request.System + "\n\n" + request.Prompt)
+	command.Stdin = strings.NewReader(input)
 	events, err := runCommand(command)
 	if err != nil {
-		return nil, usage, err
+		return nil, Usage{Model: model.name}, err
 	}
-	usage = codexUsage(events, model)
+	usage := codexUsage(events, model)
 	answer, err := os.ReadFile(answerPath)
 	if err != nil {
 		return nil, usage, errors.New("codex wrote no answer")
