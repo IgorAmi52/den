@@ -50,6 +50,8 @@ const (
 	paneReasonOption = "@den-reason"
 	// paneSeenOption marks a waiting agent the user has focused since it started waiting.
 	paneSeenOption = "@den-seen"
+	// panelSuggestionsOption counts the suggestions waiting in the dock, so the panel's title can show them.
+	panelSuggestionsOption = "@den-suggestions"
 )
 
 const (
@@ -58,6 +60,9 @@ const (
 	inactiveDarkening  = 0.3
 	inactiveLightening = 0.06
 )
+
+// panelSuggestionsTag is the panel title's badge while suggestions wait, in the dock badge's colors.
+const panelSuggestionsTag = "#{?#{" + panelSuggestionsOption + "},#[fg=colour234 bg=colour183 bold] ✦ #{" + panelSuggestionsOption + "} for you #[default],}"
 
 // paneLabel reads "claude · ◆ Eval · session title"; before the agent is known, it shows the running command.
 const paneLabel = "#{?#{@den-tool},#{@den-tool}#{?#{@den-folder}, · #{?#{==:#{@den-context},notes},◆ ,}#{@den-folder},}#{?#{@den-title}, · #{=50:@den-title},},#{pane_current_command}}"
@@ -73,7 +78,7 @@ var windowOptions = map[string]string{
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
-	"pane-border-format": tmux.AsPaneTitle("#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌥0 back #[default], den #[fg=colour240]⌥0 #[default]},#{?#{==:#{@den-status},waiting}," +
+	"pane-border-format": tmux.AsPaneTitle("#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌥0 back #[default], den #[fg=colour240]⌥0 #[default]}" + panelSuggestionsTag + ",#{?#{==:#{@den-status},waiting}," +
 		"#[fg=colour234 bg=colour214 bold] ! ⌥#{@den-number} needs you #[fg=colour214 bg=default nobold]#{?#{@den-reason}, #{@den-reason} ·,} " + paneLabel + " #[default]," +
 		"#{?pane_active,#[bg=colour75 fg=colour231 bold] ⌥#{@den-number} " + paneLabel + " #[default], ⌥#{@den-number} " + paneLabel + " }}}"),
 	windowMarkerOption: "1",
@@ -191,6 +196,8 @@ type model struct {
 	// retitles animates the sessions den just renamed, by session id.
 	retitles  map[string]retitleAnimation
 	animating bool
+	// shownSuggestionCount is the count the panel's title shows, -1 before the first, so tmux is only told when it changes.
+	shownSuggestionCount int
 
 	// helperCaller makes den's model calls, or is nil when no agent CLI can, and den uses its local rules only.
 	helperCaller   *helper.Caller
@@ -283,6 +290,7 @@ func Run() error {
 		chat:             newChatState(),
 		contextPane:      newContextPaneState(),
 	}
+	initialModel.shownSuggestionCount = -1
 	if err := initialModel.refreshAgents(); err != nil {
 		return err
 	}
@@ -334,6 +342,7 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			currentModel.reportError(currentModel.trackNewSessions())
 		})
 		currentModel.refreshContextTokens()
+		currentModel.showSuggestionCount()
 		commands := []tea.Cmd{tick(), currentModel.startNextJob()}
 		if time.Since(currentModel.lastObserved) > observeEvery {
 			currentModel.lastObserved = time.Now()
@@ -864,4 +873,18 @@ func inactivePaneStyle(background color.Color, isDark bool) string {
 
 func (currentModel model) repositoryName() string {
 	return filepath.Base(currentModel.repository.RepositoryPath)
+}
+
+// showSuggestionCount puts the number of waiting suggestions in the panel's title, or takes it away when none wait.
+func (currentModel *model) showSuggestionCount() {
+	count := len(currentModel.dockItems())
+	if count == currentModel.shownSuggestionCount {
+		return
+	}
+	currentModel.shownSuggestionCount = count
+	if count == 0 {
+		currentModel.reportError(tmux.UnsetPaneOption(currentModel.panelPaneId, panelSuggestionsOption))
+		return
+	}
+	currentModel.reportError(tmux.SetPaneOption(currentModel.panelPaneId, panelSuggestionsOption, strconv.Itoa(count)))
 }
