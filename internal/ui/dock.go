@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -36,7 +36,7 @@ type dockItem struct {
 type dockState struct {
 	focused bool
 	index   int
-	input   textinput.Model
+	input   textarea.Model
 	// asked is what the user told den about item; reply is den's answer, with the changes it would make.
 	asked    string
 	reply    *brain.ChatMessage
@@ -50,11 +50,7 @@ type dockState struct {
 }
 
 func newDockState() dockState {
-	input := textinput.New()
-	input.Prompt = "› "
-	input.Placeholder = "↵ yes  ⌫ no  or tell den…"
-	input.CharLimit = 500
-	return dockState{input: input}
+	return dockState{input: newMessageInput("↵ yes  ⌫ no  or tell den…", 500)}
 }
 
 // dockItems lists every decision waiting, in the order of the tree, so walking them walks down the tree.
@@ -379,11 +375,11 @@ func (currentModel model) dockLines(width int) []string {
 		}
 	}
 	input := state.input
-	input.SetWidth(width - 3)
+	input.SetWidth(width)
 	if state.reply != nil || state.thinking {
 		input.Placeholder = "or tell den more…"
 	}
-	footer = append(footer, input.View())
+	footer = append(footer, strings.Split(input.View(), "\n")...)
 	bodyHeight := max(currentModel.height-currentModel.treeTop()-currentModel.footerHeight()-minimumTreeLinesBesideDock-len(header)-len(footer), 3)
 	if len(body) > bodyHeight {
 		offset := min(state.bodyOffset, len(body)-bodyHeight+1)

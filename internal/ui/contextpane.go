@@ -8,7 +8,6 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/IgorAmi52/den/internal/brain"
@@ -29,7 +28,7 @@ type contextPaneState struct {
 	open     bool
 	folderId string
 	mode     contextPaneMode
-	prompt   textinput.Model
+	prompt   textarea.Model
 	editor   textarea.Model
 	// asked is what the user told den; reply is den's answer, with the change waiting for enter.
 	asked    string
@@ -41,10 +40,7 @@ type contextPaneState struct {
 }
 
 func newContextPaneState() contextPaneState {
-	prompt := textinput.New()
-	prompt.Prompt = "› "
-	prompt.Placeholder = "ask den to change it…"
-	prompt.CharLimit = 1000
+	prompt := newMessageInput("ask den to change it…", 1000)
 	editor := textarea.New()
 	editor.ShowLineNumbers = false
 	editor.Prompt = ""
@@ -230,8 +226,8 @@ func (currentModel model) contextPaneLines(width int, height int) []string {
 			bottom = append(bottom, wrapAll([]string{theme.denLabel.Render("den ") + theme.text.Render(pane.reply.Text)}, innerWidth)...)
 		}
 		input := pane.prompt
-		input.SetWidth(innerWidth - 3)
-		bottom = append(bottom, input.View())
+		input.SetWidth(innerWidth)
+		bottom = append(bottom, strings.Split(input.View(), "\n")...)
 		hints := []key.Binding{hint("↵", "send"), hint("↑", "back"), hint("pgup/pgdn", "scroll")}
 		if pane.reply != nil && len(pane.reply.Actions) > 0 {
 			hints = []key.Binding{hint("↵", "confirm"), hint("⌫", "discard"), hint("type", "to change it")}

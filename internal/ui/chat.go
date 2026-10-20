@@ -8,8 +8,9 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/brain"
@@ -19,11 +20,14 @@ import (
 
 const chatLabelWidth = 6
 
+// maximumMessageLines is how tall a message typed to den grows before it scrolls.
+const maximumMessageLines = 5
+
 // chatState is a conversation with den itself: to ask about the sessions, or to say what to change in a suggestion.
 // den answers and proposes; it never acts on the repo.
 type chatState struct {
 	messages []brain.ChatMessage
-	input    textinput.Model
+	input    textarea.Model
 	// about is the suggestion the chat was opened on, pinned above the conversation.
 	about *store.Suggestion
 	// scrollOffset is how many lines the conversation is scrolled up from the newest message.
@@ -35,15 +39,38 @@ type chatState struct {
 }
 
 func newChatState() chatState {
-	input := textinput.New()
-	input.Prompt = "› "
-	input.Placeholder = "where did I leave off? or tell den what to change"
-	input.CharLimit = 2000
-	return chatState{input: input}
+	return chatState{input: newMessageInput("where did I leave off? or tell den what to change", 2000)}
+}
+
+// newMessageInput is where the user types to den: a long message wraps onto more lines, growing up to
+// maximumMessageLines, and enter sends it instead of starting a new line.
+func newMessageInput(placeholder string, characterLimit int) textarea.Model {
+	input := textarea.New()
+	input.Placeholder = placeholder
+	input.CharLimit = characterLimit
+	input.ShowLineNumbers = false
+	input.DynamicHeight = true
+	input.MaxHeight = maximumMessageLines
+	input.KeyMap.InsertNewline.SetEnabled(false)
+	input.SetPromptFunc(2, func(prompt textarea.PromptInfo) string {
+		if prompt.LineNumber == 0 {
+			return "› "
+		}
+		return ""
+	})
+	styles := input.Styles()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	input.SetStyles(styles)
+	return input
 }
 
 func (state *chatState) resize(width int) {
-	state.input.SetWidth(max(width-6, 10))
+	state.input.SetWidth(chatContentWidth(width))
+}
+
+// chatContentWidth is the centered column the conversation and the input share.
+func chatContentWidth(width int) int {
+	return min(width-4, 100)
 }
 
 func (state *chatState) addMessage(message brain.ChatMessage) {
@@ -358,7 +385,7 @@ func (currentModel model) chatView() string {
 	theme := currentModel.theme
 	width := currentModel.width
 	state := currentModel.chat
-	contentWidth := min(width-4, 100)
+	contentWidth := chatContentWidth(width)
 	margin := strings.Repeat(" ", max((width-contentWidth)/2, 2))
 	top := []string{currentModel.screenTopBar("ask den", width), theme.border.Render(strings.Repeat("─", width))}
 	var pinned []string
@@ -375,7 +402,10 @@ func (currentModel model) chatView() string {
 			top = append(top, margin+line)
 		}
 	}
-	bottom := []string{theme.border.Render(strings.Repeat("─", width)), margin + state.input.View()}
+	bottom := []string{theme.border.Render(strings.Repeat("─", width))}
+	for _, line := range strings.Split(state.input.View(), "\n") {
+		bottom = append(bottom, margin+line)
+	}
 	send := currentModel.keys.send
 	if len(state.pendingActions) > 0 && state.input.Value() == "" {
 		send = relabeled(send, "confirm the plan")
