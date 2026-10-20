@@ -73,9 +73,9 @@ var windowOptions = map[string]string{
 	"pane-active-border-style": "fg=colour75",
 	"pane-border-lines":        "heavy",
 	"pane-border-status":       "top",
-	"pane-border-format": "#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌥0 back #[default], den #[fg=colour240]⌥0 #[default]},#{?#{==:#{@den-status},waiting}," +
+	"pane-border-format": tmux.AsPaneTitle("#{?#{@den-panel},#{?pane_active,#[fg=colour75 bold] den #[fg=colour245 nobold]⌥0 back #[default], den #[fg=colour240]⌥0 #[default]},#{?#{==:#{@den-status},waiting}," +
 		"#[fg=colour234 bg=colour214 bold] ! ⌥#{@den-number} needs you #[fg=colour214 bg=default nobold]#{?#{@den-reason}, #{@den-reason} ·,} " + paneLabel + " #[default]," +
-		"#{?pane_active,#[bg=colour75 fg=colour231 bold] ⌥#{@den-number} " + paneLabel + " #[default], ⌥#{@den-number} " + paneLabel + " }}}",
+		"#{?pane_active,#[bg=colour75 fg=colour231 bold] ⌥#{@den-number} " + paneLabel + " #[default], ⌥#{@den-number} " + paneLabel + " }}}"),
 	windowMarkerOption: "1",
 }
 
@@ -224,15 +224,18 @@ func Run() error {
 		return err
 	}
 	relayoutCommand := fmt.Sprintf("run-shell -b \"'%s' layout %s >/dev/null 2>&1\"", executable, windowId)
+	layoutCommand := func(action string) string {
+		return fmt.Sprintf("run-shell -b \"'%s' layout '#{window_id}' %s >/dev/null 2>&1\"", executable, action)
+	}
 	for _, hook := range []string{"window-layout-changed", "window-resized"} {
 		if err := tmux.SetWindowHook(windowId, hook, relayoutCommand); err != nil {
 			return err
 		}
 	}
-	if err := tmux.BindTitleDragToSwapPanes(windowMarkerOption, PanelMarkerOption); err != nil {
+	if err := tmux.BindPaneDrags(windowMarkerOption, PanelMarkerOption, layout.ResizingOption, layoutCommand("record"), layoutCommand("reset")); err != nil {
 		return err
 	}
-	if err := tmux.BindDenKeys(windowMarkerOption, PanelMarkerOption); err != nil {
+	if err := tmux.BindDenKeys(windowMarkerOption, PanelMarkerOption, layoutCommand("reset")); err != nil {
 		return err
 	}
 	workingDirectory, err := os.Getwd()

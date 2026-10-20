@@ -36,8 +36,16 @@ func run(arguments []string) error {
 	}
 	// tmux runs "den layout" from its layout hooks, with nowhere to show an error but a message over the panel,
 	// so a failed layout, such as for a window that just closed, stays silent.
+	// "record" keeps the sizes a border drag just ended at, and "reset" goes back to the default sizes.
 	if len(arguments) > 1 && arguments[0] == "layout" {
-		layout.Apply(arguments[1], ui.PanelMarkerOption, ui.PanelWidth)
+		switch {
+		case len(arguments) > 2 && arguments[2] == "record":
+			layout.Record(arguments[1], ui.PanelMarkerOption, ui.PanelWidth)
+		case len(arguments) > 2 && arguments[2] == "reset":
+			layout.Reset(arguments[1], ui.PanelMarkerOption, ui.PanelWidth)
+		default:
+			layout.Apply(arguments[1], ui.PanelMarkerOption, ui.PanelWidth)
+		}
 		return nil
 	}
 	// Agents run "den hook status <state>" from their hooks; the pane they run in comes from tmux.

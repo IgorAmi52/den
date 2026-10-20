@@ -84,6 +84,7 @@ den
 | <kbd>⌥</kbd><kbd>1</kbd>–<kbd>4</kbd> | jump to an agent |
 | <kbd>⌥</kbd><kbd>0</kbd> | jump to den, and back |
 | <kbd>⌥</kbd><kbd>N</kbd> | new agent |
+| <kbd>⌥</kbd><kbd>=</kbd> | default pane sizes, also a double click on a border |
 
 | In den | |
 | --- | --- |

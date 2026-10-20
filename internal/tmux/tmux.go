@@ -94,6 +94,17 @@ func SetWindowOption(windowId string, option string, value string) error {
 	return err
 }
 
+// WindowOption reads an option of the window, empty when it is unset.
+func WindowOption(windowId string, option string) string {
+	output, _ := run("display-message", "-p", "-t", windowId, "#{"+option+"}")
+	return output
+}
+
+func UnsetWindowOption(windowId string, option string) error {
+	_, err := run("set-option", "-w", "-u", "-t", windowId, option)
+	return err
+}
+
 func SplitPane(targetPaneId string, sideBySide bool, workingDirectory string, command []string) (string, error) {
 	direction := "-v"
 	if sideBySide {
@@ -101,14 +112,6 @@ func SplitPane(targetPaneId string, sideBySide bool, workingDirectory string, co
 	}
 	arguments := append([]string{"split-window", direction, "-t", targetPaneId, "-c", workingDirectory, "-P", "-F", "#{pane_id}"}, command...)
 	return run(arguments...)
-}
-
-func WindowPanesWithOption(windowId string, option string) ([]string, error) {
-	output, err := run("list-panes", "-t", windowId, "-f", "#{"+option+"}", "-F", "#{pane_id}")
-	if err != nil || output == "" {
-		return nil, err
-	}
-	return strings.Split(output, "\n"), nil
 }
 
 func WindowSize(windowId string) (width int, height int, err error) {
@@ -130,24 +133,35 @@ func SetWindowHook(windowId string, hook string, command string) error {
 	return err
 }
 
-// BindTitleDragToSwapPanes makes dragging a pane's title bar onto another pane swap the two,
-// and stops border drags from resizing panes. It only acts in windows carrying windowMarkerOption,
-// and panes carrying fixedPaneOption never move.
-func BindTitleDragToSwapPanes(windowMarkerOption string, fixedPaneOption string) error {
+// AsPaneTitle marks a pane-border-format as the pane's title, so mouse events on its text reach
+// the Control0 bindings below and not the Border ones. tmux ignores a range that is never closed.
+func AsPaneTitle(format string) string {
+	return "#[range=control|0]" + format + "#[norange]"
+}
+
+// BindPaneDrags makes dragging a pane's title onto another pane swap the two, and dragging a border resize the panes.
+// In windows carrying windowMarkerOption, a border drag sets resizingOption until it ends, then runs recordCommand,
+// and a double click on a border runs resetCommand. Panes carrying fixedPaneOption never move.
+func BindPaneDrags(windowMarkerOption string, fixedPaneOption string, resizingOption string, recordCommand string, resetCommand string) error {
 	insideMarkedWindow := "#{" + windowMarkerOption + "}"
 	movablePane := "#{&&:" + insideMarkedWindow + ",#{!:#{" + fixedPaneOption + "}}}"
 	swapOntoTarget := []string{
+		"if-shell", "-F", "#{" + resizingOption + "}", recordCommand, `\;`,
 		"if-shell", "-F", "-t", "=", "#{&&:#{pane_marked_set}," + movablePane + "}",
 		"swap-pane -s '{marked}' -t = ; select-pane -M",
 		// Not a title drag: pass the release on, so apps with their own mouse handling (like the panel) see the drop.
 		"if-shell -F '" + insideMarkedWindow + "' 'select-pane -M' ; send-keys -M -t =",
 	}
 	bindings := map[string][]string{
-		"MouseDown1Border":    {"if-shell", "-F", "-t", "=", movablePane, "select-pane -t = ; select-pane -M ; select-pane -m -t =", "select-pane -t ="},
-		"MouseDrag1Border":    {"if-shell", "-F", insideMarkedWindow, "", "resize-pane -M"},
-		"MouseUp1Border":      {"if-shell", "-F", insideMarkedWindow, "select-pane -M"},
-		"MouseDragEnd1Border": swapOntoTarget,
-		"MouseDragEnd1Pane":   swapOntoTarget,
+		"MouseDown1Control0":    {"if-shell", "-F", "-t", "=", movablePane, "select-pane -t = ; select-pane -M ; select-pane -m -t =", "select-pane -t ="},
+		"MouseUp1Control0":      {"if-shell", "-F", insideMarkedWindow, "select-pane -M"},
+		"MouseDragEnd1Control0": swapOntoTarget,
+		"MouseDown1Border":      {"select-pane", "-t", "="},
+		"MouseDrag1Border":      {"if-shell", "-F", insideMarkedWindow, "set-option -w " + resizingOption + " 1 ; resize-pane -M", "resize-pane -M"},
+		"MouseUp1Border":        {"if-shell", "-F", insideMarkedWindow, "select-pane -M"},
+		"DoubleClick1Border":    {"if-shell", "-F", insideMarkedWindow, resetCommand},
+		"MouseDragEnd1Border":   swapOntoTarget,
+		"MouseDragEnd1Pane":     swapOntoTarget,
 	}
 	for key, command := range bindings {
 		if _, err := run(append([]string{"bind-key", "-n", key}, command...)...); err != nil {
@@ -230,15 +244,17 @@ func DisplayPopup(title string, workingDirectory string, command []string) error
 
 // BindDenKeys binds Option keys, with no prefix, in den windows: ⌥1–⌥4 select that agent, the panel being the top-left
 // pane and the agents following it in pane order; ⌥0 selects the panel, or from the panel goes back to the last agent;
-// ⌥Tab moves to the next pane, wrapping from the last agent back to the panel; ⌥N asks the panel for a new agent.
+// ⌥Tab moves to the next pane, wrapping from the last agent back to the panel; ⌥N asks the panel for a new agent;
+// ⌥= runs resetCommand, which puts the panes back at their default sizes.
 // Outside den windows each key reaches the program as usual.
 // They replace Ctrl+Space, which an earlier den bound and macOS keeps for switching keyboard layouts.
-func BindDenKeys(windowMarkerOption string, panelMarkerOption string) error {
+func BindDenKeys(windowMarkerOption string, panelMarkerOption string, resetCommand string) error {
 	insideDenWindow := "#{" + windowMarkerOption + "}"
 	bindings := map[string]string{
 		"M-0":   "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\"",
 		"M-n":   "send-keys -t '{top-left}' M-n",
 		"M-Tab": "select-pane -t ':.+'",
+		"M-=":   resetCommand,
 	}
 	for agentNumber := 1; agentNumber <= 4; agentNumber++ {
 		number := strconv.Itoa(agentNumber)
