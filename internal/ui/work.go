@@ -206,8 +206,8 @@ func (currentModel *model) editContextFile(laptopTool string) tea.Cmd {
 	return currentModel.editLaptopFile(laptopTool)
 }
 
-// startNewSession opens an agent in the folder, asking which agent first when more than one is installed.
-// A handoff, when given, is added to the context the agent starts with.
+// startNewSession opens an agent in the folder, asking first whether it works here or in a new worktree,
+// then which agent when more than one is installed. A handoff, when given, is added to the context the agent starts with.
 func (currentModel *model) startNewSession(folderId string, withoutContext bool, handoff string) tea.Cmd {
 	if len(currentModel.openAgents) >= maximumAgents {
 		currentModel.setError(fmt.Sprintf("%d agents open, close one first", maximumAgents))
@@ -216,13 +216,22 @@ func (currentModel *model) startNewSession(folderId string, withoutContext bool,
 	currentModel.newSessionFolderId = folderId
 	currentModel.newSessionWithoutContext = withoutContext
 	currentModel.newSessionHandoff = handoff
-	if len(currentModel.installedAgents) == 1 {
-		currentModel.openAgent(currentModel.installedAgents[0])
-		return nil
-	}
 	currentModel.picking = true
+	currentModel.pickingPlace = true
 	currentModel.pickerCursor = 0
 	return nil
+}
+
+// pickerChoices are what the picker offers at its current step.
+func (currentModel model) pickerChoices() []string {
+	if currentModel.pickingPlace {
+		return []string{"here", "new worktree"}
+	}
+	var agentNames []string
+	for _, adapter := range currentModel.installedAgents {
+		agentNames = append(agentNames, adapter.Name())
+	}
+	return agentNames
 }
 
 func (currentModel model) updatePicker(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -231,12 +240,21 @@ func (currentModel model) updatePicker(keyPress tea.KeyPressMsg) (tea.Model, tea
 	case key.Matches(keyPress, keys.pickPrevious):
 		currentModel.pickerCursor = max(currentModel.pickerCursor-1, 0)
 	case key.Matches(keyPress, keys.pickNext):
-		currentModel.pickerCursor = min(currentModel.pickerCursor+1, len(currentModel.installedAgents)-1)
+		currentModel.pickerCursor = min(currentModel.pickerCursor+1, len(currentModel.pickerChoices())-1)
+	case key.Matches(keyPress, keys.open) && currentModel.pickingPlace:
+		currentModel.newSessionInWorktree = currentModel.pickerCursor == 1
+		currentModel.pickingPlace = false
+		currentModel.pickerCursor = 0
+		if len(currentModel.installedAgents) == 1 {
+			currentModel.picking = false
+			currentModel.openAgent(currentModel.installedAgents[0])
+		}
 	case key.Matches(keyPress, keys.open):
 		currentModel.picking = false
 		currentModel.openAgent(currentModel.installedAgents[currentModel.pickerCursor])
 	case key.Matches(keyPress, keys.back), key.Matches(keyPress, keys.quit):
 		currentModel.picking = false
+		currentModel.pickingPlace = false
 	}
 	return currentModel, nil
 }

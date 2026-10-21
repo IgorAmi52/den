@@ -474,12 +474,16 @@ func (currentModel model) confirmationLine(width int) string {
 }
 
 func (currentModel model) pickerLine(width int) string {
-	segments := []segment{{text: "start ", style: currentModel.theme.dim}}
-	for adapterIndex, adapter := range currentModel.installedAgents {
-		if adapterIndex == currentModel.pickerCursor {
-			segments = append(segments, segment{text: "▸" + adapter.Name() + " ", style: currentModel.theme.accentBold})
+	question := "start "
+	if currentModel.pickingPlace {
+		question = "start in "
+	}
+	segments := []segment{{text: question, style: currentModel.theme.dim}}
+	for choiceIndex, choice := range currentModel.pickerChoices() {
+		if choiceIndex == currentModel.pickerCursor {
+			segments = append(segments, segment{text: "▸" + choice + " ", style: currentModel.theme.accentBold})
 		} else {
-			segments = append(segments, segment{text: " " + adapter.Name() + " ", style: currentModel.theme.text})
+			segments = append(segments, segment{text: " " + choice + " ", style: currentModel.theme.text})
 		}
 	}
 	return currentModel.layoutRow(segments, nil, width, false)

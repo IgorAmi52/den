@@ -174,6 +174,16 @@ func (repository Repository) Directory() (string, error) {
 	return filepath.Dir(filePath), nil
 }
 
+// NewWorktree names a fresh worktree for this repo, a folder in den's own data outside the repo, and its branch.
+func (repository Repository) NewWorktree() (path string, branch string, err error) {
+	directory, err := repository.Directory()
+	if err != nil {
+		return "", "", err
+	}
+	worktreeId := newId()
+	return filepath.Join(directory, "worktrees", worktreeId), "den/" + worktreeId, nil
+}
+
 func (repository *Repository) FindSession(sessionId string) *Session {
 	for index := range repository.Sessions {
 		if repository.Sessions[index].SessionId == sessionId {

@@ -46,6 +46,8 @@ const (
 	// paneContextOption is "none" for a session started without context, "empty" when its folders have no notes yet,
 	// and "notes" when it started with notes.
 	paneContextOption = "@den-context"
+	// paneWorkingDirectoryOption is where the agent runs: the panel's checkout, or a worktree den made for it.
+	paneWorkingDirectoryOption = "@den-working-directory"
 	// paneReasonOption says why a waiting agent needs the user, set by its hook.
 	paneReasonOption = "@den-reason"
 	// paneSeenOption marks a waiting agent the user has focused since it started waiting.
@@ -102,10 +104,11 @@ type openAgent struct {
 	// reason says why a waiting agent needs the user.
 	reason string
 	// seen tells whether the user has focused a waiting agent since it started waiting.
-	seen       bool
-	context    string
-	number     int
-	launchedAt time.Time
+	seen             bool
+	context          string
+	number           int
+	launchedAt       time.Time
+	workingDirectory string
 }
 
 type tickMessage struct{}
@@ -171,7 +174,9 @@ type model struct {
 	// newSessionFolderId is the folder the next new session goes into, chosen when n was pressed.
 	newSessionFolderId       string
 	newSessionWithoutContext bool
+	newSessionInWorktree     bool
 	picking                  bool
+	pickingPlace             bool
 	pickerCursor             int
 	confirming               *confirmation
 	prompt                   *textPrompt
@@ -454,8 +459,17 @@ func (currentModel *model) openAgent(adapter agent.Adapter) {
 		launch.Context = strings.TrimSpace(launch.Context + "\n\n# Handoff from earlier work\n\n" + handoff)
 		contextState = "notes"
 	}
+	workingDirectory := currentModel.workingDirectory
+	if currentModel.newSessionInWorktree {
+		worktreePath, branch, err := currentModel.repository.NewWorktree()
+		if currentModel.reportError(err) || currentModel.reportError(git.AddWorktree(currentModel.workingDirectory, worktreePath, branch)) {
+			return
+		}
+		workingDirectory = worktreePath
+		currentModel.setStatus("started in a new worktree on " + branch)
+	}
 	command, sessionId := adapter.NewSessionCommand(launch)
-	paneId := currentModel.launchInPane(adapter.Name(), sessionId, "", folderId, contextState, currentModel.workingDirectory, command)
+	paneId := currentModel.launchInPane(adapter.Name(), sessionId, "", folderId, contextState, workingDirectory, command)
 	if contextState == "none" {
 		currentModel.setStatus("started without context")
 	}
@@ -527,13 +541,14 @@ func (currentModel *model) launchInPane(tool string, sessionId string, title str
 		return ""
 	}
 	paneOptions := map[string]string{
-		paneToolOption:       tool,
-		paneLaunchedAtOption: strconv.FormatInt(launchedAt.UnixMilli(), 10),
-		paneSessionOption:    sessionId,
-		paneTitleOption:      title,
-		paneFolderOption:     folderId,
-		paneFolderNameOption: currentModel.repository.FolderName(folderId),
-		paneContextOption:    contextState,
+		paneToolOption:             tool,
+		paneLaunchedAtOption:       strconv.FormatInt(launchedAt.UnixMilli(), 10),
+		paneSessionOption:          sessionId,
+		paneTitleOption:            title,
+		paneFolderOption:           folderId,
+		paneFolderNameOption:       currentModel.repository.FolderName(folderId),
+		paneContextOption:          contextState,
+		paneWorkingDirectoryOption: workingDirectory,
 	}
 	for option, value := range paneOptions {
 		if value != "" {
@@ -548,7 +563,7 @@ func (currentModel *model) launchInPane(tool string, sessionId string, title str
 // refreshAgents reads the agents from tmux in pane order, so numbering follows the screen after swaps.
 func (currentModel *model) refreshAgents() error {
 	windowPanes, err := tmux.ListPanes(currentModel.windowId, paneToolOption, paneSessionOption, paneLaunchedAtOption,
-		paneFolderOption, paneStatusOption, paneReasonOption, paneContextOption, paneNumberOption, paneSeenOption, "pane_active")
+		paneFolderOption, paneStatusOption, paneReasonOption, paneContextOption, paneNumberOption, paneSeenOption, paneWorkingDirectoryOption, "pane_active")
 	if err != nil {
 		return err
 	}
@@ -567,17 +582,22 @@ func (currentModel *model) refreshAgents() error {
 			return err
 		}
 		launchedAtMilliseconds, _ := strconv.ParseInt(pane.Options[paneLaunchedAtOption], 10, 64)
+		workingDirectory := pane.Options[paneWorkingDirectoryOption]
+		if workingDirectory == "" {
+			workingDirectory = currentModel.workingDirectory
+		}
 		currentModel.openAgents = append(currentModel.openAgents, openAgent{
-			paneId:     pane.Id,
-			tool:       pane.Options[paneToolOption],
-			sessionId:  pane.Options[paneSessionOption],
-			folderId:   pane.Options[paneFolderOption],
-			status:     pane.Options[paneStatusOption],
-			reason:     pane.Options[paneReasonOption],
-			seen:       pane.Options[paneSeenOption] != "",
-			context:    pane.Options[paneContextOption],
-			number:     number,
-			launchedAt: time.UnixMilli(launchedAtMilliseconds),
+			paneId:           pane.Id,
+			tool:             pane.Options[paneToolOption],
+			sessionId:        pane.Options[paneSessionOption],
+			folderId:         pane.Options[paneFolderOption],
+			status:           pane.Options[paneStatusOption],
+			reason:           pane.Options[paneReasonOption],
+			seen:             pane.Options[paneSeenOption] != "",
+			context:          pane.Options[paneContextOption],
+			number:           number,
+			launchedAt:       time.UnixMilli(launchedAtMilliseconds),
+			workingDirectory: workingDirectory,
 		})
 	}
 	return nil
@@ -604,7 +624,7 @@ func (currentModel *model) trackNewSessions() error {
 		if !known || (open.sessionId != "" && currentModel.repository.FindSession(open.sessionId) != nil) {
 			continue
 		}
-		foundSession, found, err := adapter.FindSession(open.sessionId, currentModel.workingDirectory, open.launchedAt)
+		foundSession, found, err := adapter.FindSession(open.sessionId, open.workingDirectory, open.launchedAt)
 		if err != nil {
 			return err
 		}
@@ -628,8 +648,8 @@ func (currentModel *model) trackNewSessions() error {
 			Tool:             open.tool,
 			SessionId:        foundSession.SessionId,
 			FolderId:         folderId,
-			WorkingDirectory: currentModel.workingDirectory,
-			Branch:           git.CurrentBranch(currentModel.workingDirectory),
+			WorkingDirectory: open.workingDirectory,
+			Branch:           git.CurrentBranch(open.workingDirectory),
 			Title:            title,
 			WithoutContext:   open.context == "none",
 			CreatedAt:        now,

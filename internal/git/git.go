@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -30,6 +31,16 @@ func Worktrees(directory string) []string {
 		}
 	}
 	return worktrees
+}
+
+// AddWorktree checks out a new branch from the current commit of directory into path, so an agent can work there
+// apart from the main checkout and its changes can be merged later.
+func AddWorktree(directory string, path string, branch string) error {
+	output, err := exec.Command("git", "-C", directory, "worktree", "add", "-b", branch, path).CombinedOutput()
+	if err != nil {
+		return errors.New(strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func CurrentBranch(directory string) string {
