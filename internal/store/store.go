@@ -41,7 +41,9 @@ type Session struct {
 	CheckedFileCount int    `json:"checkedFileCount,omitempty"`
 	CheckedPlan      string `json:"checkedPlan,omitempty"`
 	// GatedAtPrompt is the prompt count up to which the gate check read the replies; the ones after wait for the next check.
-	GatedAtPrompt int `json:"gatedAtPrompt,omitempty"`
+	GatedAtPrompt       int      `json:"gatedAtPrompt,omitempty"`
+	GateReviewReason    string   `json:"gateReviewReason,omitempty"`
+	GateCallIdentifiers []string `json:"gateCallIdentifiers,omitempty"`
 	// CardReviewDue is set once a check found something worth a card review, and cleared when the card review runs.
 	CardReviewDue bool `json:"cardReviewDue,omitempty"`
 	// CardReviewedAtPrompt is the prompt count when the card review last looked at the session.

@@ -27,12 +27,14 @@ type Decision struct {
 // Call is one model call den made, kept whole so den's judgment can be evaluated and the call replayed later,
 // on another model or another version of the prompt.
 type Call struct {
-	Id        string    `json:"id"`
-	At        time.Time `json:"at"`
-	Job       string    `json:"job"`
-	SessionId string    `json:"sessionId,omitempty"`
-	FolderId  string    `json:"folderId,omitempty"`
-	Model     string    `json:"model"`
+	GateCallIdentifiers []string  `json:"gateCallIdentifiers,omitempty"`
+	PromptCount         int       `json:"promptCount,omitempty"`
+	Id                  string    `json:"id"`
+	At                  time.Time `json:"at"`
+	Job                 string    `json:"job"`
+	SessionId           string    `json:"sessionId,omitempty"`
+	FolderId            string    `json:"folderId,omitempty"`
+	Model               string    `json:"model"`
 	// PromptVersion is a short hash of the system prompt, so each call ties to the version of the prompt that made it.
 	PromptVersion string `json:"promptVersion"`
 	Prompt        string `json:"prompt"`

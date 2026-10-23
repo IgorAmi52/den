@@ -1,12 +1,10 @@
 package brain
 
 import (
-	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 
-	"github.com/IgorAmi52/den/internal/helper"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
@@ -16,27 +14,11 @@ type ReplyVerdict int
 const (
 	// AskGate leaves it to the gate check.
 	AskGate ReplyVerdict = iota
-	// ReviewNow starts the card review right away, skipping the gate check.
 	ReviewNow
-	// SkipReply leaves the reply for the next gate check to read along with what follows it.
-	SkipReply
 )
-
-// maximumGateExchanges and gateReplyLength keep the gate check small: the latest exchanges, and the end of each reply,
-// where its conclusion is.
-const (
-	maximumGateExchanges = 6
-	gateReplyLength      = 1500
-)
-
-// goAheadWords make up prompts that only let the agent carry on, like "yes, go ahead" or "ok, commit and push".
-var goAheadWords = []string{"yes", "y", "yeah", "yep", "ok", "okay", "sure", "go", "on", "ahead", "continue", "proceed", "do", "it", "next",
-	"thanks", "thank", "you", "please", "and", "commit", "push"}
 
 // ReplyCheck is the exchange that just ended: the user's prompt, the end of the agent's reply, and what the agent did in between.
 type ReplyCheck struct {
-	Prompt          string
-	Reply           string
 	PlanApproved    bool
 	MarkdownWritten bool
 }
@@ -48,24 +30,8 @@ func CheckReply(check ReplyCheck) (verdict ReplyVerdict, rule string) {
 		return ReviewNow, "plan approved"
 	case check.MarkdownWritten:
 		return ReviewNow, "markdown written"
-	case isGoAhead(check.Prompt):
-		return SkipReply, "go-ahead"
-	case endsWithQuestion(check.Reply):
-		return SkipReply, "asks the user"
 	}
 	return AskGate, "for the gate check"
-}
-
-// isGoAhead tells whether a prompt is made of go-ahead words only.
-func isGoAhead(prompt string) bool {
-	promptWords := words(prompt)
-	return len(promptWords) > 0 && !slices.ContainsFunc(promptWords, func(word string) bool { return !slices.Contains(goAheadWords, word) })
-}
-
-// endsWithQuestion tells whether the last line of a reply asks something, ignoring markdown around it.
-func endsWithQuestion(reply string) bool {
-	lines := strings.Split(strings.TrimSpace(reply), "\n")
-	return strings.HasSuffix(strings.TrimRight(lines[len(lines)-1], " *_`\"')"), "?")
 }
 
 // Exchange is one prompt and the agent's reply to it, numbered from the start of the session.
@@ -91,7 +57,7 @@ type GateAnswer struct {
 	Reason      string `json:"reason"`
 }
 
-// gateSystem only decides whether the careful review should look, so it's cheap enough to run after every reply.
+// gateSystem is preserved for experiments/gate/label.py to replay the original Luna baseline.
 const gateSystem = reviewIntroduction + "After an agent replies, you decide whether the exchanges marked new are worth a closer look by den's " +
 	"card review, which may then propose keeping something. Ask: would a future session make a worse decision or repeat meaningful " +
 	"work without this information, and is it missing from the context already available? Look for concrete evidence of future use " +
@@ -108,37 +74,6 @@ const gateSystem = reviewIntroduction + "After an agent replies, you decide whet
 	"Answer no as well when a waiting card already covers it. " +
 	"worthReview: true only when one of these happened in the new exchanges. kind: the one it is, or none. " +
 	"reason: at most 12 words on what happened, or \"\"."
-
-// GateRequest asks whether the latest exchanges of a session are worth a card review.
-func GateRequest(input GateInput) helper.Request {
-	var prompt strings.Builder
-	prompt.WriteString("SESSION\n")
-	fmt.Fprintf(&prompt, "title: %s\nfolder: %s\n", input.Session.Title, input.FolderName)
-	writeField(&prompt, "goal", input.Session.Progress.Goal)
-	prompt.WriteString("\nWAITING CARDS\n")
-	if len(input.WaitingCards) == 0 {
-		prompt.WriteString("(none)\n")
-	}
-	for _, card := range input.WaitingCards {
-		prompt.WriteString("- " + card + "\n")
-	}
-	prompt.WriteString("\nNEW EXCHANGES\n")
-	for _, exchange := range input.Exchanges[max(len(input.Exchanges)-maximumGateExchanges, 0):] {
-		fmt.Fprintf(&prompt, "exchange %d\n", exchange.Number)
-		writeField(&prompt, "user", exchange.Prompt)
-		writeField(&prompt, "agent", endOfText(exchange.Reply, gateReplyLength))
-	}
-	return helper.Request{
-		System: gateSystem,
-		Prompt: prompt.String(),
-		Schema: objectSchema(map[string]any{
-			"worthReview": map[string]any{"type": "boolean"},
-			"kind":        enumSchema("none", "notes", "folder", "skill", "rule", "withdraw"),
-			"reason":      stringSchema(),
-		}),
-		Tier: helper.Light,
-	}
-}
 
 // endOfText keeps the end of a text, where a reply says what it concluded.
 func endOfText(text string, length int) string {

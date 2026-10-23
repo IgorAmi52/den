@@ -13,6 +13,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,7 +83,7 @@ func Export(outputDirectory string, now time.Time) (exportSummary Summary, expor
 	tarWriter := tar.NewWriter(gzipWriter)
 	packer := packer{tarWriter: tarWriter, root: archiveName}
 
-	if err := packer.addDirectory("data", dataDirectory, filepath.Join(dataDirectory, "tmp")); err != nil {
+	if err := packer.addDirectory("data", dataDirectory, filepath.Join(dataDirectory, "tmp"), filepath.Join(dataDirectory, "gate", "venv"), filepath.Join(dataDirectory, "gate", "model", "model")); err != nil {
 		return Summary{}, err
 	}
 	exported := manifest{ExportedAt: now, DenVersion: store.DenVersion(), User: userName,
@@ -188,13 +189,12 @@ func (packer packer) addBytes(archivePath string, content []byte, modifiedTime t
 	return err
 }
 
-// addDirectory adds every regular file under sourceDirectory, leaving out the skipped directory.
-func (packer packer) addDirectory(archivePath string, sourceDirectory string, skippedDirectory string) error {
+func (packer packer) addDirectory(archivePath string, sourceDirectory string, skippedDirectories ...string) error {
 	return filepath.WalkDir(sourceDirectory, func(filePath string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if entry.IsDir() && filePath == skippedDirectory {
+		if entry.IsDir() && slices.Contains(skippedDirectories, filePath) {
 			return filepath.SkipDir
 		}
 		if !entry.Type().IsRegular() {

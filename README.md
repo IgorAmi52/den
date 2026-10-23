@@ -142,7 +142,7 @@ A handoff covers where it stands, decisions, what's next and the files involved.
 
 <img src="docs/images/suggestion-card.png" alt="A FOLDER card with the context den drafted and the quotes it's based on." width="760">
 
-When a session has gone quiet for 10 minutes, den reads all of it once. Usually it says nothing. When something is worth keeping, a card waits at the bottom of den: <kbd>↵</kbd> yes · <kbd>⌫</kbd> no (it won't come back) · or type what to do instead.
+After a completed reply, a local classifier decides whether Sol should review it for useful context. Plans, markdown writes and pending cards always get a review; there is no hourly review cap. See the [classifier setup and behavior](docs/classifier-gate.md). When something is worth keeping, a card waits at the bottom of den: <kbd>↵</kbd> yes · <kbd>⌫</kbd> no (it won't come back) · or type what to do instead.
 
 | Card | Yes does |
 | --- | --- |

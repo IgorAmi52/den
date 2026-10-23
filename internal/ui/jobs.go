@@ -26,10 +26,6 @@ const (
 	quietAfter = 10 * time.Minute
 	// replySettledAfter is how long the transcript of an agent den can't read the status of stays unchanged before its reply counts as done.
 	replySettledAfter = time.Minute
-	// repliesBetweenCardReviews keeps a session's card reviews apart, unless the local check found a plan or a markdown file.
-	repliesBetweenCardReviews = 2
-	// maximumCardReviewsPerHour caps what the card review costs in a busy hour, for the whole repo.
-	maximumCardReviewsPerHour = 10
 	// minimumCardReviewTurns is how many turns a card review reads at least, so a single new one has what led to it.
 	minimumCardReviewTurns = 2
 	// maximumTitleLength drops titles that ignored the naming rules.
@@ -76,12 +72,13 @@ type jobDoneMessage struct {
 	// promptCount is how many prompts a review covered.
 	promptCount int
 	// cardLabels are the waiting cards a card review saw, by the label it withdraws them with, to their suggestion ids.
-	cardLabels map[string]string
-	answer     any
-	chatInput  brain.ChatInput
-	request    helper.Request
-	usage      helper.Usage
-	err        error
+	cardLabels          map[string]string
+	gateCallIdentifiers []string
+	answer              any
+	chatInput           brain.ChatInput
+	request             helper.Request
+	usage               helper.Usage
+	err                 error
 }
 
 // queueJob adds a job unless the same one is waiting or running. Chats go first, since someone is waiting for them.
@@ -145,7 +142,7 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 		}
 		switch next.kind {
 		case gateJob:
-			return currentModel.gateCommand(next, *session, turns, run)
+			return currentModel.gateCommand(next, *session, turns)
 		case cardReviewJob:
 			return currentModel.cardReviewCommand(next, *session, turns, run)
 		}
@@ -183,6 +180,13 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	currentModel.runningJob = nil
 	callId := currentModel.logCall(done)
 	done.chatInput.CallId = callId
+	if answer, classified := done.answer.(*brain.ClassifierAnswer); classified {
+		if answer.InferenceError != "" {
+			currentModel.setError("Local classifier unavailable; sending exchanges to the card reviewer: " + answer.InferenceError)
+		}
+		currentModel.applyGate(done, answer.GateAnswer, callId)
+		return currentModel.startNextJob()
+	}
 	if done.err != nil {
 		currentModel.helperFailures++
 		switch done.job.kind {
@@ -220,8 +224,6 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		currentModel.applyCompactedLessons(answer.Lessons)
 	case *brain.ReviewAnswer:
 		currentModel.keepingSelection(func() { currentModel.applyReview(done, *answer, callId) })
-	case *brain.GateAnswer:
-		currentModel.applyGate(done, *answer, callId)
 	case *brain.ChatAnswer:
 		if done.job.kind == reviseJob {
 			currentModel.applyReviseAnswer(done.job, *answer, done.chatInput)
@@ -285,7 +287,7 @@ func (currentModel *model) queueReviewsIfDue(session *store.Session, digest agen
 		currentModel.checkReply(session, digest)
 		changed = true
 	}
-	if !session.CardReviewDue && isQuiet && session.GatedAtPrompt < session.CheckedAtPrompt && currentModel.gateAllowed(*session) {
+	if !session.CardReviewDue && isQuiet && session.GatedAtPrompt < session.CheckedAtPrompt {
 		currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
 	}
 	currentModel.queueCardReviewIfDue(*session)
@@ -298,31 +300,19 @@ func checkedUpTo(session *store.Session, digest agent.Digest) {
 	session.CheckedFileCount, session.CheckedPlan = len(digest.TouchedFiles), planHash(digest.Plan)
 }
 
-// checkReply runs den's local check on a session's latest reply: a plan or a markdown file makes the card review due,
-// a go-ahead or a question back waits for the next check, and everything else goes to the gate check.
 func (currentModel *model) checkReply(session *store.Session, digest agent.Digest) {
 	editedFiles := digest.TouchedFiles[min(session.CheckedFileCount, len(digest.TouchedFiles)):]
 	verdict, rule := brain.CheckReply(brain.ReplyCheck{
-		Prompt:          digest.LastPrompt,
-		Reply:           digest.LastAgentMessage,
 		PlanApproved:    digest.Plan != "" && planHash(digest.Plan) != session.CheckedPlan,
 		MarkdownWritten: brain.WroteMarkdown(digest.WorkingDirectory, editedFiles),
 	})
 	session.CheckedAtPrompt, session.CheckedFileCount, session.CheckedPlan = digest.PromptCount, len(digest.TouchedFiles), planHash(digest.Plan)
-	outcome := "skip"
-	switch verdict {
-	case brain.ReviewNow:
-		session.CardReviewDue, outcome = true, "card review"
-	case brain.AskGate:
-		outcome = "gate check"
-		if !currentModel.gateAllowed(*session) {
-			outcome = "waits: card review limit"
-		} else {
-			currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
-		}
+	if verdict == brain.ReviewNow {
+		session.GateReviewReason = rule
 	}
+	currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
 	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "check", SessionId: session.SessionId, FolderId: session.FolderId,
-		Action: "reply", Detail: fmt.Sprintf("prompt %d · %s", digest.PromptCount, rule), Outcome: outcome}))
+		Action: "reply", Detail: fmt.Sprintf("prompt %d · %s", digest.PromptCount, rule), Outcome: "classifier"}))
 }
 
 // planHash is a short hash of an approved plan, or "" for none, so a check sees when a new one was approved.
@@ -333,28 +323,9 @@ func planHash(plan string) string {
 	return promptVersion(plan)
 }
 
-// gateAllowed tells whether a gate check may run for a session: only when a card review it starts could run. A session
-// with a waiting card review card skips the spacing, since its next reply may undo what the card keeps.
-func (currentModel *model) gateAllowed(session store.Session) bool {
-	spaced := session.CardReviewedAtPrompt == 0 || session.CheckedAtPrompt-session.CardReviewedAtPrompt >= repliesBetweenCardReviews || time.Since(session.LastActivityAt) > quietAfter
-	hasWaitingCard := slices.ContainsFunc(currentModel.repository.WaitingFor(session.SessionId), func(waiting store.Suggestion) bool { return waiting.KeepKind != "" })
-	return (spaced || hasWaitingCard) && currentModel.cardReviewsInLastHour() < maximumCardReviewsPerHour
-}
-
-func (currentModel *model) cardReviewsInLastHour() int {
-	hourAgo := time.Now().Add(-time.Hour)
-	currentModel.cardReviewTimes = slices.DeleteFunc(currentModel.cardReviewTimes, func(started time.Time) bool { return started.Before(hourAgo) })
-	return len(currentModel.cardReviewTimes)
-}
-
-// queueCardReviewIfDue starts the card review of a session a check flagged, unless the hour's card reviews are used up;
-// then it stays due until one is free.
 func (currentModel *model) queueCardReviewIfDue(session store.Session) {
-	if !session.CardReviewDue || currentModel.cardReviewsInLastHour() >= maximumCardReviewsPerHour {
-		return
-	}
-	if currentModel.queueJob(job{kind: cardReviewJob, sessionId: session.SessionId}) {
-		currentModel.cardReviewTimes = append(currentModel.cardReviewTimes, time.Now())
+	if session.CardReviewDue {
+		currentModel.queueJob(job{kind: cardReviewJob, sessionId: session.SessionId})
 	}
 }
 
@@ -376,7 +347,7 @@ func (currentModel *model) reviewInput(session store.Session, turns []agent.Turn
 }
 
 // gateCommand asks the gate check about the finished replies no gate check read yet.
-func (currentModel *model) gateCommand(next job, session store.Session, turns []agent.Turn, run func(helper.Request, any, jobDoneMessage) tea.Cmd) tea.Cmd {
+func (currentModel *model) gateCommand(next job, session store.Session, turns []agent.Turn) tea.Cmd {
 	digest := currentModel.digests[session.SessionId]
 	checkedPrompts := min(session.CheckedAtPrompt, len(turns))
 	var exchanges []brain.Exchange
@@ -395,13 +366,20 @@ func (currentModel *model) gateCommand(next job, session store.Session, turns []
 		waitingCards = append(waitingCards, store.CardSummary(waiting))
 	}
 	input := brain.GateInput{Session: session, FolderName: currentModel.repository.FolderName(session.FolderId), Exchanges: exchanges, WaitingCards: waitingCards}
-	return run(brain.GateRequest(input), &brain.GateAnswer{}, jobDoneMessage{job: next, promptCount: checkedPrompts})
+	request := brain.ClassifierRequest(input, turns[0].User, session.GateReviewReason)
+	return func() tea.Msg {
+		answer, usage := brain.Classify(request)
+		return jobDoneMessage{job: next, promptCount: checkedPrompts, request: request, answer: &answer, usage: usage}
+	}
 }
 
 // cardReviewCommand runs the card review: the turns since its last look, at least a couple and at most reviewTurns,
 // every prompt, and the session's cards, the waiting ones labeled so the answer can withdraw them.
 func (currentModel *model) cardReviewCommand(next job, session store.Session, turns []agent.Turn, run func(helper.Request, any, jobDoneMessage) tea.Cmd) tea.Cmd {
 	checkedPrompts := min(session.CheckedAtPrompt, len(turns))
+	if len(session.GateCallIdentifiers) > 0 {
+		checkedPrompts = min(checkedPrompts, session.GatedAtPrompt)
+	}
 	if checkedPrompts == 0 {
 		return nil
 	}
@@ -424,7 +402,7 @@ func (currentModel *model) cardReviewCommand(next job, session store.Session, tu
 		}
 		input.WaitingCards = append(input.WaitingCards, brain.LabeledCard{Label: label, Kind: kind, Summary: store.CardSummary(waiting), Content: waiting.ProposedText})
 	}
-	return run(brain.ReviewRequest(input), &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: checkedPrompts, cardLabels: cardLabels})
+	return run(brain.ReviewRequest(input), &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: checkedPrompts, cardLabels: cardLabels, gateCallIdentifiers: slices.Clone(session.GateCallIdentifiers)})
 }
 
 // applyGate notes what the gate check read, and starts the card review when it found something.
@@ -434,12 +412,19 @@ func (currentModel *model) applyGate(done jobDoneMessage, answer brain.GateAnswe
 		return
 	}
 	session.GatedAtPrompt = max(session.GatedAtPrompt, done.promptCount)
+	if done.promptCount >= session.CheckedAtPrompt {
+		session.GateReviewReason = ""
+	}
 	outcome := "no"
 	if answer.WorthReview {
 		session.CardReviewDue, outcome = true, "card review"
+		session.GateCallIdentifiers = append(session.GateCallIdentifiers, callId)
 	}
 	currentModel.logReviewDecision(session, callId, "gate "+answer.Kind, answer.Reason, outcome)
 	currentModel.queueCardReviewIfDue(*session)
+	if session.CheckedAtPrompt > done.promptCount {
+		currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
+	}
 	currentModel.saveRepository()
 }
 
@@ -453,7 +438,13 @@ func (currentModel *model) applyReview(done jobDoneMessage, answer brain.ReviewA
 	if done.job.kind == cardReviewJob {
 		session.CardReviewedAtPrompt = done.promptCount
 		session.GatedAtPrompt = max(session.GatedAtPrompt, done.promptCount)
-		session.CardReviewDue = session.CheckedAtPrompt > done.promptCount
+		session.CardReviewDue = false
+		session.GateCallIdentifiers = slices.DeleteFunc(session.GateCallIdentifiers, func(identifier string) bool {
+			return slices.Contains(done.gateCallIdentifiers, identifier)
+		})
+		if session.CheckedAtPrompt > done.promptCount {
+			currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
+		}
 		currentModel.withdrawCards(session, answer.Withdraw, done.cardLabels, callId)
 		currentModel.offerCards(session, answer, callId)
 	} else {
@@ -584,16 +575,18 @@ func (currentModel *model) logCall(done jobDoneMessage) string {
 		return ""
 	}
 	call := store.Call{
-		Job:           done.job.kind.String(),
-		SessionId:     done.job.sessionId,
-		Model:         done.usage.Model,
-		PromptVersion: promptVersion(done.request.System),
-		Prompt:        done.request.Prompt,
-		Files:         done.request.Files,
-		InputTokens:   done.usage.InputTokens,
-		OutputTokens:  done.usage.OutputTokens,
-		CostDollars:   done.usage.CostDollars,
-		Milliseconds:  done.usage.Duration.Milliseconds(),
+		Job:                 done.job.kind.String(),
+		GateCallIdentifiers: done.gateCallIdentifiers,
+		PromptCount:         done.promptCount,
+		SessionId:           done.job.sessionId,
+		Model:               done.usage.Model,
+		PromptVersion:       promptVersion(done.request.System),
+		Prompt:              done.request.Prompt,
+		Files:               done.request.Files,
+		InputTokens:         done.usage.InputTokens,
+		OutputTokens:        done.usage.OutputTokens,
+		CostDollars:         done.usage.CostDollars,
+		Milliseconds:        done.usage.Duration.Milliseconds(),
 	}
 	call.SlimFailure = done.usage.SlimFailure
 	if done.err != nil {

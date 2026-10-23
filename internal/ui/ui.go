@@ -212,8 +212,6 @@ type model struct {
 	// helperUsage and helperCalls add up what this run's model calls cost.
 	helperUsage helper.Usage
 	helperCalls int
-	// cardReviewTimes are when this run's card reviews were queued, for the hourly cap.
-	cardReviewTimes []time.Time
 }
 
 func Run() error {
