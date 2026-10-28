@@ -64,6 +64,10 @@
 
 ## 🚀 Quickstart
 
+Install [Homebrew](https://brew.sh) first if it is not already available.
+
+**Release status:** the formula currently installs `v0.2.0`. The local classifier and persistent card discussions described below are newer, unreleased changes. They become available through Homebrew after a new release updates the formula; `--HEAD` follows published `main`, so it does not include unpublished work.
+
 ```sh
 brew tap IgorAmi52/den https://github.com/IgorAmi52/den
 brew install den
@@ -72,9 +76,33 @@ cd your-repo
 den
 ```
 
-- **Needs:** macOS · [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or [Codex](https://github.com/openai/codex) · `codex` (or `claude`) logged in for den's own calls · tmux comes with brew
+- **Needs:** macOS, Git, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or [Codex](https://github.com/openai/codex) on your `PATH`. Homebrew installs tmux and the Go build dependency. If Git is missing, run `xcode-select --install`.
+- **Login:** open your installed agent CLI once and finish its login before starting DEN. DEN prefers Codex when both CLIs are installed; an installed but logged-out Codex does not automatically fall back to Claude. The current source uses `gpt-6-luna` and `gpt-6.1-sol`, so your Codex account must have access to them. Claude-only installations use Haiku and Sonnet.
 - **First run:** press <kbd>⌥</kbd><kbd>L</kbd> so den can check your Option key (it fixes Terminal.app and Ghostty for you) · tick which of your 10 newest past sessions to bring in
 - **Coming back:** run `den` in the repo again. Closing the terminal doesn't stop your agents.
+
+<details>
+<summary><b>Build from source, install the classifier, or upgrade</b></summary>
+<br>
+
+**Source build.** Requires Go 1.26 or newer, tmux, Git and a logged-in supported agent. Run these in a checkout containing the version you want:
+
+```sh
+brew install go tmux
+make install
+export PATH="$HOME/.local/bin:$PATH"
+command -v den
+```
+
+Add that `PATH` line to `~/.zshrc` to keep it in new terminals. Source installs use `~/.local/bin/den`; Homebrew installs use its own prefix. Check `command -v den` when switching between them. `make install` builds first, creates the destination directory, then safely replaces the binary; a failed build leaves the installed version intact. A custom destination is supported: `make install INSTALL_DIRECTORY="/your/bin"`.
+
+**Local classifier, in the current source.** This is a separate optional installation. Homebrew and a Git clone do not include the trained ModernBERT files. Without them, DEN logs the missing runtime and sends exchanges directly to its model reviewer. Suggestions still work, with more model calls and potentially higher cost; Python is not required in that mode. The classifier runtime has been verified on Apple silicon macOS. Its pinned Python stack is not supported on Intel Macs; direct reviews remain available there. To install it you need `uv`, the separately provided model artifacts and several gigabytes of free space. Follow [classifier installation](docs/classifier-gate.md#install-or-restore). There is no public model download yet.
+
+**Upgrades.** Use `brew update` and `brew upgrade den` for a released version, or rebuild your source checkout. Existing panels keep running their old binary; merely reattaching to tmux does not reload it. Restart DEN after your agents have finished: **`q` closes the entire DEN window, including its agent panes.** Saved context, cards and discussions remain in `~/.den`. Back up that directory before downgrading; older versions may discard state fields they do not understand.
+
+`DEN_HOME` changes where all DEN state and the classifier runtime live. Use the same value for installation and launch. Keep one DEN panel active per repository; panels across its worktrees share the same state and do not coordinate simultaneous writes.
+
+</details>
 
 ## ⌨️ Keys
 
@@ -91,7 +119,7 @@ den
 | <kbd>c</kbd> | **ask den** |
 | <kbd>n</kbd> / <kbd>N</kbd> | new session in the selected folder, with / without its context |
 | <kbd>↵</kbd> | resume a session · focus an agent |
-| <kbd>⇥</kbd> | den's suggestions: <kbd>↵</kbd> yes · <kbd>⌫</kbd> no · or type |
+| <kbd>⇥</kbd> | den's suggestions: <kbd>↵</kbd> accept · <kbd>⌫</kbd> reject with reason · or type |
 | <kbd>→</kbd> | a folder's context: <kbd>↓</kbd> ask den to change it · <kbd>↑</kbd> edit by hand |
 | <kbd>z</kbd> | wide view with a preview |
 | <kbd>f</kbd> <kbd>F</kbd> · <kbd>m</kbd> <kbd>r</kbd> <kbd>a</kbd> <kbd>d</kbd> | folder, subfolder · move, rename, archive, delete |
@@ -142,17 +170,21 @@ A handoff covers where it stands, decisions, what's next and the files involved.
 
 <img src="docs/images/suggestion-card.png" alt="A FOLDER card with the context den drafted and the quotes it's based on." width="760">
 
-After a completed reply, a local classifier decides whether Sol should review it for useful context. Plans, markdown writes and pending cards always get a review; there is no hourly review cap. See the [classifier setup and behavior](docs/classifier-gate.md). When something is worth keeping, a card waits at the bottom of den: <kbd>↵</kbd> yes · <kbd>⌫</kbd> no (it won't come back) · or type what to do instead.
+After a completed reply, a local classifier decides whether Sol should review it for useful context. Plans, markdown writes and pending cards always get a review; there is no hourly review cap. See the [classifier setup and behavior](docs/classifier-gate.md). When something is worth keeping, a card waits at the bottom of den: <kbd>↵</kbd> accept · <kbd>⌫</kbd> reject with a reason · or type a question or revision.
 
 | Card | Yes does |
 | --- | --- |
-| **NOTES** | adds a finding or decision to a folder's context |
+| **NOTES** | adds or corrects useful information in the relevant folder or repo context |
 | **FOLDER** | new folder for work that will go on, with drafted context; moves the session in |
 | **SKILL** | new folder for a way of working you'll want again |
 | **LINK** | uses a markdown file an agent wrote (like a plan) as a folder's context |
 | **RULE** | adds a rule you stated to your global `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` |
 
-At most 5 cards wait at once, one per session. Each no teaches den a lesson, kept in `~/.den/lessons.md`.
+Up to five cards are visible. Additional proposals stay in a saved backlog and receive a fresh Sol review before appearing. A session can produce several cards, including cards for other folders. Children inherit repo and parent context, so proposals add what is missing at the right scope.
+
+Cards show the proposed change, destination, future usefulness, source and expandable evidence. Questions, answers, drafts and scroll positions survive leaving the card and restarting DEN. New answers stay marked unread until <kbd>ctrl+j</kbd> opens the latest conversation. Use <kbd>ctrl+d</kbd> to change destination, <kbd>ctrl+r</kbd> to request a revision, <kbd>ctrl+e</kbd> for evidence and <kbd>pgup/pgdn</kbd> to scroll. Moving or revising a proposal still needs acceptance before anything is applied.
+
+Rejection requires a reason; an extra explanation is optional except for “Something else.” Feedback is recorded with the proposal and its model calls. A rejection applies to that information and destination, allowing later findings from the same session. Sol may also retain a general lesson in `~/.den/lessons.md`. See [card behavior and implementation](docs/card-review.md).
 
 </details>
 
@@ -180,10 +212,10 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 <summary><b>🔒 Trust, privacy & cost</b></summary>
 <br>
 
-- **Never edits your code or runs commands in your repo**, git included. Its model calls are one-shot text calls with no tools.
+- **DEN's model never edits your code or executes workflows.** Background reviews have no tools; chat can read repository files when asked. DEN itself uses Git and tmux to manage agent sessions and worktrees.
 - **Writes only with a yes:** a context file you linked, your global `CLAUDE.md`/`AGENTS.md` (RULE cards), your terminal's Option key (first run). Everything else lives in `~/.den`.
 - **Leaves your Claude and Codex settings alone.** Context and a status hook go on each agent's command line.
-- **Sends excerpts of your sessions** to the model behind `codex` (OpenAI) or `claude` (Anthropic), to name and summarize them. Nothing else leaves your Mac.
+- **Sends session excerpts and relevant context** to the model behind `codex` (OpenAI) or `claude` (Anthropic), for titles, reviews and chat. The local classifier runs offline; it does not replace those model calls. Local logs retain prompts, responses and feedback, which may include code.
 - **Cost:** about 0.2¢ per progress review, about 4¢ per card review, chat answer or context change. The whole demo above came to under 30¢.
 
 </details>
@@ -204,7 +236,7 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 <br>
 
 ```
-~/.den/repos/<repo>/den.json               folders, sessions, waiting suggestions
+~/.den/repos/<repo>/den.json               folders, sessions, cards, discussions, feedback
 ~/.den/repos/<repo>/folders/*/context.md   each folder's context (repo/ is the repo's)
 ~/.den/repos/<repo>/*.jsonl                every suggestion, answer and model call
 ~/.den/lessons.md                          what den learned from your noes
@@ -219,8 +251,10 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 <br>
 
 - **⌥ keys type characters** like `¬`. **Terminal.app:** Settings → Profiles → Keyboard → *Use Option as Meta key*. **iTerm2:** Settings → Profiles → Keys → *Left Option key: Esc+*. **Ghostty:** `macos-option-as-alt = true`, then reload with <kbd>⌘</kbd><kbd>⇧</kbd><kbd>,</kbd>.
-- **Sessions don't get named:** den needs `codex` (logged in) or `claude` on your `PATH`. After 3 failed calls in a row it pauses its model until the next start.
-- **Uninstall:** `brew uninstall den`, then delete `~/.den`. Your agents' history is untouched.
+- **Sessions don't get named or chat cannot answer:** check the selected agent's login, model access and network connection. Codex takes precedence when both CLIs are on `PATH`. After 3 consecutive failed calls DEN pauses its model until the panel restarts; queued cards remain saved.
+- **Local classifier unavailable:** missing runtime files allow direct model reviews. If you installed the runtime, check that `DEN_HOME` matches the installer and use [the classifier setup guide](docs/classifier-gate.md#install-or-restore). This message does not mean your sessions or context were lost.
+- **An upgrade seems to do nothing:** check `command -v den` for a source/Homebrew conflict, then restart the old panel after your agents finish.
+- **Uninstall:** `brew uninstall den`, or remove the source-installed `~/.local/bin/den`. Your notes and saved cards remain in `~/.den` (or `DEN_HOME`). Delete that directory only if you also want to permanently remove DEN's context, feedback and classifier runtime. Agent transcript storage is separate.
 
 </details>
 

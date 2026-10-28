@@ -45,8 +45,12 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 	}
 	var proposal []string
 	if suggestion := currentModel.proposalFor(row); suggestion != nil {
-		proposal = append([]string{theme.suggestionBold.Render("✦ " + currentModel.proposalTitle(*suggestion))}, currentModel.suggestionBody(*suggestion, width)...)
-		proposal = append(proposal, theme.key.Render("⇥")+theme.action.Render(" answer it below"), "", theme.border.Render(strings.Repeat("─", width)), "")
+		if suggestion.Deferred {
+			proposal = []string{theme.dim.Render("Proposal queued for revalidation"), ""}
+		} else {
+			proposal = append([]string{theme.suggestionBold.Render("✦ " + currentModel.proposalTitle(*suggestion))}, currentModel.suggestionBody(*suggestion, width)...)
+			proposal = append(proposal, theme.key.Render("⇥")+theme.action.Render(" answer it below"), "", theme.border.Render(strings.Repeat("─", width)), "")
+		}
 	}
 	switch row.kind {
 	case repositoryRow:

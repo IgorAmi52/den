@@ -13,59 +13,7 @@ const (
 	maximumEvidence         = 3
 	maximumKeepLines        = 3
 	maximumFolderNameLength = 30
-	// findingsSection is where kept findings go in a folder's notes.
-	findingsSection = "Findings"
 )
-
-// keepRules tell the model what is worth keeping from a session. Sessions are archived a few days after their last use,
-// so only what den keeps outlives them. The bar is high: every suggestion costs the user's attention.
-const keepRules = "keep: whether this session produced something worth keeping after it ends. Sessions are archived a few days " +
-	"after their last use, and only what you keep survives. Ask: would a future session make a worse decision or repeat meaningful work " +
-	"without this information, and is it missing from the context already available? Judge usefulness to a person or agent continuing " +
-	"the work, not whether the user will approve a card. Require concrete evidence of future use, not merely something that could " +
-	"conceivably be useful. The bar is high: every suggestion interrupts the user. kind is one of:\n" +
-	"- none: the normal answer. Routine work, small fixes, or questions answered without new information useful to future work. " +
-	"Finishing the work does not by itself make its findings or reasoning disposable.\n" +
-	"- notes: only for a session in a folder. It found or decided something whoever continues that folder's work needs: " +
-	"a finding with its cause, a decision the user made or confirmed, a problem left open. lines: at most 3 short factual lines, " +
-	"each clear on its own. Preserve useful rationale, tradeoffs, rejected alternatives and constraints even after a decision is " +
-	"implemented: code can show what was built without explaining why. Keep only reasoning supported by the session. " +
-	"Never implementation steps, file edit reports, restatements of implemented behavior without useful reasoning, or what the " +
-	"available context already says.\n" +
-	"- folder: it started one piece of work that will clearly go on in more sessions: a feature, an investigation, a plan. " +
-	"The work must be narrower than the repo itself and than the session's whole range: a long session that touched many parts of the repo " +
-	"is not a folder, and neither is a topic named after where the session happened to start. " +
-	"name: 1-3 words in title case naming the work. context: what a new session on this work needs that will still be true next week, " +
-	"markdown starting with \"# <name>\", only sections you have facts for (## Goal, ## Findings, ## Decisions, ## Pointers), " +
-	"under 150 words. Never progress reports, to-dos, what is or isn't implemented yet, or questions the user asked the agent. " +
-	"file: the path of a plan or spec markdown file the session wrote that should be the context instead, from the files edited, or \"\".\n" +
-	"- skill: the user set up a way of working they'll want again in other sessions, not a one-off instruction: " +
-	"a mode like research without code changes, a review checklist, which sources to search and how to report. " +
-	"The strongest sign is the user giving the same kind of setup instructions again, in this session or as an existing folder's sessions show. " +
-	"name: 1-3 words naming the mode, like Exploration or Paper search. context: the instructions an agent follows in this mode, " +
-	"markdown starting with \"# <name>\", under 120 words, only from what the user asked for. " +
-	"A skill file listed under SKILL FILES THIS SESSION WROTE is a skill the user had written on purpose: offer it as kind skill, " +
-	"with its path as file and context \"\", unless an existing folder already holds it. " +
-	"place: where the skill goes, by who should start with it.\n" +
-	"  - here: every session in the session's own folder should start with it, because that folder is this way of working, " +
-	"and the folder has no context yet. The skill becomes that folder's context.\n" +
-	"  - inside: it serves the work of the session's folder, but only some sessions there should start with it. A new folder under it.\n" +
-	"  - top: it's useful beyond that folder's work, or the session has no folder. A new top-level folder.\n" +
-	"For kind folder, place is inside; for notes and none, \"\".\n" +
-	"Never propose a folder or skill an existing folder already covers. Use only facts from the session; never invent. " +
-	"confidence: 0 to 1 that the evidence supports retaining this information for future use and it adds to the available context. " +
-	"reason: one sentence of at most 14 words the user reads first, " +
-	"concise with a light, friendly touch but never cute, " +
-	"naming the concrete thing worth keeping, like \"Pagination breaks past 500 issues; the fix is still open.\" Never generic. " +
-	"evidence: for anything but none, 1-3 short quotes from the session that show it, each starting with its turn and speaker, " +
-	"like \"turn 12, user: let's keep cursor paging\". No evidence in the session means kind none."
-
-// ruleRules tell the model when a correction is a rule for every repo. The user can still move it into a folder instead.
-const ruleRules = "rule: a rule for the user's own files that agents load in every repo (CLAUDE.md, AGENTS.md). Only from a clear " +
-	"correction or preference the user stated about how agents should work that holds in any repo, like \"don't add comments\" or " +
-	"\"never use abbreviations in names\". Not about this repo's code, this task, or a one-off \"not that file\". " +
-	"rule: one short imperative sentence, or \"\" for none, the normal answer. evidence: the user's words, quoted. " +
-	"confidence: 0 to 1 that it holds in every repo. Never a rule the laptop files already have."
 
 // Rule is what the model answers about a rule for every repo.
 type Rule struct {
@@ -85,6 +33,8 @@ func RuleSuggestion(rule Rule, session store.Session, laptopTexts map[string]str
 	switch {
 	case line == "":
 		return store.Suggestion{}, "no rule"
+	case strings.TrimSpace(rule.Evidence) == "":
+		return store.Suggestion{}, "dropped: no evidence"
 	case rule.Confidence < minimumKeepConfidence:
 		return store.Suggestion{}, "withheld: not sure enough"
 	}
@@ -100,11 +50,16 @@ func RuleSuggestion(rule Rule, session store.Session, laptopTexts map[string]str
 	slices.Sort(filePaths)
 	reason := "You said: \"" + strings.Trim(strings.TrimSpace(rule.Evidence), "\"'“”") + "\""
 	return store.Suggestion{Kind: store.SuggestRule, Rule: line, FilePaths: filePaths, SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason,
-		Evidence: []string{strings.TrimSpace(rule.Evidence)}}, "proposed"
+		FutureUse: "Future agents follow this explicit preference across repositories.", Evidence: []string{strings.TrimSpace(rule.Evidence)}}, "proposed"
 }
 
 // Keep is what the model answers about keeping something from a session.
 type Keep struct {
+	Destination  string `json:"destination"`
+	FutureUse    string `json:"futureUse"`
+	Replaces     string `json:"replaces"`
+	ReplacesText string `json:"replacesText"`
+
 	Kind       string   `json:"kind"`
 	Name       string   `json:"name"`
 	Lines      []string `json:"lines"`
@@ -113,21 +68,25 @@ type Keep struct {
 	Confidence float64  `json:"confidence"`
 	Reason     string   `json:"reason"`
 	Evidence   []string `json:"evidence"`
-	// Place is where a skill goes: here in the session's folder, inside it as a new folder, or a new top-level folder.
+	// Place is where a skill goes: here in the destination folder, inside it as a new folder, or a new top-level folder.
 	Place string `json:"place"`
 }
 
 func keepSchema() map[string]any {
 	return objectSchema(map[string]any{
-		"kind":       enumSchema("none", "notes", "folder", "skill"),
-		"name":       stringSchema(),
-		"lines":      arraySchema(stringSchema()),
-		"context":    stringSchema(),
-		"file":       stringSchema(),
-		"place":      enumSchema("", "here", "inside", "top"),
-		"confidence": map[string]any{"type": "number"},
-		"reason":     stringSchema(),
-		"evidence":   arraySchema(stringSchema()),
+		"destination":  stringSchema(),
+		"futureUse":    stringSchema(),
+		"replaces":     stringSchema(),
+		"replacesText": stringSchema(),
+		"kind":         enumSchema("none", "notes", "folder", "skill"),
+		"name":         stringSchema(),
+		"lines":        arraySchema(stringSchema()),
+		"context":      stringSchema(),
+		"file":         stringSchema(),
+		"place":        enumSchema("", "here", "inside", "top"),
+		"confidence":   map[string]any{"type": "number"},
+		"reason":       stringSchema(),
+		"evidence":     arraySchema(stringSchema()),
 	})
 }
 
@@ -140,6 +99,8 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 		return store.Suggestion{}, "nothing to keep"
 	case keep.Confidence < minimumKeepConfidence:
 		return store.Suggestion{}, "withheld: not sure enough"
+	case strings.TrimSpace(keep.FutureUse) == "":
+		return store.Suggestion{}, "dropped: no concrete future use"
 	case reason == "":
 		return store.Suggestion{}, "dropped: no reason"
 	case len(keep.Evidence) == 0:
@@ -151,9 +112,18 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 			evidence = append(evidence, quote)
 		}
 	}
-	base := store.Suggestion{SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason, Evidence: evidence}
+	if len(evidence) == 0 {
+		return store.Suggestion{}, "dropped: no evidence"
+	}
+	destination := strings.TrimSpace(keep.Destination)
+	if destination == "repo" {
+		destination = ""
+	} else if repository.FindFolder(destination) == nil {
+		return store.Suggestion{}, "dropped: unknown destination"
+	}
+	base := store.Suggestion{FolderId: destination, FutureUse: strings.TrimSpace(keep.FutureUse), SessionIds: []string{session.SessionId}, Source: session.Title, Reason: reason, Evidence: evidence}
 	if keep.Kind == "notes" {
-		return notesSuggestion(base, keep, session, repository)
+		return notesSuggestion(base, keep, repository)
 	}
 	name := strings.Trim(strings.TrimSpace(keep.Name), "\"'.")
 	context := strings.TrimSpace(keep.Context)
@@ -173,11 +143,11 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 			}
 		}
 	}
-	parentFolderId := session.FolderId
+	parentFolderId := destination
 	if keep.Kind == "skill" {
 		switch keep.Place {
 		case "here":
-			return skillHere(base, session, context, linkedPath, repository)
+			return skillHere(base, context, linkedPath, repository)
 		case "top":
 			parentFolderId = ""
 		}
@@ -185,7 +155,7 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 	switch {
 	case name == "" || len([]rune(name)) > maximumFolderNameLength:
 		return store.Suggestion{}, "dropped: no usable name"
-	case folderNamed(repository, name) != nil:
+	case siblingNamed(repository, parentFolderId, name):
 		return store.Suggestion{}, "dropped: a folder named " + name + " exists"
 	case context == "" && linkedPath == "":
 		return store.Suggestion{}, "dropped: no context"
@@ -198,9 +168,9 @@ func KeepSuggestion(keep Keep, session store.Session, digest agent.Digest, repos
 	return base, "proposed"
 }
 
-// skillHere makes a skill the context of the session's own folder: its skill file linked, or the instructions den wrote.
-func skillHere(base store.Suggestion, session store.Session, context string, linkedPath string, repository *store.Repository) (store.Suggestion, string) {
-	folder := repository.FindFolder(session.FolderId)
+// skillHere makes a skill the context of the destination folder: its skill file linked, or the instructions den wrote.
+func skillHere(base store.Suggestion, context string, linkedPath string, repository *store.Repository) (store.Suggestion, string) {
+	folder := repository.FindFolder(base.FolderId)
 	switch {
 	case folder == nil:
 		return store.Suggestion{}, "dropped: no folder to put the skill in"
@@ -221,31 +191,40 @@ func isSamePath(absolutePath string, named string) bool {
 	return absolutePath == named || strings.HasSuffix(absolutePath, "/"+strings.TrimPrefix(named, "./"))
 }
 
-// notesSuggestion adds the kept lines to den's notes of the session's folder, under Findings.
-func notesSuggestion(base store.Suggestion, keep Keep, session store.Session, repository *store.Repository) (store.Suggestion, string) {
-	folder := repository.FindFolder(session.FolderId)
-	if folder == nil {
-		return store.Suggestion{}, "dropped: notes need a folder"
-	}
-	current := repository.ReadContext(folder.Id)
-	text := current
-	if strings.TrimSpace(text) == "" {
-		text = "# " + folder.Name + "\n"
-	}
-	added := 0
+// notesSuggestion adds the kept lines to the destination's notes, under Findings.
+func notesSuggestion(base store.Suggestion, keep Keep, repository *store.Repository) (store.Suggestion, string) {
+	base.Kind = store.SuggestContext
 	for _, line := range keep.Lines[:min(len(keep.Lines), maximumKeepLines)] {
 		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
-		if line == "" || store.HasRule(text, line) || store.HasRule(store.ReadText(folder.LinkedPath), line) {
-			continue
+		if line != "" {
+			base.AddedLines = append(base.AddedLines, line)
 		}
-		text = store.AddToSection(text, findingsSection, line)
-		added++
 	}
-	if added == 0 {
-		return store.Suggestion{}, "dropped: the notes already say it"
+	if len(base.AddedLines) == 0 {
+		return store.Suggestion{}, "dropped: no notes"
 	}
-	base.Kind, base.FolderId, base.ProposedText = store.SuggestContext, folder.Id, text
+	if keep.ReplacesText != "" {
+		current := repository.ReadContext(base.FolderId)
+		if strings.Count(current, keep.ReplacesText) != 1 {
+			return store.Suggestion{}, "dropped: correction must identify one exact destination passage"
+		}
+		base.ProposedText = strings.Replace(current, keep.ReplacesText, strings.Join(base.AddedLines, "\n"), 1)
+		base.AddedLines = nil
+		base.ContextVersion = store.ContextVersion(current)
+	}
+	if err := repository.PrepareSuggestion(&base); err != nil {
+		return store.Suggestion{}, "dropped: " + err.Error()
+	}
 	return base, "proposed"
+}
+
+func siblingNamed(repository *store.Repository, parent string, name string) bool {
+	for _, folder := range repository.Folders {
+		if folder.ParentId == parent && strings.EqualFold(folder.Name, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // folderNamed finds a folder anywhere in the tree by name, ignoring case.

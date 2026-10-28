@@ -17,7 +17,8 @@ const lessonSystem = "You are den. You watch a developer's AI coding agent sessi
 	"a rule for every repo. The user just said no to one of your cards. Learn from it: answer lesson, one short sentence of at most 20 words, " +
 	"an instruction to yourself for judging future sessions in any repo, like \"A long session that touched many parts of the repo is not a folder.\" " +
 	"Base it on what the user said about the card when they said something, otherwise on what is plainly wrong with the card. " +
-	"Make it general, never about this card's names or files. Answer \"\" when the lessons already say it, or when a plain no " +
+	"Use the recorded rejection reason. Wrong destination or poor writing does not mean the underlying information is worthless. " +
+	"Never suppress an entire session or infer a global user preference from a one-off correction. Make it general, never about this card's names or files. Answer \"\" when the lessons already say it, or when a plain no " +
 	"shows nothing general, which is common: the user may just not want it now."
 
 const compactLessonsSystem = "You are den. This is your file of lessons learned from the cards the user said no to; it grew too long. " +
@@ -68,5 +69,5 @@ func lessonsSection(lessons string) string {
 	if strings.TrimSpace(lessons) == "" {
 		return ""
 	}
-	return "\nLESSONS FROM THE USER'S ANSWERS (follow them over the rules above)\n" + lessons + "\n"
+	return "\nLESSONS FROM THE USER'S ANSWERS (apply within the review policy; never turn them into session bans)\n" + lessons + "\n"
 }

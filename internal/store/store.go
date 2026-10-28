@@ -87,7 +87,8 @@ const (
 )
 
 type Repository struct {
-	RepositoryPath string `json:"repoPath"`
+	CardFeedback   []CardFeedback `json:"cardFeedback,omitempty"`
+	RepositoryPath string         `json:"repoPath"`
 	// Welcomed is set once the first-run review is done, so it shows only once per repo.
 	Welcomed    bool         `json:"welcomed,omitempty"`
 	Folders     []Folder     `json:"folders"`
@@ -144,6 +145,18 @@ func Load(repositoryPath string) (Repository, error) {
 		return Repository{}, err
 	}
 	err = json.Unmarshal(content, &repository)
+	for index := range repository.Suggestions {
+		suggestion := &repository.Suggestions[index]
+		if suggestion.Kind == SuggestContext && suggestion.ContextVersion == "" {
+			suggestion.Deferred = true
+			suggestion.ContextVersion = "legacy"
+		}
+		if suggestion.ReplyPending {
+			suggestion.ReplyPending = false
+			suggestion.UnreadReply = true
+			suggestion.Conversation = append(suggestion.Conversation, CardMessage{FromDen: true, Text: "The previous answer was interrupted. Your question is saved; send it again to retry."})
+		}
+	}
 	return repository, err
 }
 
@@ -225,14 +238,14 @@ func (repository *Repository) MoveFolder(folderId string, parentId string) error
 }
 
 // DeleteFolder removes only the folder: its subfolders and sessions move up to its parent. It counts as rejecting
-// that folder, so den never proposes it, or a folder for its sessions, again.
+// that folder's information and destination, without banning later findings from its sessions.
 func (repository *Repository) DeleteFolder(folderId string) {
 	folder := repository.FindFolder(folderId)
 	if folder == nil {
 		return
 	}
 	parentId := folder.ParentId
-	deletedFolder := Suggestion{Kind: SuggestFolder, FolderName: folder.Name}
+	deletedFolder := Suggestion{Kind: SuggestFolder, FolderName: folder.Name, ParentFolderId: folder.ParentId, LinkedPath: folder.LinkedPath, ProposedText: repository.ReadContext(folderId)}
 	for _, session := range repository.Sessions {
 		if session.FolderId == folderId {
 			deletedFolder.SessionIds = append(deletedFolder.SessionIds, session.SessionId)

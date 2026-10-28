@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -10,92 +11,64 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/IgorAmi52/den/internal/brain"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
 const (
-	// minimumTreeLinesBesideDock keeps a few tree lines visible above an open card, so it's clear what it's about.
-	minimumTreeLinesBesideDock = 5
-	// dockNotesPreviewLines is how much of rewritten notes the dock shows before enter saves them.
-	dockNotesPreviewLines = 8
-	dockScrollStep        = 5
-	// reviseTextWidth lays a card out for den's model, which reads it without a screen.
-	reviseTextWidth = 200
+	minimumTreeLinesBesideDock = 3
+	dockScrollStep             = 5
 )
 
-// dockItem is one decision in the dock: one suggestion.
-type dockItem struct {
-	suggestionId string
-}
+type dockItem struct{ suggestionId string }
 
-// dockState is the suggestion dock at the bottom of the panel. Focused with tab, enter says yes, backspace says no,
-// and anything typed is told to den, which answers with what it would do instead.
 type dockState struct {
-	focused bool
-	index   int
-	input   textarea.Model
-	// asked is what the user told den about item; reply is den's answer, with the changes it would make.
-	asked    string
-	reply    *brain.ChatMessage
-	thinking bool
-	item     dockItem
-	// bodyOffset scrolls a card too long for the panel, so the whole proposed context can be read.
+	focused    bool
+	index      int
+	input      textarea.Model
+	item       dockItem
 	bodyOffset int
-	// discussion is the last exchange about the card discussedId, kept after the reply is cleared, for the lesson of a no.
-	discussion  string
-	discussedId string
+	mode       string
+	choice     int
 }
 
 func newDockState() dockState {
-	return dockState{input: newMessageInput("↵ yes  ⌫ no  or tell den…", 500)}
+	return dockState{input: newMessageInput("↵ accept · ⌫ reject · or ask DEN…", 2000)}
 }
 
-// dockItems lists every decision waiting, in the order of the tree, so walking them walks down the tree.
 func (currentModel model) dockItems() []dockItem {
 	var items []dockItem
-	for _, suggestion := range currentModel.repository.Suggestions {
+	for _, suggestion := range currentModel.repository.VisibleSuggestions() {
 		items = append(items, dockItem{suggestionId: suggestion.Id})
 	}
-	rows := currentModel.treeRows(true)
-	position := func(item dockItem) int {
-		if rowIndex := slices.IndexFunc(rows, currentModel.itemRow(item)); rowIndex >= 0 {
-			return rowIndex
-		}
-		return len(rows)
-	}
-	slices.SortStableFunc(items, func(first dockItem, second dockItem) int {
-		return position(first) - position(second)
-	})
 	return items
 }
 
-// itemRow matches the tree row an item is about: the session a new folder takes in, the folder whose context changes,
-// or the repo row for the repo's context.
 func (currentModel model) itemRow(item dockItem) func(listRow) bool {
 	suggestion := currentModel.repository.FindSuggestion(item.suggestionId)
-	switch {
-	case suggestion == nil:
-	case suggestion.Kind == store.SuggestFolder && len(suggestion.SessionIds) > 0:
-		sessionId := suggestion.SessionIds[0]
-		return func(row listRow) bool { return row.kind == sessionRow && row.session.SessionId == sessionId }
-	case suggestion.FolderId != "":
-		folderId := suggestion.FolderId
-		return func(row listRow) bool { return row.kind == folderRow && row.folder.Id == folderId }
+	if suggestion != nil {
+		if suggestion.Kind == store.SuggestFolder && len(suggestion.SessionIds) > 0 {
+			return func(row listRow) bool {
+				return row.kind == sessionRow && row.session.SessionId == suggestion.SessionIds[0]
+			}
+		}
+		if suggestion.FolderId != "" {
+			return func(row listRow) bool { return row.kind == folderRow && row.folder.Id == suggestion.FolderId }
+		}
 	}
 	return func(row listRow) bool { return row.kind == repositoryRow }
 }
 
-// currentDockItem is the item the dock shows: the one being walked when focused,
-// otherwise the selected row's, or else the first waiting.
 func (currentModel model) currentDockItem() (dockItem, bool) {
 	items := currentModel.dockItems()
 	if len(items) == 0 {
 		return dockItem{}, false
 	}
 	if currentModel.dock.focused {
+		if slices.Contains(items, currentModel.dock.item) {
+			return currentModel.dock.item, true
+		}
 		return items[min(currentModel.dock.index, len(items)-1)], true
 	}
 	if selected, exists := currentModel.selectedRow(); exists {
@@ -105,49 +78,66 @@ func (currentModel model) currentDockItem() (dockItem, bool) {
 			}
 		}
 	}
+	for _, item := range items {
+		if currentModel.repository.FindSuggestion(item.suggestionId).UnreadReply {
+			return item, true
+		}
+	}
 	return items[0], true
 }
 
-// focusDock starts walking the suggestions at the one the dock shows.
+func (currentModel *model) persistDock() {
+	if suggestion := currentModel.repository.FindSuggestion(currentModel.dock.item.suggestionId); suggestion != nil {
+		if currentModel.dock.mode == "" {
+			suggestion.Draft = currentModel.dock.input.Value()
+		}
+		maximumOffset := max(len(currentModel.cardBody(*suggestion, currentModel.panelWidth()))-currentModel.cardBodyHeight(currentModel.panelWidth()), 0)
+		currentModel.dock.bodyOffset = min(currentModel.dock.bodyOffset, maximumOffset)
+		suggestion.ScrollOffset = currentModel.dock.bodyOffset
+		currentModel.reportError(currentModel.repository.Save())
+	}
+}
+
+func (currentModel *model) loadDock(item dockItem) {
+	currentModel.dock.item = item
+	currentModel.dock.mode = ""
+	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil {
+		currentModel.dock.input.SetValue(suggestion.Draft)
+		currentModel.dock.bodyOffset = suggestion.ScrollOffset
+	}
+}
+
 func (currentModel *model) focusDock() tea.Cmd {
 	item, exists := currentModel.currentDockItem()
 	if !exists {
-		currentModel.setStatus("all quiet · den speaks up only when it's sure")
+		currentModel.setStatus("No visible cards; deferred proposals appear after revalidation.")
 		return nil
 	}
 	currentModel.dock.focused = true
 	currentModel.dock.index = max(slices.Index(currentModel.dockItems(), item), 0)
-	currentModel.clearDockReply()
+	currentModel.loadDock(item)
 	currentModel.followDockItem()
+	currentModel.persistDock()
 	return currentModel.dock.input.Focus()
 }
 
 func (currentModel *model) blurDock() {
+	currentModel.persistDock()
 	currentModel.dock.focused = false
 	currentModel.dock.input.Blur()
-	currentModel.dock.input.SetValue("")
-	currentModel.clearDockReply()
+	currentModel.dock.mode = ""
 }
 
-func (currentModel *model) clearDockReply() {
-	if currentModel.dock.asked != "" {
-		currentModel.dock.discussion, currentModel.dock.discussedId = currentModel.dockDiscussion(), currentModel.dock.item.suggestionId
-	}
-	currentModel.dock.asked, currentModel.dock.reply, currentModel.dock.thinking = "", nil, false
-	currentModel.dock.bodyOffset = 0
-}
-
-// followDockItem selects the item's row in the tree, opening its folder, so it's clear what the suggestion is about.
 func (currentModel *model) followDockItem() {
 	item, exists := currentModel.currentDockItem()
 	if !exists {
 		return
 	}
-	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil && suggestion.Kind == store.SuggestFolder && len(suggestion.SessionIds) > 0 {
-		if session := currentModel.repository.FindSession(suggestion.SessionIds[0]); session != nil {
-			currentModel.expandFolder(session.FolderId)
-			if session.Archived {
-				currentModel.archiveExpanded = true
+	if suggestion := currentModel.repository.FindSuggestion(item.suggestionId); suggestion != nil {
+		currentModel.expandFolder(suggestion.FolderId)
+		if suggestion.Kind == store.SuggestFolder {
+			if session := firstSuggestionSession(&currentModel.repository, *suggestion); session != nil {
+				currentModel.expandFolder(session.FolderId)
 			}
 		}
 	}
@@ -155,246 +145,399 @@ func (currentModel *model) followDockItem() {
 	currentModel.previewOffset = 0
 }
 
-func (currentModel model) updateDock(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	state := &currentModel.dock
-	keys := currentModel.keys
-	isEmpty := state.input.Value() == ""
-	switch {
-	case key.Matches(keyPress, keys.back), keyPress.String() == "tab":
-		currentModel.blurDock()
-		return currentModel, nil
-	case (keyPress.String() == "right" || keyPress.String() == "left") && isEmpty:
-		currentModel.toggleWide()
-		return currentModel, nil
-	case keyPress.String() == "pgdown", keyPress.String() == "shift+down":
-		state.bodyOffset += dockScrollStep
-		return currentModel, nil
-	case keyPress.String() == "pgup", keyPress.String() == "shift+up":
-		state.bodyOffset = max(state.bodyOffset-dockScrollStep, 0)
-		return currentModel, nil
-	case keyPress.String() == "up", keyPress.String() == "down":
-		step := 1
-		if keyPress.String() == "up" {
-			step = -1
-		}
-		state.index = max(min(state.index+step, len(currentModel.dockItems())-1), 0)
-		currentModel.clearDockReply()
-		currentModel.followDockItem()
-		return currentModel, nil
-	case key.Matches(keyPress, keys.yes) && !isEmpty && !state.thinking:
-		state.asked = strings.TrimSpace(state.input.Value())
-		state.item, _ = currentModel.currentDockItem()
-		state.input.SetValue("")
-		state.reply, state.thinking = nil, true
-		currentModel.queueJob(job{kind: reviseJob, suggestionId: state.item.suggestionId})
-		return currentModel, currentModel.startNextJob()
-	case key.Matches(keyPress, keys.yes) && isEmpty && !state.thinking:
-		item, exists := currentModel.currentDockItem()
-		if !exists {
-			return currentModel, nil
-		}
-		if state.reply != nil && len(state.reply.Actions) > 0 {
-			currentModel.applyDockReply(item, state.reply.Actions)
-		} else {
-			currentModel.answerDockItem(item, true)
-		}
-		currentModel.afterDockAnswer()
-		return currentModel, nil
-	case key.Matches(keyPress, keys.no) && isEmpty:
-		if state.reply != nil || state.thinking {
-			currentModel.clearDockReply()
-			return currentModel, nil
-		}
-		if item, exists := currentModel.currentDockItem(); exists {
-			currentModel.answerDockItem(item, false)
-			currentModel.afterDockAnswer()
-		}
-		return currentModel, nil
-	}
-	var command tea.Cmd
-	state.input, command = state.input.Update(keyPress)
+func (currentModel model) updateDock(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	command := currentModel.handleDockKey(press)
+	currentModel.persistDock()
 	return currentModel, command
 }
 
-// answerDockItem says yes or no to an item.
+func (currentModel *model) handleDockKey(press tea.KeyPressMsg) tea.Cmd {
+	state := &currentModel.dock
+	item, exists := currentModel.currentDockItem()
+	if !exists {
+		currentModel.blurDock()
+		return nil
+	}
+	if state.item != item {
+		currentModel.loadDock(item)
+	}
+	suggestion := currentModel.repository.FindSuggestion(item.suggestionId)
+	if key.Matches(press, currentModel.keys.back) || press.String() == "tab" {
+		if state.mode != "" {
+			currentModel.loadDock(item)
+		} else {
+			currentModel.blurDock()
+		}
+		return nil
+	}
+	if state.mode != "" {
+		return currentModel.handleCardForm(press, suggestion)
+	}
+	empty := strings.TrimSpace(state.input.Value()) == ""
+	switch {
+	case press.String() == "ctrl+e":
+		suggestion.EvidenceExpanded = !suggestion.EvidenceExpanded
+	case press.String() == "ctrl+j":
+		state.bodyOffset = 1000000
+		suggestion.UnreadReply = false
+	case press.String() == "ctrl+d" && !suggestion.ReplyPending:
+		currentModel.persistDock()
+		state.mode = "move"
+		state.choice = 0
+		state.input.SetValue("")
+	case press.String() == "ctrl+r" && !suggestion.ReplyPending:
+		state.input.SetValue("Please revise this proposal: ")
+	case press.String() == "pgdown", press.String() == "shift+down":
+		state.bodyOffset += dockScrollStep
+	case press.String() == "pgup", press.String() == "shift+up":
+		state.bodyOffset = max(state.bodyOffset-dockScrollStep, 0)
+	case (press.String() == "right" || press.String() == "left") && empty:
+		currentModel.toggleWide()
+	case (press.String() == "up" || press.String() == "down") && empty:
+		currentModel.persistDock()
+		step := 1
+		if press.String() == "up" {
+			step = -1
+		}
+		items := currentModel.dockItems()
+		state.index = max(min(slices.Index(items, item)+step, len(items)-1), 0)
+		currentModel.loadDock(items[state.index])
+		currentModel.followDockItem()
+	case key.Matches(press, currentModel.keys.yes) && !empty && !suggestion.ReplyPending:
+		if currentModel.helperCaller == nil {
+			currentModel.setError("DEN needs its model connection to answer this question.")
+			return nil
+		}
+		for index := range suggestion.Conversation {
+			if len(suggestion.Conversation[index].Actions) > 0 {
+				suggestion.Conversation[index].Outcome = "superseded"
+			}
+		}
+		question := strings.TrimSpace(state.input.Value())
+		suggestion.Conversation = append(suggestion.Conversation, store.CardMessage{Text: question})
+		suggestion.ReplyPending = true
+		suggestion.Draft = ""
+		state.input.SetValue("")
+		state.bodyOffset = 1000000
+		currentModel.queueJob(job{kind: reviseJob, suggestionId: suggestion.Id, proposalRevision: suggestion.Revision})
+		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", Action: "question", Detail: question, Outcome: "queued", CallId: suggestion.CallId, Suggestion: suggestion}))
+		currentModel.persistDock()
+		return currentModel.startNextJob()
+	case key.Matches(press, currentModel.keys.yes) && empty && !suggestion.ReplyPending:
+		if actions := cardActions(*suggestion); len(actions) > 0 {
+			if actions[0].Kind == "withdrawSuggestion" {
+				state.mode = "reject"
+				state.choice = 0
+				return nil
+			}
+		}
+		currentModel.answerDockItem(item, true)
+		currentModel.afterDockAnswer()
+	case key.Matches(press, currentModel.keys.no) && empty && !suggestion.ReplyPending:
+		currentModel.persistDock()
+		state.mode = "reject"
+		state.choice = 0
+	default:
+		var command tea.Cmd
+		state.input, command = state.input.Update(press)
+		return command
+	}
+	return nil
+}
+
+func (currentModel *model) handleCardForm(press tea.KeyPressMsg, suggestion *store.Suggestion) tea.Cmd {
+	state := &currentModel.dock
+	count := len(store.RejectionReasons)
+	if state.mode == "move" {
+		count = len(currentModel.repository.Folders) + 1
+	}
+	switch press.String() {
+	case "up":
+		state.choice = max(state.choice-1, 0)
+		return nil
+	case "down":
+		state.choice = min(state.choice+1, count-1)
+		return nil
+	case "enter":
+		if state.mode == "move" {
+			destination := ""
+			if state.choice > 0 {
+				destination = currentModel.repository.Folders[state.choice-1].Id
+			}
+			currentModel.moveCard(suggestion, destination)
+			return nil
+		}
+		reason := store.RejectionReasons[state.choice]
+		explanation := strings.TrimSpace(state.input.Value())
+		snapshot := *suggestion
+		if currentModel.reportError(currentModel.repository.Reject(suggestion.Id, reason, explanation)) {
+			return nil
+		}
+		currentModel.queueLesson(snapshot, reason, explanation)
+		currentModel.saveRepository()
+		currentModel.afterDockAnswer()
+		return currentModel.startNextJob()
+	}
+	if state.mode == "reject" {
+		var command tea.Cmd
+		state.input, command = state.input.Update(press)
+		return command
+	}
+	return nil
+}
+
 func (currentModel *model) answerDockItem(item dockItem, accepted bool) {
 	suggestion := currentModel.repository.FindSuggestion(item.suggestionId)
 	if suggestion == nil {
 		return
 	}
-	logged := store.Decision{Job: "dock", FolderId: suggestion.FolderId, Action: string(suggestion.Kind), Detail: suggestion.Reason, Outcome: "rejected", CallId: suggestion.CallId}
-	if len(suggestion.SessionIds) > 0 {
-		logged.SessionId = suggestion.SessionIds[0]
+	if !accepted {
+		currentModel.dock.mode = "reject"
+		currentModel.dock.choice = 0
+		return
 	}
-	if accepted {
-		logged.Outcome = "accepted"
-		currentModel.acceptSuggestion(suggestion.Id)
-	} else {
-		currentModel.queueLesson(item, *suggestion)
-		currentModel.rejectSuggestion(suggestion.Id)
+	snapshot := *suggestion
+	currentModel.acceptSuggestion(suggestion.Id)
+	if currentModel.repository.FindSuggestion(item.suggestionId) == nil {
+		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "dock", FolderId: snapshot.FolderId, Action: string(snapshot.Kind), Outcome: "accepted", CallId: snapshot.CallId, Suggestion: &snapshot}))
 	}
-	currentModel.reportError(currentModel.repository.LogDecision(logged))
 }
 
-// applyDockReply makes the changes den proposed after the user told it something about a suggestion.
-// Unless den kept the suggestion itself, the user changed it, which counts as a no to the original.
-func (currentModel *model) applyDockReply(item dockItem, actions []brain.ChatAction) {
-	keepsOriginal := slices.ContainsFunc(actions, func(action brain.ChatAction) bool { return action.Kind == "acceptSuggestion" })
-	others := slices.DeleteFunc(slices.Clone(actions), func(action brain.ChatAction) bool {
-		return action.Kind == "acceptSuggestion" || action.Kind == "withdrawSuggestion"
-	})
-	answered := currentModel.repository.FindSuggestion(item.suggestionId) != nil
-	if answered {
-		currentModel.answerDockItem(item, keepsOriginal)
-	}
-	done := currentModel.doChatActions(others)
-	switch {
-	case keepsOriginal:
-		done = append([]string{"did what den suggested"}, done...)
-	case len(others) == 0:
-		done = []string{"dropped it · den won't offer it again"}
-	}
-	currentModel.setStatus("done: " + strings.Join(done, "; "))
-}
-
-// reviseInput is what den's model gets when the user told it something about a suggestion in the dock:
-// the suggestion spelled out, and the repo, as for a chat about it.
-func (currentModel model) reviseInput() (brain.ChatInput, bool) {
-	state := currentModel.dock
-	suggestion := currentModel.repository.FindSuggestion(state.item.suggestionId)
-	if suggestion == nil || state.asked == "" {
+func (currentModel model) reviseInput(identifier string) (brain.ChatInput, bool) {
+	suggestion := currentModel.repository.FindSuggestion(identifier)
+	if suggestion == nil || !suggestion.ReplyPending {
 		return brain.ChatInput{}, false
 	}
-	about := currentModel.spelledOutCard(state.item, *suggestion)
-	input := brain.ChatInput{
-		Conversation:    []brain.ChatMessage{{Text: state.asked}},
-		Repository:      &currentModel.repository,
-		Digests:         currentModel.digests,
-		About:           about,
-		RepositoryNotes: currentModel.repository.ReadContext(""),
-		Now:             time.Now(),
+	var conversation []brain.ChatMessage
+	for _, message := range suggestion.Conversation {
+		conversation = append(conversation, brain.ChatMessage{FromDen: message.FromDen, Text: message.Text})
 	}
-	if len(suggestion.SessionIds) == 1 {
+	input := brain.ChatInput{Conversation: conversation, Repository: &currentModel.repository, Digests: currentModel.digests, About: currentModel.spelledOutCard(*suggestion), RepositoryNotes: currentModel.repository.ReadContext(""), Now: time.Now(), SubjectFolder: suggestion.FolderId}
+	if len(suggestion.SessionIds) > 0 {
 		input.SubjectSession = suggestion.SessionIds[0]
 	}
-	input.SubjectFolder = suggestion.FolderId
-	if session := currentModel.repository.FindSession(input.SubjectSession); session != nil && suggestion.Kind == store.SuggestRule {
-		input.SubjectFolder = session.FolderId
-	}
-	if input.SubjectFolder != "" {
-		input.SubjectNotes = currentModel.folderNotesText(input.SubjectFolder)
-	}
+	input.SubjectNotes = currentModel.folderNotesText(suggestion.FolderId)
 	input.Transcripts = currentModel.chatTranscripts(input.SubjectFolder, input.SubjectSession)
 	return input, true
 }
 
-// spelledOutCard is a card as plain text for den's model: what it does, why, the evidence and the whole proposed text.
-func (currentModel model) spelledOutCard(item dockItem, suggestion store.Suggestion) string {
-	tag, subject, details, why := currentModel.describeDockItem(item, reviseTextWidth)
-	card := tag + ": " + ansi.Strip(subject)
-	for _, detail := range details {
-		card += "\n" + ansi.Strip(detail)
+func (currentModel model) spelledOutCard(suggestion store.Suggestion) string {
+	destination := suggestion.FolderId
+	if suggestion.Kind == store.SuggestFolder {
+		destination = suggestion.ParentFolderId
 	}
-	if why != "" {
-		card += "\nwhy: " + why
+	lines := []string{suggestionTag(suggestion) + ": " + store.CardSummary(suggestion), "destination: " + currentModel.repository.ContextDestination(destination), "future use: " + suggestion.FutureUse, "reason: " + suggestion.Reason,
+		"source: " + suggestion.Source, "evidence: " + strings.Join(suggestion.Evidence, "\n"), "whole proposed text:\n" + suggestion.ProposedText}
+	if suggestion.LinkedPath != "" {
+		lines = append(lines, "linked file: "+suggestion.LinkedPath, store.ReadText(suggestion.LinkedPath))
 	}
-	if len(suggestion.Evidence) > 0 {
-		card += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(suggestion.Evidence, "\n- ")
-	}
-	if suggestion.ProposedText != "" {
-		card += "\nthe whole proposed text:\n" + suggestion.ProposedText
-	}
-	return card
+	return strings.Join(lines, "\n")
 }
 
-// applyReviseAnswer shows den's answer in the dock, with the changes it would make instead, waiting for enter.
-func (currentModel *model) applyReviseAnswer(done job, answer brain.ChatAnswer, input brain.ChatInput) {
-	state := &currentModel.dock
-	state.thinking = false
-	if state.item.suggestionId != done.suggestionId {
+func cardActions(suggestion store.Suggestion) []brain.ChatAction {
+	if len(suggestion.Conversation) == 0 {
+		return nil
+	}
+	message := suggestion.Conversation[len(suggestion.Conversation)-1]
+	if message.Outcome != "" {
+		return nil
+	}
+	var actions []brain.ChatAction
+	json.Unmarshal(message.Actions, &actions)
+	return actions
+}
+
+func (currentModel *model) applyReviseAnswer(done jobDoneMessage, answer brain.ChatAnswer, input brain.ChatInput) {
+	suggestion := currentModel.repository.FindSuggestion(done.job.suggestionId)
+	if suggestion == nil {
 		return
 	}
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
-	state.reply = &brain.ChatMessage{FromDen: true, Text: replyText(answer.Reply, actions), Actions: actions}
-	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", Action: "reply",
-		Detail: state.asked, Outcome: fmt.Sprintf("%d actions", len(actions))}))
+	if suggestion.Revision != done.job.proposalRevision || currentModel.proposalEnvironment(*suggestion) != done.proposalEnvironment {
+		actions = nil
+		answer.Reply += "\nThe proposal changed while I was answering; review its current version."
+	}
+	if len(actions) == 1 && actions[0].Kind != "acceptSuggestion" && actions[0].Kind != "withdrawSuggestion" {
+		if currentModel.reviseCard(suggestion, actions[0]) {
+			answer.Reply += "\nThe proposed change above is updated; it still needs your acceptance."
+		} else {
+			answer.Reply += "\nI could not revise this proposal. Its previous version is still waiting."
+		}
+		actions = nil
+	} else if len(actions) > 1 {
+		answer.Reply += "\nPlease request one card revision at a time. No changes have been applied."
+		actions = nil
+	}
+	encoded, _ := json.Marshal(actions)
+	suggestion.ReplyPending = false
+	suggestion.UnreadReply = true
+	suggestion.Conversation = append(suggestion.Conversation, store.CardMessage{FromDen: true, Text: answer.Reply, Actions: encoded, CallIdentifier: input.CallId})
+	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", Action: "reply", Outcome: "answered", Detail: answer.Reply, CallId: input.CallId, Suggestion: suggestion}))
+	currentModel.saveRepository()
 }
 
-// afterDockAnswer moves on to the next item in the same place, or leaves the dock when nothing is left.
 func (currentModel *model) afterDockAnswer() {
-	currentModel.dock.input.SetValue("")
-	currentModel.clearDockReply()
 	items := currentModel.dockItems()
+	currentModel.dock.mode = ""
 	if len(items) == 0 {
 		currentModel.blurDock()
 		return
 	}
 	currentModel.dock.index = min(currentModel.dock.index, len(items)-1)
+	if index := slices.Index(items, currentModel.dock.item); index >= 0 {
+		currentModel.dock.index = index
+	}
+	currentModel.loadDock(items[currentModel.dock.index])
 	currentModel.followDockItem()
 }
 
-// dockLines draw the dock: one line when the tree has focus, the whole card when the dock has it.
-// The card's header and input always show; its body scrolls when it's longer than the panel allows.
+func (currentModel model) cardBody(suggestion store.Suggestion, width int) []string {
+	theme := currentModel.theme
+	_, subject, details, _ := currentModel.describeDockItem(dockItem{suggestion.Id}, width)
+	body := []string{theme.bold.Render("Proposed change")}
+	body = append(body, wrapAll([]string{subject}, width)...)
+	body = append(body, details...)
+	if suggestion.ReviewConcern != "" {
+		body = append(body, "", theme.bold.Render("Needs revision"), suggestion.ReviewConcern)
+	}
+	body = append(body, "", theme.bold.Render("Why this helps a future session"))
+	usefulness := suggestion.FutureUse
+	if usefulness == "" {
+		usefulness = suggestion.Reason
+	}
+	body = append(body, wrapAll([]string{usefulness}, width)...)
+	body = append(body, "", theme.bold.Render("Source"))
+	body = append(body, wrapAll([]string{suggestion.Source}, width)...)
+	body = append(body, "", theme.bold.Render("Evidence · ctrl+e to expand/collapse"))
+	if suggestion.EvidenceExpanded {
+		for _, quote := range suggestion.Evidence {
+			body = append(body, wrapAll([]string{"“" + quote + "”"}, width)...)
+		}
+	} else {
+		body = append(body, theme.dim.Render(fmt.Sprintf("%d supporting quotes", len(suggestion.Evidence))))
+	}
+	if len(suggestion.Conversation) > 0 {
+		body = append(body, "", theme.bold.Render("Conversation"))
+		for _, message := range suggestion.Conversation {
+			speaker := "You: "
+			if message.FromDen {
+				speaker = "DEN: "
+			}
+			body = append(body, wrapAll([]string{speaker + message.Text}, width)...)
+			body = append(body, "")
+		}
+	}
+	return wrapAll(body, width)
+}
+
+func (currentModel model) cardBodyHeight(width int) int {
+	input := currentModel.dock.input
+	input.SetWidth(max(width, 1))
+	return max(currentModel.height-currentModel.treeTop()-currentModel.footerHeight()-minimumTreeLinesBesideDock-4-strings.Count(input.View(), "\n")-1, 3)
+}
+
 func (currentModel model) dockLines(width int) []string {
 	item, exists := currentModel.currentDockItem()
 	if !exists {
+		if len(currentModel.repository.Suggestions) > 0 {
+			return []string{currentModel.theme.dim.Render(fmt.Sprintf("%d proposals queued for revalidation", len(currentModel.repository.Suggestions)))}
+		}
 		return nil
 	}
+	suggestion := currentModel.repository.FindSuggestion(item.suggestionId)
 	theme := currentModel.theme
-	tag, subject, details, why := currentModel.describeDockItem(item, width)
-	rule := theme.border.Render(strings.Repeat("─", width))
-	if !currentModel.dock.focused {
-		return []string{rule, truncateStyled(theme.badge.Render(" "+tag+" ")+" "+subject, width)}
+	tag, subject, _, _ := currentModel.describeDockItem(item, width)
+	status := "Waiting for your decision"
+	if suggestion.ReviewConcern != "" {
+		status = "Needs revision before acceptance"
 	}
-	items := currentModel.dockItems()
-	position := fmt.Sprintf("%d of %d", min(currentModel.dock.index, len(items)-1)+1, len(items))
-	header := []string{rule, currentModel.layoutRow([]segment{{text: " " + tag + " ", style: theme.badge}}, []segment{{text: position, style: theme.dim}}, width, false)}
-	body := wrapAll(append([]string{subject}, details...), width)
-	if why != "" {
-		body = append(body, wrapAll([]string{theme.dim.Render(why)}, width)...)
+	if suggestion.ReplyPending {
+		status = "DEN is answering"
+	} else if suggestion.UnreadReply {
+		status = "New reply · ctrl+j to read"
+	}
+	rule := theme.border.Render(strings.Repeat("─", max(width, 0)))
+	if !currentModel.dock.focused {
+		return []string{rule, truncateStyled(theme.badge.Render(" "+tag+" ")+" "+subject, width), truncateStyled(theme.dim.Render(status), width)}
 	}
 	state := currentModel.dock
-	var footer []string
-	if state.asked != "" {
-		footer = append(footer, wrapAll([]string{theme.youLabel.Render("you ") + theme.text.Render(state.asked)}, width)...)
-	}
-	switch {
-	case state.thinking:
-		footer = append(footer, theme.denLabel.Render("den ")+theme.faint.Render("thinking…"))
-	case state.reply != nil:
-		for index, replyLine := range strings.Split(state.reply.Text, "\n") {
-			label := "    "
-			if index == 0 {
-				label = theme.denLabel.Render("den ")
-			}
-			footer = append(footer, wrapAll([]string{label + theme.text.Render(replyLine)}, width)...)
-		}
-		if len(state.reply.Actions) > 0 {
-			confirmKeys := []key.Binding{relabeled(currentModel.keys.yes, "confirm"), relabeled(currentModel.keys.no, "back")}
-			footer = append(footer, currentModel.planCard(state.reply.Actions, "", confirmKeys, width)...)
-		}
-	}
+	visible := len(currentModel.dockItems())
+	header := []string{rule, truncateStyled(fmt.Sprintf("%s · %d/%d · %d queued", tag, slices.Index(currentModel.dockItems(), item)+1, visible, len(currentModel.repository.Suggestions)-visible), width), truncateStyled(theme.dim.Render(status), width)}
+	body := currentModel.cardBody(*suggestion, width)
 	input := state.input
-	input.SetWidth(width)
-	if state.reply != nil || state.thinking {
-		input.Placeholder = "or tell den more…"
+	input.SetWidth(max(width, 1))
+	if suggestion.ReplyPending {
+		input.Placeholder = "DEN is answering; your draft will be saved…"
 	}
-	footer = append(footer, strings.Split(input.View(), "\n")...)
-	bodyHeight := max(currentModel.height-currentModel.treeTop()-currentModel.footerHeight()-minimumTreeLinesBesideDock-len(header)-len(footer), 3)
-	if len(body) > bodyHeight {
-		offset := min(state.bodyOffset, len(body)-bodyHeight+1)
-		shown := body[offset : offset+bodyHeight-1]
-		more := fmt.Sprintf("↓ %d more lines · ⇧↓", len(body)-offset-len(shown))
-		if offset+len(shown) >= len(body) {
-			more = "↑ ⇧↑ for the start"
+	choiceOffset := 0
+	if state.mode != "" {
+		body = nil
+		if state.mode == "reject" {
+			body = append(body, theme.bold.Render("Why reject this proposal?"))
+			for index, reason := range store.RejectionReasons {
+				prefix := "  "
+				if index == state.choice {
+					prefix = "› "
+					choiceOffset = len(body)
+				}
+				body = append(body, wrapAll([]string{prefix + reason}, width)...)
+			}
+			body = append(body, "↑↓ choose · ↵ reject · esc cancel")
+			input.Placeholder = "Optional explanation; required for Something else"
+		} else {
+			body = append(body, theme.bold.Render("Choose the destination"))
+			names := []string{"Repo context"}
+			for _, folder := range currentModel.repository.Folders {
+				names = append(names, currentModel.repository.ContextDestination(folder.Id))
+			}
+			for index, name := range names {
+				prefix := "  "
+				if index == state.choice {
+					prefix = "› "
+					choiceOffset = len(body)
+				}
+				body = append(body, wrapAll([]string{prefix + name}, width)...)
+			}
+			body = append(body, "↑↓ choose · ↵ move proposal · esc cancel")
 		}
-		body = append(shown, theme.faint.Render(more))
 	}
-	return append(append(header, body...), footer...)
+	body = wrapAll(body, width)
+	footer := strings.Split(input.View(), "\n")
+	bodyHeight := currentModel.cardBodyHeight(width)
+	offset := min(max(state.bodyOffset, 0), max(len(body)-bodyHeight, 0))
+	if state.mode != "" {
+		offset = max(min(choiceOffset-1, max(len(body)-bodyHeight, 0)), 0)
+	}
+	end := min(offset+bodyHeight, len(body))
+	shown := append([]string{}, body[offset:end]...)
+	if len(body) > bodyHeight {
+		shown = append(shown, truncateStyled(theme.dim.Render(fmt.Sprintf("Lines %d–%d/%d · ⇧↑↓", offset+1, end, len(body))), width))
+	}
+	return append(append(header, shown...), footer...)
 }
 
-// describeDockItem says what a suggestion does in a fixed shape: a type tag, one sentence of what yes does
-// in the tree's own colors, everything it would write, and why den suggests it.
+func (currentModel model) dockHints() []key.Binding {
+	return []key.Binding{hint("↵", "accept/send"), hint("⌫", "reject with reason"), hint("ctrl+d", "destination"), hint("ctrl+r", "revise"), hint("ctrl+e", "evidence"), hint("↑↓", "cards"), hint("esc", "leave")}
+}
+
+func (currentModel *model) queueLesson(suggestion store.Suggestion, reason string, explanation string) {
+	card := currentModel.spelledOutCard(suggestion) + "\nRejection reason: " + reason + "\nExplanation: " + explanation
+	for _, message := range suggestion.Conversation {
+		speaker := "user"
+		if message.FromDen {
+			speaker = "den"
+		}
+		card += "\n" + speaker + ": " + message.Text
+	}
+	currentModel.queueJob(job{kind: lessonJob, rejectedCard: card})
+}
+
+func firstSuggestionSession(repository *store.Repository, suggestion store.Suggestion) *store.Session {
+	if len(suggestion.SessionIds) == 0 {
+		return nil
+	}
+	return repository.FindSession(suggestion.SessionIds[0])
+}
 func (currentModel model) describeDockItem(item dockItem, width int) (tag string, subject string, details []string, why string) {
 	theme := currentModel.theme
 	repository := &currentModel.repository
@@ -403,7 +546,7 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 		return "", "", nil, ""
 	}
 	tag, why = suggestionTag(*suggestion), suggestion.Reason
-	contextName := theme.folder.Render("◆ " + currentModel.contextHeading(suggestion.FolderId))
+	contextName := theme.folder.Render("◆ " + repository.ContextDestination(suggestion.FolderId))
 	writtenText := func(text string) []string {
 		var lines []string
 		if strings.TrimSpace(text) == "" {
@@ -416,20 +559,8 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 	}
 	switch suggestion.Kind {
 	case store.SuggestContext:
-		current := currentModel.currentContextText(*suggestion)
-		added := addedLines(current, suggestion.ProposedText)
-		switch {
-		case strings.TrimSpace(current) == "":
-			subject = theme.text.Render("Start ") + contextName + theme.text.Render(fmt.Sprintf("'s notes, %d %s:", len(added), plural(len(added), "line")))
-			details = writtenText(suggestion.ProposedText)
-		case len(added) == 1:
-			subject = theme.text.Render("Add to ") + contextName + theme.text.Render(": ") + theme.bold.Render(strings.TrimPrefix(added[0], "- "))
-		default:
-			subject = theme.text.Render(fmt.Sprintf("Add %d lines to ", len(added))) + contextName + theme.text.Render(":")
-			for _, line := range added {
-				details = append(details, hangingIndent(strings.TrimPrefix(line, "- "), theme.diffAdded, width, "+ ", "  ")...)
-			}
-		}
+		subject = theme.text.Render("Update ") + theme.folder.Render(repository.ContextDestination(suggestion.FolderId))
+		details = currentModel.diffLines(currentModel.currentContextText(*suggestion), suggestion.ProposedText, width)
 	case store.SuggestLink:
 		subject = theme.text.Render("Use ") + theme.link.Render(currentModel.relativeToRepository(suggestion.LinkedPath, "")) +
 			theme.text.Render(" as ") + contextName + theme.text.Render("'s context:")
@@ -442,11 +573,11 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 		subject = theme.text.Render(verb) + theme.folder.Render("▸ "+suggestion.FolderName)
 		if len(suggestion.SessionIds) == 0 {
 			subject += theme.dim.Render(joiner) + theme.bold.Render(suggestion.Source)
-		} else if session := repository.FindSession(suggestion.SessionIds[0]); session != nil {
+		} else if session := firstSuggestionSession(repository, *suggestion); session != nil {
 			subject += theme.dim.Render(joiner) + theme.bold.Render("\""+session.Title+"\"")
 		}
 		if suggestion.ParentFolderId != "" {
-			details = append(details, theme.dim.Render("  inside ")+theme.folder.Render(repository.FolderName(suggestion.ParentFolderId)))
+			details = append(details, theme.dim.Render("  inside ")+theme.folder.Render(repository.ContextDestination(suggestion.ParentFolderId)))
 		}
 		if suggestion.LinkedPath != "" {
 			details = append(details, theme.dim.Render("  context: ")+theme.link.Render(currentModel.relativeToRepository(suggestion.LinkedPath, "")))
@@ -458,33 +589,14 @@ func (currentModel model) describeDockItem(item dockItem, width int) (tag string
 	case store.SuggestRule:
 		subject = theme.text.Render("Add to ") + theme.link.Render(laptopFileNames(suggestion.FilePaths)) + theme.text.Render(": ") + theme.bold.Render(suggestion.Rule)
 		keepIn := "a folder"
-		if session := repository.FindSession(suggestion.SessionIds[0]); session != nil && session.FolderId != "" {
+		if session := firstSuggestionSession(repository, *suggestion); session != nil && session.FolderId != "" {
 			keepIn = repository.FolderName(session.FolderId)
 		}
 		details = []string{theme.dim.Render("  agents follow it in every repo · or tell den \"keep it in " + keepIn + "\"")}
 	}
-	for _, quote := range suggestion.Evidence {
-		details = append(details, hangingIndent("“"+quote+"”", theme.faint, width, "  ", "   ")...)
-	}
 	return tag, subject, details, why
 }
 
-// dockHints are the footer keys while the dock has focus.
-func (currentModel model) dockHints() []key.Binding {
-	keys := currentModel.keys
-	bindings := []key.Binding{relabeled(keys.up, "other suggestions")}
-	switch {
-	case len(currentModel.openAgents) == 0:
-	case currentModel.isWide():
-		bindings = append(bindings, key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "narrow again")))
-	default:
-		bindings = append(bindings, key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "see it whole")))
-	}
-	return append(bindings, relabeled(keys.back, "back to the tree"))
-}
-
-// hangingIndent wraps a line to width, the first piece after first and the rest after continuation,
-// so a wrapped bullet stays visibly one bullet.
 func hangingIndent(text string, style lipgloss.Style, width int, first string, continuation string) []string {
 	if text == "" {
 		return []string{""}
@@ -498,25 +610,4 @@ func hangingIndent(text string, style lipgloss.Style, width int, first string, c
 		lines = append(lines, style.Render(prefix+piece))
 	}
 	return lines
-}
-
-// queueLesson has den learn from a card the user said no to, with what the user told den about it and what den answered.
-func (currentModel *model) queueLesson(item dockItem, suggestion store.Suggestion) {
-	card := currentModel.spelledOutCard(item, suggestion)
-	state := currentModel.dock
-	switch {
-	case state.item.suggestionId == suggestion.Id && state.asked != "":
-		card += "\n\n" + currentModel.dockDiscussion()
-	case state.discussedId == suggestion.Id:
-		card += "\n\n" + state.discussion
-	}
-	currentModel.queueJob(job{kind: lessonJob, rejectedCard: card})
-}
-
-func (currentModel model) dockDiscussion() string {
-	discussion := "the user told den about it: " + currentModel.dock.asked
-	if reply := currentModel.dock.reply; reply != nil {
-		discussion += "\nden answered: " + reply.Text
-	}
-	return discussion
 }

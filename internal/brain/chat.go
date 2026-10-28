@@ -157,15 +157,23 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 	}
 	findFolder := func(name string) *store.Folder {
 		name = strings.TrimSpace(name)
-		if slash := strings.LastIndex(name, " / "); slash >= 0 {
-			name = name[slash+3:]
-		}
 		for index := range repository.Folders {
-			if strings.EqualFold(repository.Folders[index].Name, name) {
-				return &repository.Folders[index]
+			folder := &repository.Folders[index]
+			fullPath := strings.ReplaceAll(repository.ContextDestination(folder.Id), " → ", " / ")
+			if folder.Id == name || strings.EqualFold(fullPath, strings.ReplaceAll(name, " → ", " / ")) {
+				return folder
 			}
 		}
-		return nil
+		var found *store.Folder
+		for index := range repository.Folders {
+			if strings.EqualFold(repository.Folders[index].Name, name) {
+				if found != nil {
+					return nil
+				}
+				found = &repository.Folders[index]
+			}
+		}
+		return found
 	}
 	createdNames := map[string]bool{}
 	for _, proposed := range answer.Actions {

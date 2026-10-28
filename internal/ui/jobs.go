@@ -52,10 +52,11 @@ const (
 	lessonJob
 	// compactLessonsJob shortens den's lessons file once it grew too long.
 	compactLessonsJob
+	proposalReviewJob
 )
 
 func (kind jobKind) String() string {
-	return [...]string{"progress review", "gate check", "card review", "chat", "revise", "context", "lesson", "compact lessons"}[kind]
+	return [...]string{"progress review", "gate check", "card review", "chat", "revise", "context", "lesson", "compact lessons", "proposal revalidation"}[kind]
 }
 
 // job is one model call. Its input is built when it starts, so it sees the latest state.
@@ -64,7 +65,8 @@ type job struct {
 	sessionId    string
 	suggestionId string
 	// rejectedCard is the card a lesson job learns from, spelled out with anything said about it.
-	rejectedCard string
+	rejectedCard     string
+	proposalRevision int
 }
 
 type jobDoneMessage struct {
@@ -73,6 +75,7 @@ type jobDoneMessage struct {
 	promptCount int
 	// cardLabels are the waiting cards a card review saw, by the label it withdraws them with, to their suggestion ids.
 	cardLabels          map[string]string
+	proposalEnvironment string
 	gateCallIdentifiers []string
 	answer              any
 	chatInput           brain.ChatInput
@@ -105,6 +108,7 @@ func (currentModel *model) queueJob(next job) bool {
 
 // startNextJob runs the next waiting job in the background; one at a time.
 func (currentModel *model) startNextJob() tea.Cmd {
+	currentModel.queueDeferredProposal()
 	for currentModel.runningJob == nil && len(currentModel.jobQueue) > 0 && currentModel.helperCaller != nil {
 		next := currentModel.jobQueue[0]
 		currentModel.jobQueue = currentModel.jobQueue[1:]
@@ -151,6 +155,13 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 		}
 		input := currentModel.reviewInput(*session, turns, max(len(turns)-reviewTurns, 0), session.ReviewedAtPrompt)
 		return run(brain.ReviewRequest(input), &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: len(turns)})
+	case proposalReviewJob:
+		suggestion := repository.FindSuggestion(next.suggestionId)
+		if suggestion == nil || !suggestion.Deferred || !repository.CanShow(*suggestion) {
+			return nil
+		}
+		next.proposalRevision = suggestion.Revision
+		return run(brain.ProposalReviewRequest(repository, *suggestion, currentModel.proposalSource(*suggestion)), &brain.ProposalReviewAnswer{}, jobDoneMessage{job: next, proposalEnvironment: currentModel.proposalEnvironment(*suggestion)})
 	case contextJob:
 		input := currentModel.contextPaneInput()
 		input.Lessons = store.ReadLessons()
@@ -164,13 +175,13 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 	case compactLessonsJob:
 		return run(brain.CompactLessonsRequest(store.ReadLessons()), &brain.CompactLessonsAnswer{}, jobDoneMessage{job: next})
 	case reviseJob:
-		input, exists := currentModel.reviseInput()
+		input, exists := currentModel.reviseInput(next.suggestionId)
 		if !exists {
-			currentModel.dock.thinking = false
 			return nil
 		}
+		next.proposalRevision = repository.FindSuggestion(next.suggestionId).Revision
 		input.Lessons = store.ReadLessons()
-		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
+		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input, proposalEnvironment: currentModel.proposalEnvironment(*repository.FindSuggestion(next.suggestionId))})
 	}
 	return nil
 }
@@ -193,9 +204,18 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		case chatJob:
 			currentModel.chat.thinking = false
 			currentModel.chat.addMessage(brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()})
+		case proposalReviewJob:
+			if suggestion := currentModel.repository.FindSuggestion(done.job.suggestionId); suggestion != nil {
+				suggestion.RevalidateAfter = time.Now().Add(time.Minute)
+				currentModel.reportError(currentModel.repository.Save())
+			}
 		case reviseJob:
-			currentModel.dock.thinking = false
-			currentModel.dock.reply = &brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()}
+			if suggestion := currentModel.repository.FindSuggestion(done.job.suggestionId); suggestion != nil {
+				suggestion.ReplyPending = false
+				suggestion.UnreadReply = true
+				suggestion.Conversation = append(suggestion.Conversation, store.CardMessage{FromDen: true, Text: "I couldn't answer: " + done.err.Error(), CallIdentifier: callId})
+				currentModel.reportError(currentModel.repository.Save())
+			}
 		case contextJob:
 			currentModel.contextPane.thinking = false
 			currentModel.contextPane.reply = &brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()}
@@ -207,6 +227,14 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 			}
 		}
 		if currentModel.helperFailures >= maximumHelperFailures {
+			for index := range currentModel.repository.Suggestions {
+				suggestion := &currentModel.repository.Suggestions[index]
+				if suggestion.ReplyPending {
+					suggestion.ReplyPending, suggestion.UnreadReply = false, true
+					suggestion.Conversation = append(suggestion.Conversation, store.CardMessage{FromDen: true, Text: "Model calls stopped after repeated failures. Your question is saved; retry after reconnecting."})
+				}
+			}
+			currentModel.saveRepository()
 			currentModel.setError("den's model calls keep failing (" + done.err.Error() + "), so den uses its local rules only")
 			currentModel.helperCaller, currentModel.jobQueue = nil, nil
 		}
@@ -222,11 +250,13 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		currentModel.applyLesson(answer.Lesson)
 	case *brain.CompactLessonsAnswer:
 		currentModel.applyCompactedLessons(answer.Lessons)
+	case *brain.ProposalReviewAnswer:
+		currentModel.applyProposalReview(done, *answer, callId)
 	case *brain.ReviewAnswer:
 		currentModel.keepingSelection(func() { currentModel.applyReview(done, *answer, callId) })
 	case *brain.ChatAnswer:
 		if done.job.kind == reviseJob {
-			currentModel.applyReviseAnswer(done.job, *answer, done.chatInput)
+			currentModel.applyReviseAnswer(done, *answer, done.chatInput)
 		} else if done.job.kind == contextJob {
 			currentModel.applyContextPaneAnswer(*answer, done.chatInput)
 		} else {
@@ -400,7 +430,7 @@ func (currentModel *model) cardReviewCommand(next job, session store.Session, tu
 		if kind == "" {
 			kind = string(waiting.Kind)
 		}
-		input.WaitingCards = append(input.WaitingCards, brain.LabeledCard{Label: label, Kind: kind, Summary: store.CardSummary(waiting), Content: waiting.ProposedText})
+		input.WaitingCards = append(input.WaitingCards, brain.LabeledCard{Label: label, Kind: kind, Summary: currentModel.repository.ContextDestination(waiting.FolderId) + ": " + store.CardSummary(waiting), Content: waiting.ProposedText})
 	}
 	return run(brain.ReviewRequest(input), &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: checkedPrompts, cardLabels: cardLabels, gateCallIdentifiers: slices.Clone(session.GateCallIdentifiers)})
 }
@@ -445,8 +475,9 @@ func (currentModel *model) applyReview(done jobDoneMessage, answer brain.ReviewA
 		if session.CheckedAtPrompt > done.promptCount {
 			currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
 		}
-		currentModel.withdrawCards(session, answer.Withdraw, done.cardLabels, callId)
-		currentModel.offerCards(session, answer, callId)
+		currentModel.withdrawCards(session, answer.Withdraw, done.cardLabels, callId, answer.Reason)
+		currentModel.logReviewDecision(session, callId, "review outcome", answer.Reason, "reviewed")
+		currentModel.offerCards(session, answer, callId, done.cardLabels, done.gateCallIdentifiers)
 	} else {
 		currentModel.applyProgress(session, done.promptCount, answer, callId)
 	}
@@ -454,13 +485,27 @@ func (currentModel *model) applyReview(done jobDoneMessage, answer brain.ReviewA
 }
 
 // withdrawCards drops the waiting cards a card review said the session moved past.
-func (currentModel *model) withdrawCards(session *store.Session, labels []string, cardLabels map[string]string, callId string) {
+func (currentModel *model) withdrawCards(session *store.Session, labels []string, cardLabels map[string]string, callId string, reason string) {
 	for _, label := range labels {
 		suggestion := currentModel.repository.FindSuggestion(cardLabels[strings.TrimSpace(label)])
 		if suggestion == nil {
 			currentModel.logReviewDecision(session, callId, "withdraw", label, "dropped: no such waiting card")
 			continue
 		}
+		if suggestion.ReplyPending || len(suggestion.Conversation) > 0 || (currentModel.dock.focused && currentModel.dock.item.suggestionId == suggestion.Id) {
+			if suggestion.ReviewConcern == "" {
+				suggestion.ReviewConcern = strings.TrimSpace(reason)
+				if suggestion.ReviewConcern == "" {
+					suggestion.ReviewConcern = "A later review found this proposal may no longer apply."
+				}
+				suggestion.UnreadReply = true
+				suggestion.Revision++
+				suggestion.Conversation = append(suggestion.Conversation, store.CardMessage{FromDen: true, Text: "Please revise or reject this proposal: " + suggestion.ReviewConcern, CallIdentifier: callId})
+			}
+			currentModel.logReviewDecision(session, callId, "withdraw", store.CardSummary(*suggestion), "withheld: card is being discussed or reviewed")
+			continue
+		}
+		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "review", Action: "withdraw", Outcome: "withdrawn", Detail: reason, CallId: callId, Suggestion: suggestion}))
 		currentModel.logReviewDecision(session, callId, "withdraw", store.CardSummary(*suggestion), "withdrawn")
 		currentModel.repository.Withdraw(suggestion.Id)
 	}
@@ -490,52 +535,59 @@ func (currentModel *model) applyProgress(session *store.Session, promptCount int
 	}
 }
 
-// offerCards offers a card review's keeps, one of each kind, and its rule as suggestions, each in place of the session's waiting
-// card of its kind, unless the user already said no to it or enough are waiting.
-func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer, callId string) {
-	offered := map[string]bool{}
+// offerCards preserves separate proposals unless the reviewer explicitly identifies a replacement.
+func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer, callId string, cardLabels map[string]string, gateCalls []string) {
+	proposed := false
 	for _, keep := range answer.Keeps {
 		if keep.Kind == "" || keep.Kind == "none" {
 			continue
 		}
+		proposed = true
 		suggestion, outcome := brain.KeepSuggestion(keep, *session, currentModel.digests[session.SessionId], &currentModel.repository)
-		if offered[keep.Kind] {
-			outcome = "dropped: one of its kind already"
-		} else if outcome == "proposed" {
+		if outcome == "proposed" {
 			suggestion.CallId, suggestion.KeepKind = callId, keep.Kind
-			outcome = currentModel.offerInPlace(session, suggestion)
+			suggestion.GateCallIdentifiers = slices.Clone(gateCalls)
+			if keep.Replaces != "" {
+				waiting := currentModel.repository.FindSuggestion(cardLabels[keep.Replaces])
+				if waiting == nil || waiting.Kind != suggestion.Kind || waiting.FolderId != suggestion.FolderId || waiting.ParentFolderId != suggestion.ParentFolderId {
+					outcome = "dropped: replacement must name the same destination and kind"
+				} else if currentModel.repository.Replace(waiting.Id, suggestion) {
+					outcome = "proposed revision"
+				} else {
+					outcome = "withheld: revision unavailable"
+				}
+			} else {
+				outcome = currentModel.offerInPlace(session, suggestion)
+			}
 		}
-		offered[keep.Kind] = true
 		currentModel.logReviewDecision(session, callId, "keep "+keep.Kind, fmt.Sprintf("%s (%.2f)", keep.Reason, keep.Confidence), outcome)
 	}
-	if len(offered) == 0 {
-		currentModel.logReviewDecision(session, callId, "keep none", "", "nothing to keep")
+	if !proposed {
+		currentModel.logReviewDecision(session, callId, "keep none", answer.Reason, "nothing to keep")
 	}
 	if strings.TrimSpace(answer.Rule.Rule) != "" {
 		suggestion, outcome := brain.RuleSuggestion(answer.Rule, *session, currentModel.laptopTexts())
 		if outcome == "proposed" {
 			suggestion.CallId, suggestion.KeepKind = callId, "rule"
+			suggestion.GateCallIdentifiers = slices.Clone(gateCalls)
 			outcome = currentModel.offerInPlace(session, suggestion)
 		}
 		currentModel.logReviewDecision(session, callId, "rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
 	}
 }
 
-// offerInPlace offers a card review's card, replacing the session's waiting card of the same kind, and says what happened.
+// offerInPlace saves a valid proposal, deferring it when no visible slot is available.
 func (currentModel *model) offerInPlace(session *store.Session, suggestion store.Suggestion) string {
-	repository := &currentModel.repository
-	for _, waiting := range repository.WaitingFor(session.SessionId) {
-		if waiting.KeepKind == suggestion.KeepKind {
-			if repository.Replace(waiting.Id, suggestion) {
-				return "proposed, in place of the waiting one"
-			}
-			return "withheld: already rejected, or enough waiting"
+	if currentModel.repository.Offer(suggestion) {
+		stored := currentModel.repository.Suggestions[len(currentModel.repository.Suggestions)-1]
+		outcome := "proposed"
+		if stored.Deferred {
+			outcome = "saved to backlog"
 		}
+		currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "review", Action: "proposal", Outcome: outcome, CallId: suggestion.CallId, Suggestion: &stored}))
+		return outcome
 	}
-	if repository.Offer(suggestion) {
-		return "proposed"
-	}
-	return "withheld: already rejected, or enough waiting"
+	return "withheld: duplicate, rejected information, or invalid destination/content"
 }
 
 func (currentModel *model) logReviewDecision(session *store.Session, callId string, action string, detail string, outcome string) {

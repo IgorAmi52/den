@@ -54,6 +54,7 @@ func (currentModel *model) scrollByWheel(button tea.MouseButton) {
 		currentModel.contextPane.offset = max(currentModel.contextPane.offset+step, 0)
 	case currentModel.dock.focused:
 		currentModel.dock.bodyOffset = max(currentModel.dock.bodyOffset+step, 0)
+		currentModel.persistDock()
 	default:
 		currentModel.previewOffset = max(currentModel.previewOffset+step, 0)
 	}
@@ -388,6 +389,7 @@ func (currentModel *model) acceptSuggestion(suggestionId string) {
 	done := currentModel.describeDone(*suggestion)
 	destinationFolderId, err := currentModel.repository.Accept(suggestionId)
 	if currentModel.reportError(err) {
+		currentModel.reportError(currentModel.repository.Save())
 		return
 	}
 	currentModel.expandFolder(destinationFolderId)
@@ -395,12 +397,6 @@ func (currentModel *model) acceptSuggestion(suggestionId string) {
 	currentModel.refreshContextTokens()
 	currentModel.saveRepository()
 	currentModel.setStatus(done)
-}
-
-func (currentModel *model) rejectSuggestion(suggestionId string) {
-	currentModel.repository.Reject(suggestionId)
-	currentModel.saveRepository()
-	currentModel.setStatus("noted · den won't bring that up again")
 }
 
 func (currentModel model) describeDone(suggestion store.Suggestion) string {

@@ -1,8 +1,11 @@
 package store
 
 import (
+	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -19,10 +22,40 @@ const (
 	SuggestRule SuggestionKind = "rule"
 )
 
-// maximumPendingSuggestions keeps den quiet: past it, new suggestions wait until the user answered some.
+// maximumPendingSuggestions limits visible cards; additional proposals remain in the backlog.
 const maximumPendingSuggestions = 5
 
+type CardMessage struct {
+	FromDen        bool            `json:"fromDen"`
+	Text           string          `json:"text"`
+	Actions        json.RawMessage `json:"actions,omitempty"`
+	CallIdentifier string          `json:"callIdentifier,omitempty"`
+	Outcome        string          `json:"outcome,omitempty"`
+}
+
+type CardFeedback struct {
+	At          time.Time  `json:"at"`
+	Suggestion  Suggestion `json:"suggestion"`
+	Reason      string     `json:"reason"`
+	Explanation string     `json:"explanation,omitempty"`
+}
+
 type Suggestion struct {
+	RevalidateAfter     time.Time     `json:"revalidateAfter,omitzero"`
+	FutureUse           string        `json:"futureUse,omitempty"`
+	ReviewConcern       string        `json:"reviewConcern,omitempty"`
+	AddedLines          []string      `json:"addedLines,omitempty"`
+	ContextVersion      string        `json:"contextVersion,omitempty"`
+	Deferred            bool          `json:"deferred,omitempty"`
+	Revision            int           `json:"revision,omitempty"`
+	Conversation        []CardMessage `json:"conversation,omitempty"`
+	Draft               string        `json:"draft,omitempty"`
+	ScrollOffset        int           `json:"scrollOffset,omitempty"`
+	EvidenceExpanded    bool          `json:"evidenceExpanded,omitempty"`
+	ReplyPending        bool          `json:"replyPending,omitempty"`
+	UnreadReply         bool          `json:"unreadReply,omitempty"`
+	GateCallIdentifiers []string      `json:"gateCallIdentifiers,omitempty"`
+
 	Id     string         `json:"id"`
 	Kind   SuggestionKind `json:"kind"`
 	Reason string         `json:"reason"`
@@ -48,8 +81,7 @@ type Suggestion struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// CallId is the model call that proposed it, for the decision log.
 	CallId string `json:"callId,omitempty"`
-	// KeepKind is what a card review card keeps: notes, folder, skill or rule. A session has at most one waiting card of each,
-	// and cards from den's free rules have none.
+	// KeepKind is what a card review card keeps: notes, folder, skill or rule.
 	KeepKind string `json:"keepKind,omitempty"`
 }
 
@@ -80,23 +112,21 @@ func CardSummary(suggestion Suggestion) string {
 
 // RejectionKeys identify what was rejected, so the same suggestion is never offered again.
 func (suggestion Suggestion) RejectionKeys() []string {
+	content := suggestion.ProposedText
+	if len(suggestion.AddedLines) > 0 {
+		content = strings.Join(suggestion.AddedLines, "\n")
+	}
+	target := suggestion.FolderId
 	switch suggestion.Kind {
-	case SuggestLink:
-		return []string{"link:" + suggestion.FolderId + ":" + suggestion.LinkedPath}
 	case SuggestRule:
 		return []string{"rule:" + normalizedWords(suggestion.Rule)}
+	case SuggestLink:
+		return []string{"link:" + target + ":" + suggestion.LinkedPath}
 	case SuggestFolder:
-		var keys []string
-		for _, sessionId := range suggestion.SessionIds {
-			keys = append(keys, "folder:"+sessionId)
-		}
-		return append(keys, "folder:"+suggestion.FolderName)
+		target = suggestion.ParentFolderId
+		content = fmt.Sprintf("%t:%s:%s:%s", suggestion.Skill, suggestion.FolderName, suggestion.LinkedPath, content)
 	}
-	keys := []string{"context:" + suggestion.FolderId + ":" + suggestion.ProposedText}
-	for _, sessionId := range suggestion.SessionIds {
-		keys = append(keys, "context:"+sessionId)
-	}
-	return keys
+	return []string{"proposal:v2:" + string(suggestion.Kind) + ":" + target + ":" + ContextVersion(normalizedWords(content))}
 }
 
 func (repository *Repository) IsRejected(suggestion Suggestion) bool {
@@ -108,56 +138,83 @@ func (repository *Repository) IsRejected(suggestion Suggestion) bool {
 	return false
 }
 
-// Offer queues a suggestion unless it was rejected before, the same one is already waiting, its session already has one
-// of the same kind waiting, another one waits to change the same folder's context, or enough are waiting already.
-// A rule stands beside a session's other suggestions, since it's about the user, not the work. It reports whether the queue changed.
 func (repository *Repository) Offer(suggestion Suggestion) bool {
-	if repository.IsRejected(suggestion) || len(repository.Suggestions) >= maximumPendingSuggestions {
+	if repository.IsRejected(suggestion) {
 		return false
 	}
 	for _, pending := range repository.Suggestions {
 		if slices.Equal(pending.RejectionKeys(), suggestion.RejectionKeys()) {
 			return false
 		}
-		isAboutWork := suggestion.Kind != SuggestRule && pending.Kind != SuggestRule
-		sharesSession := slices.ContainsFunc(suggestion.SessionIds, func(sessionId string) bool { return slices.Contains(pending.SessionIds, sessionId) })
-		if isAboutWork && sharesSession && pending.KeepKind == suggestion.KeepKind {
-			return false
-		}
-		if isAboutWork && suggestion.Kind != SuggestFolder && pending.Kind != SuggestFolder && pending.FolderId == suggestion.FolderId {
-			return false
-		}
 	}
+	if err := repository.PrepareSuggestion(&suggestion); err != nil {
+		return false
+	}
+	suggestion.Deferred = !repository.CanShow(suggestion)
 	suggestion.Id = newId()
+	suggestion.Revision = 1
 	if suggestion.CreatedAt.IsZero() {
 		suggestion.CreatedAt = time.Now()
 	}
 	repository.Suggestions = append(repository.Suggestions, suggestion)
-	if suggestion.KeepKind != "" {
-		for _, sessionId := range suggestion.SessionIds {
-			if session := repository.FindSession(sessionId); session != nil {
-				session.Cards = append(session.Cards, CardRecord{SuggestionId: suggestion.Id, Kind: suggestion.KeepKind, Summary: CardSummary(suggestion), Outcome: "waiting"})
-				session.Cards = session.Cards[max(len(session.Cards)-maximumCardRecords, 0):]
-			}
-		}
-	}
+	repository.RefreshCardRecord(suggestion)
 	return true
 }
 
-// Replace offers a suggestion in place of a waiting one, which goes only if the new one is offered. It reports whether it was.
 func (repository *Repository) Replace(waitingId string, suggestion Suggestion) bool {
 	waiting := repository.FindSuggestion(waitingId)
 	if waiting == nil {
 		return repository.Offer(suggestion)
 	}
-	kept := *waiting
-	repository.Dismiss(waitingId)
-	if !repository.Offer(suggestion) {
-		repository.Suggestions = append(repository.Suggestions, kept)
+	if waiting.ReplyPending || repository.IsRejected(suggestion) || repository.PrepareSuggestion(&suggestion) != nil {
 		return false
 	}
-	repository.recordCardOutcome(waitingId, "replaced")
+	if err := repository.LogDecision(Decision{Job: "review", Action: "replace proposal", Outcome: "replaced", CallId: suggestion.CallId, Suggestion: waiting}); err != nil {
+		return false
+	}
+	suggestion.Id, suggestion.CreatedAt = waiting.Id, waiting.CreatedAt
+	suggestion.Revision = waiting.Revision + 1
+	suggestion.Conversation, suggestion.Draft = slices.Clone(waiting.Conversation), waiting.Draft
+	suggestion.ScrollOffset, suggestion.EvidenceExpanded = waiting.ScrollOffset, waiting.EvidenceExpanded
+	suggestion.Deferred, suggestion.UnreadReply = waiting.Deferred, true
+	suggestion.Conversation = append(suggestion.Conversation, CardMessage{FromDen: true, Text: "The proposal was updated. Earlier discussion is preserved; review the current change before accepting."})
+	for index := range suggestion.Conversation {
+		suggestion.Conversation[index].Actions = nil
+	}
+	for _, identifier := range waiting.SessionIds {
+		if !slices.Contains(suggestion.SessionIds, identifier) {
+			suggestion.SessionIds = append(suggestion.SessionIds, identifier)
+		}
+	}
+	for _, identifier := range waiting.GateCallIdentifiers {
+		if !slices.Contains(suggestion.GateCallIdentifiers, identifier) {
+			suggestion.GateCallIdentifiers = append(suggestion.GateCallIdentifiers, identifier)
+		}
+	}
+	*waiting = suggestion
+	repository.RefreshCardRecord(suggestion)
 	return true
+}
+
+func (repository *Repository) RefreshCardRecord(suggestion Suggestion) {
+	for index := range repository.Sessions {
+		session := &repository.Sessions[index]
+		if !slices.Contains(suggestion.SessionIds, session.SessionId) {
+			continue
+		}
+		record := CardRecord{SuggestionId: suggestion.Id, Kind: suggestion.KeepKind, Summary: CardSummary(suggestion), Outcome: "waiting"}
+		found := false
+		for cardIndex := range session.Cards {
+			if session.Cards[cardIndex].SuggestionId == suggestion.Id {
+				session.Cards[cardIndex] = record
+				found = true
+			}
+		}
+		if !found && suggestion.KeepKind != "" {
+			session.Cards = append(session.Cards, record)
+			session.Cards = session.Cards[max(len(session.Cards)-maximumCardRecords, 0):]
+		}
+	}
 }
 
 // Withdraw drops a waiting suggestion den itself no longer stands behind. Unlike a rejection, nothing is remembered against it.
@@ -203,13 +260,25 @@ func (repository *Repository) Dismiss(suggestionId string) {
 	})
 }
 
-// Reject drops the suggestion and remembers it, so it is never offered again.
-func (repository *Repository) Reject(suggestionId string) {
-	if suggestion := repository.FindSuggestion(suggestionId); suggestion != nil {
-		repository.RejectedKeys = append(repository.RejectedKeys, suggestion.RejectionKeys()...)
+var RejectionReasons = []string{"Not useful for future work", "Already covered", "Incorrect or unsupported", "Wrong destination", "Too detailed or poorly written", "Something else"}
+
+func (repository *Repository) Reject(suggestionId string, reason string, explanation string) error {
+	if !slices.Contains(RejectionReasons, reason) || (reason == "Something else" && strings.TrimSpace(explanation) == "") {
+		return fmt.Errorf("choose a rejection reason; Something else requires a short explanation")
 	}
+	suggestion := repository.FindSuggestion(suggestionId)
+	if suggestion == nil {
+		return fmt.Errorf("proposal no longer exists")
+	}
+	feedback := CardFeedback{At: time.Now(), Suggestion: *suggestion, Reason: reason, Explanation: strings.TrimSpace(explanation)}
+	if err := repository.LogDecision(Decision{At: feedback.At, Job: "dock", Action: "reject", Outcome: "rejected", CallId: suggestion.CallId, FolderId: suggestion.FolderId, Suggestion: suggestion, RejectionReason: reason, Explanation: feedback.Explanation}); err != nil {
+		return err
+	}
+	repository.CardFeedback = append(repository.CardFeedback, feedback)
+	repository.RejectedKeys = append(repository.RejectedKeys, suggestion.RejectionKeys()...)
 	repository.recordCardOutcome(suggestionId, "rejected")
 	repository.Dismiss(suggestionId)
+	return nil
 }
 
 // Accept carries the suggestion out and drops it from the queue. It returns the folder the change is in.
@@ -217,6 +286,23 @@ func (repository *Repository) Accept(suggestionId string) (string, error) {
 	found := repository.FindSuggestion(suggestionId)
 	if found == nil {
 		return "", nil
+	}
+	if found.Deferred {
+		return "", fmt.Errorf("this proposal is waiting for revalidation")
+	}
+	if found.ReviewConcern != "" {
+		return "", fmt.Errorf("revise this proposal before accepting: %s", found.ReviewConcern)
+	}
+	if found.Kind == SuggestContext && found.ContextVersion != ContextVersion(repository.ReadContext(found.FolderId)) {
+		if err := repository.PrepareSuggestion(found); err != nil {
+			return "", err
+		}
+		found.UnreadReply = true
+		found.Revision++
+		return "", fmt.Errorf("context changed; review the refreshed proposal before accepting")
+	}
+	if err := repository.PrepareSuggestion(found); err != nil {
+		return "", err
 	}
 	suggestion := *found
 	folderId := suggestion.FolderId

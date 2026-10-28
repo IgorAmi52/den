@@ -8,7 +8,7 @@ The original experiment measured 80.4% accuracy against strong-model labels, com
 
 ## Runtime behavior
 
-- Every completed exchange reaches the classifier, including go-aheads and replies ending in a question. The two-reply spacing and ten-card-reviews-per-hour limits were removed. Review jobs still run one at a time; the existing five-waiting-card limit and card acceptance rules remain.
+- Every completed exchange reaches the classifier, including go-aheads and replies ending in a question. The two-reply spacing and ten-card-reviews-per-hour limits were removed. Review jobs still run one at a time. Five cards can be visible; additional proposals are saved and revalidated before appearing. See [card review and feedback](card-review.md).
 - The model receives one input per exchange, using the exact training layout: the first user prompt as the goal (300 characters), the current user prompt's first 700 characters, and the reply's last 700 characters. Formatting is preserved. Historical title/folder placeholders and no waiting cards are deliberate parts of this input contract. Actual session, folder, waiting cards, and available exchanges are logged separately.
 - A batch receives a review if **any** exchange reaches 0.625. Inputs are not concatenated into an untrained multi-exchange format, and all unread completed exchanges are scored.
 - Approved plans, markdown writes, and pending cards force a review even when scores are low. The classifier still runs and its raw prediction is recorded. Pending cards bypass rejection because the training data did not adequately cover corrections or withdrawals.
@@ -21,17 +21,25 @@ The runtime lives in `${DEN_HOME:-$HOME/.den}/gate`: `venv/` and `model/`. The i
 
 ## Install or restore
 
-The current machine has the runtime installed. Another machine needs Python provisioning through `uv` and access to the private artifacts; cloning the code alone does not include the weights. Without installation, the gate allows reviews and reports the missing runtime.
+The classifier is a separate installation from the DEN binary. The trained files currently exist in the maintainer's private archive; there is **no public model download**. Homebrew and a Git clone do not include them. A new installation of the current source still works without Python or the weights: it logs the unavailable classifier and allows direct model reviews, with more reviewer calls and potentially higher cost. The Homebrew formula currently pins `v0.2.0`, before this gate; a new release is needed to distribute the new code.
 
-From the repository root:
+The pinned runtime installer supports **native Apple silicon macOS**, the platform used for validation. Intel Macs can use DEN with direct model reviews. Install `uv` first; the command below provisions Python 3.12 without relying on a system Python installation. Internet access is needed to obtain Python and the pinned packages. The model files are about 600 MB, and the environment and download caches need additional gigabytes.
+
+Obtain the `modernbert-setfit` directory containing `encoder.json`, `classifier.json`, `classifier.joblib`, and the complete `model/` directory. The conversation dataset, embeddings, other candidate models and pretrained download cache are not needed for inference. Use only the trusted, version-matched artifacts; the classifier head is loaded through joblib.
+
+From a source checkout containing this installer:
 
 ```sh
-python3 experiments/gate/verify_artifacts.py
-python3 experiments/gate/install.py --source .local/gate-experiment/data/modernbert-setfit
+brew install uv
+uv run --no-project --python 3.12 python experiments/gate/install.py --source /path/to/modernbert-setfit
 make install
 ```
 
-The installer uses Python 3.12 and the archived dependency lock. It refuses to overwrite an installed model; stage an update with `--destination` before replacing a known working runtime. `DEN_HOME` changes the installation and lookup root together. Restart the DEN panel after installing a new binary; existing panels keep their loaded binary.
+The installer verifies the required files against the checked-in SHA-256 inventory before downloading dependencies. It creates the environment, copies only runtime artifacts into a fresh temporary directory, and performs one offline prediction before activating the model. An incomplete, altered or unusable model is not activated. On failure, correct the reported error and rerun; an already-created Python environment can be reused.
+
+It refuses to overwrite an installed model. Use `--destination /path/to/staged-gate` to prepare an update, then arrange the replacement with panels stopped. `DEN_HOME` controls the default destination (`$DEN_HOME/gate`) as well as runtime lookup; use the same value when installing and launching. Do not copy the virtual environment between machines: install it on the destination machine. Restart the DEN panel after installing a new binary; existing panels retain their loaded binary. The README explains restart and upgrade precautions.
+
+`python3 experiments/gate/verify_artifacts.py` is a separate maintainer check of the **entire private experiment archive**, not a prerequisite for a new user with only the inference files.
 
 ## Logs and later labeling
 
@@ -43,7 +51,7 @@ Logs remain in `~/.den/repos/<repository>/calls.jsonl` and `decisions.jsonl`, al
 | Gate call `prompt` (a JSON string) | Exact `texts`, SHA-256 `inputHashes`, original exchange numbers, available session/exchange context, waiting cards, forced-review reason |
 | Gate call `answer` | Per-exchange `scores`, `threshold`, model artifact `modelVersion`, device, raw `predictedReview`, final `worthReview`, reason, and `inferenceError` if any |
 | `calls.jsonl`, `job: "card review"` | Full Sol request and answer, completed prompt count, and `gateCallIdentifiers` linking the triggering gate calls |
-| Suggestions and `decisions.jsonl` | Existing reviewer call identifiers, proposals, withdrawals, replacements, acceptance, rejection, and user replies |
+| Suggestions and `decisions.jsonl` | Full proposal snapshots, gate/reviewer call identifiers, replacements, revalidation, acceptance, rejection reasons, destination corrections and persistent card conversations |
 
 Follow `gate call id → review.gateCallIdentifiers → review id → suggestion/decision.callId`. A review may cover multiple positive gate calls. First-run reviews can have no gate call. If logging fails, DEN reports the error; the review still proceeds. `den eval export` includes these logs and the runtime manifest/head metadata, but excludes the Python environment and encoder weight directory.
 

@@ -10,6 +10,10 @@ import (
 
 // Decision is one thing den proposed, applied, or the user answered, kept as evidence den can learn from later.
 type Decision struct {
+	Suggestion      *Suggestion `json:"suggestion,omitempty"`
+	RejectionReason string      `json:"rejectionReason,omitempty"`
+	Explanation     string      `json:"explanation,omitempty"`
+
 	At        time.Time `json:"at"`
 	Job       string    `json:"job"`
 	SessionId string    `json:"sessionId,omitempty"`

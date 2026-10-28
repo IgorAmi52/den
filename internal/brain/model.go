@@ -57,17 +57,6 @@ const progressReviewSystem = reviewIntroduction + "You look at one session and a
 	"at most 12 words, or \"\" when nothing is left. Like goal \"Stop coupons applying twice\", done \"Fixed the double apply; " +
 	"tests pass\", next \"Handle mixed-case coupon codes\"."
 
-// cardReviewSystem looks at a session once a check found something in its latest turns, and decides what's worth a card,
-// and which of its waiting cards no longer hold.
-const cardReviewSystem = reviewIntroduction + "A check found something in this session's latest turns that may be worth keeping, " +
-	"and you look at the session to answer three things. Most of the time nothing is worth keeping: return no keeps, nothing to withdraw " +
-	"and an empty rule.\n\n" +
-	"keeps: at most one of each kind, judged mostly by the turns marked new, against everything before them. Never propose again what " +
-	"CARDS FROM THIS SESSION shows, whatever became of it, unless the session changed it. A new card replaces the session's waiting card " +
-	"of its kind, so put in it whatever of that card still holds. Each keep:\n" + keepRules + "\n\n" +
-	"withdraw: the labels of waiting cards, like c1, that the session moved past: what they keep was undone, fixed, or turned out wrong. " +
-	"A waiting card that still holds stays out of both keeps and withdraw.\n\n" + ruleRules
-
 // denVoice is how den talks to the user, wherever it does: concise and clear first, with a light, upbeat personality.
 // It never applies to titles or context files, which are working material.
 const denVoice = "Your voice: concise and clear first, then warmth and play, like a sharp, cheerful teammate. Short sentences, plain words, " +
@@ -79,7 +68,7 @@ const denVoice = "Your voice: concise and clear first, then warmth and play, lik
 	"\"Just Eval so far, and it's travelling light: no sessions, no context yet.\" / \"Hmm, that quote doesn't really back a folder. " +
 	"Eval already has this covered. Drop it?\" / \"Spin up a Research skill folder?\" / \"Neat, Pagination's notes now know about the 500 cap.\""
 
-const chatSystem = "You are den. You organize a developer's AI coding agent sessions into folders, with context per folder that every new " +
+const chatSystem = "You are den. You preserve useful context in continuing workspaces, with context per folder that every new " +
 	"session in the folder starts with. A folder holds a piece of work, like a feature, or a way of working, a skill, like Exploration with " +
 	"subfolders Papers and Reddit for where to search. You chat with the developer about the sessions, folders and context of one repo. " +
 	"The user reads you in a narrow terminal panel: plain text, no markdown, no filler like \"Okay\" or \"Sure\", no apologies. " +
@@ -109,7 +98,7 @@ const chatSystem = "You are den. You organize a developer's AI coding agent sess
 	"When the chat is about one of den's suggestions, the user's message answers it: do it as is (acceptSuggestion), do something else " +
 	"instead (the actions that do what they want), drop it (withdrawSuggestion), or answer a question about it. You made that suggestion: " +
 	"explain it from the evidence quoted with it, as your own reasoning. If the evidence doesn't hold up against the session, say so plainly, " +
-	"end by asking whether to drop it, and include the withdrawSuggestion action, since the user's enter does exactly the actions you list. " +
+	"end by asking whether to drop it, and include withdrawSuggestion to open the required rejection-reason form. " +
 	"Whenever your reply ends with a question offering a change, the actions for that change must be in actions.\n\n" +
 	"When the user asks for a change, put it in actions; den lists them and the user confirms with enter. Only include actions the user asked for. " +
 	"Use folder names and session ids exactly as listed, and leave unused fields empty. Action types:\n" +
@@ -176,6 +165,7 @@ type LabeledCard struct {
 }
 
 type ReviewAnswer struct {
+	Reason   string         `json:"reason"`
 	Title    string         `json:"title"`
 	Progress store.Progress `json:"progress"`
 	Keeps    []Keep         `json:"keeps"`
@@ -229,6 +219,18 @@ func ReviewRequest(input ReviewInput) helper.Request {
 		}
 	}
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
+	prompt.WriteString(ReviewContexts(repository))
+	prompt.WriteString("\nOTHER WAITING PROPOSALS (avoid duplicating these; only labeled cards above can be replaced or withdrawn)\n")
+	for _, suggestion := range repository.Suggestions {
+		if slices.Contains(suggestion.SessionIds, input.Session.SessionId) {
+			continue
+		}
+		destination := suggestion.FolderId
+		if suggestion.Kind == store.SuggestFolder {
+			destination = suggestion.ParentFolderId
+		}
+		fmt.Fprintf(&prompt, "destination: %s\nproposal: %s\ncontent: %s\n", repository.ContextDestination(destination), store.CardSummary(suggestion), suggestion.ProposedText)
+	}
 	if skillFiles := writtenSkillFiles(input.Digest); len(skillFiles) > 0 {
 		prompt.WriteString("\nSKILL FILES THIS SESSION WROTE\n")
 		for _, skillFile := range skillFiles {
@@ -244,7 +246,7 @@ func ReviewRequest(input ReviewInput) helper.Request {
 	return helper.Request{
 		System: cardReviewSystem,
 		Prompt: prompt.String(),
-		Schema: objectSchema(map[string]any{"keeps": arraySchema(keepSchema()), "withdraw": arraySchema(stringSchema()), "rule": ruleSchema()}),
+		Schema: objectSchema(map[string]any{"reason": stringSchema(), "keeps": arraySchema(keepSchema()), "withdraw": arraySchema(stringSchema()), "rule": ruleSchema()}),
 		Tier:   helper.Reasoning,
 	}
 }
@@ -431,6 +433,7 @@ func ChatRequest(input ChatInput) helper.Request {
 	prompt.WriteString("\nTODAY\n" + input.Now.Format("Monday, Jan 2 2006, 15:04") + "\n")
 	prompt.WriteString("\nREPO PATH\n" + repository.RepositoryPath + "\n")
 	prompt.WriteString("\nFOLDERS\n" + folderOverview(repository))
+	prompt.WriteString(ReviewContexts(repository))
 	prompt.WriteString("\nSESSIONS (newest first)\n")
 	sessionIds := ChatSessionIds(input)
 	files := map[string]string{}
@@ -468,8 +471,13 @@ func ChatRequest(input ChatInput) helper.Request {
 		}
 		fmt.Fprintf(&prompt, "%s: %s\n", speaker, message.Text)
 	}
+	system := chatSystem
+	if input.About != "" {
+		mentalModel, _, _ := strings.Cut(cardReviewSystem, "## Review process")
+		system += "\n" + mentalModel + "\nFor card discussions, only answer or revise this one proposal. Return at most one action: editNotes, addRule, link, createFolder, acceptSuggestion, or withdrawSuggestion. Use an exact folder identifier or full path, or repo. Revisions only change the waiting proposal. Preserve unrelated current context when drafting editNotes. Do not move source sessions or perform other actions. Acceptance applies the proposed change; rejection requires a reason. The user may refine a proposal without endorsing the global scope of a rule."
+	}
 	return helper.Request{
-		System:          chatSystem,
+		System:          system,
 		Prompt:          prompt.String(),
 		Tier:            helper.Reasoning,
 		ReadsRepository: repository.RepositoryPath,
