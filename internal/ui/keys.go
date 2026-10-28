@@ -60,7 +60,7 @@ func newKeyMap() keyMap {
 		edit:          binding([]string{"e"}, "e", "edit"),
 		toggle:        binding([]string{"space"}, "space", "tick"),
 		send:          binding([]string{"enter"}, "↵", "send"),
-		scrollChat:    binding([]string{"pgup", "pgdown"}, "pgup/pgdn", "scroll"),
+		scrollChat:    binding([]string{"pgup", "pgdown", "shift+up", "shift+down"}, "⇧↑↓", "scroll"),
 		newChat:       binding([]string{"alt+l"}, "⌥L", "new chat"),
 		pickPrevious:  binding([]string{"left", "h", "up", "k"}, "←", "pick"),
 		pickNext:      binding([]string{"right", "l", "down", "j"}, "→", "pick"),

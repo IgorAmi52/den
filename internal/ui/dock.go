@@ -166,10 +166,10 @@ func (currentModel model) updateDock(keyPress tea.KeyPressMsg) (tea.Model, tea.C
 	case (keyPress.String() == "right" || keyPress.String() == "left") && isEmpty:
 		currentModel.toggleWide()
 		return currentModel, nil
-	case keyPress.String() == "pgdown":
+	case keyPress.String() == "pgdown", keyPress.String() == "shift+down":
 		state.bodyOffset += dockScrollStep
 		return currentModel, nil
-	case keyPress.String() == "pgup":
+	case keyPress.String() == "pgup", keyPress.String() == "shift+up":
 		state.bodyOffset = max(state.bodyOffset-dockScrollStep, 0)
 		return currentModel, nil
 	case keyPress.String() == "up", keyPress.String() == "down":
@@ -384,9 +384,9 @@ func (currentModel model) dockLines(width int) []string {
 	if len(body) > bodyHeight {
 		offset := min(state.bodyOffset, len(body)-bodyHeight+1)
 		shown := body[offset : offset+bodyHeight-1]
-		more := fmt.Sprintf("↓ %d more lines · pgdn", len(body)-offset-len(shown))
+		more := fmt.Sprintf("↓ %d more lines · ⇧↓", len(body)-offset-len(shown))
 		if offset+len(shown) >= len(body) {
-			more = "↑ pgup for the start"
+			more = "↑ ⇧↑ for the start"
 		}
 		body = append(shown, theme.faint.Render(more))
 	}

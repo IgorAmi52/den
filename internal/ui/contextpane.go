@@ -99,9 +99,9 @@ func (currentModel model) updateContextPane(keyPress tea.KeyPressMsg) (tea.Model
 		return currentModel, pane.editor.Focus()
 	case "alt+o":
 		return currentModel, currentModel.editContext(pane.folderId)
-	case "pgdown", "J":
+	case "pgdown", "shift+down", "J":
 		pane.offset += 5
-	case "pgup", "K":
+	case "pgup", "shift+up", "K":
 		pane.offset = max(pane.offset-5, 0)
 	}
 	return currentModel, nil
@@ -111,10 +111,10 @@ func (currentModel model) updateContextPrompt(keyPress tea.KeyPressMsg) (tea.Mod
 	pane := &currentModel.contextPane
 	isEmpty := pane.prompt.Value() == ""
 	switch {
-	case keyPress.String() == "pgdown":
+	case keyPress.String() == "pgdown", keyPress.String() == "shift+down":
 		pane.offset += 5
 		return currentModel, nil
-	case keyPress.String() == "pgup":
+	case keyPress.String() == "pgup", keyPress.String() == "shift+up":
 		pane.offset = max(pane.offset-5, 0)
 		return currentModel, nil
 	case keyPress.String() == "esc", keyPress.String() == "up" && isEmpty:
@@ -228,13 +228,13 @@ func (currentModel model) contextPaneLines(width int, height int) []string {
 		input := pane.prompt
 		input.SetWidth(innerWidth)
 		bottom = append(bottom, strings.Split(input.View(), "\n")...)
-		hints := []key.Binding{hint("↵", "send"), hint("↑", "back"), hint("pgup/pgdn", "scroll")}
+		hints := []key.Binding{hint("↵", "send"), hint("↑", "back"), hint("⇧↑↓", "scroll")}
 		if pane.reply != nil && len(pane.reply.Actions) > 0 {
 			hints = []key.Binding{hint("↵", "confirm"), hint("⌫", "discard"), hint("type", "to change it")}
 		}
 		bottom = append(bottom, currentModel.hintLines(hints, innerWidth, 1)...)
 	default:
-		bottom = append(bottom, currentModel.hintLines([]key.Binding{hint("↓", "ask den"), hint("↑", "edit by hand"), hint("←", "back"), hint("pgup/pgdn", "scroll")}, innerWidth, 1)...)
+		bottom = append(bottom, currentModel.hintLines([]key.Binding{hint("↓", "ask den"), hint("↑", "edit by hand"), hint("←", "back"), hint("⇧↑↓", "scroll")}, innerWidth, 1)...)
 	}
 	bodyHeight := max(height-1-len(bottom), 1)
 	offset := min(pane.offset, max(len(body)-bodyHeight, 0))

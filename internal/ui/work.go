@@ -19,6 +19,9 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch typedMessage := message.(type) {
 	case tea.KeyPressMsg:
 		updated, command = currentModel.updateWorkKey(typedMessage)
+	case tea.MouseWheelMsg:
+		currentModel.scrollByWheel(typedMessage.Mouse().Button)
+		updated = currentModel
 	case tea.MouseMsg:
 		if currentModel.prompt == nil && currentModel.confirming == nil && !currentModel.picking && currentModel.picker == nil {
 			updated, command = currentModel.updateMouse(typedMessage)
@@ -41,6 +44,30 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 	afterUpdate.clampCursor()
 	afterUpdate.scrollToCursor()
 	return afterUpdate, command
+}
+
+// scrollByWheel scrolls whatever is in front: the context pane, the focused dock or the preview.
+func (currentModel *model) scrollByWheel(button tea.MouseButton) {
+	step := wheelStep(button)
+	switch {
+	case currentModel.contextPane.open:
+		currentModel.contextPane.offset = max(currentModel.contextPane.offset+step, 0)
+	case currentModel.dock.focused:
+		currentModel.dock.bodyOffset = max(currentModel.dock.bodyOffset+step, 0)
+	default:
+		currentModel.previewOffset = max(currentModel.previewOffset+step, 0)
+	}
+}
+
+// wheelStep is how many lines one wheel event scrolls down; negative scrolls up.
+func wheelStep(button tea.MouseButton) int {
+	switch button {
+	case tea.MouseWheelDown:
+		return 3
+	case tea.MouseWheelUp:
+		return -3
+	}
+	return 0
 }
 
 func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {

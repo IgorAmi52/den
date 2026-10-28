@@ -94,6 +94,10 @@ func (currentModel *model) openChat(about *store.Suggestion) tea.Cmd {
 
 func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 	state := &currentModel.chat
+	if wheel, isWheel := message.(tea.MouseWheelMsg); isWheel {
+		state.scrollOffset = max(state.scrollOffset-wheelStep(wheel.Mouse().Button), 0)
+		return currentModel, nil
+	}
 	if keyPress, isKeyPress := message.(tea.KeyPressMsg); isKeyPress {
 		keys := currentModel.keys
 		switch {
@@ -132,10 +136,10 @@ func (currentModel model) updateChat(message tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(keyPress, keys.newChat):
 			state.messages, state.pendingActions, state.scrollOffset = nil, nil, 0
 			return currentModel, nil
-		case keyPress.String() == "pgup":
+		case keyPress.String() == "pgup", keyPress.String() == "shift+up":
 			state.scrollOffset += 5
 			return currentModel, nil
-		case keyPress.String() == "pgdown":
+		case keyPress.String() == "pgdown", keyPress.String() == "shift+down":
 			state.scrollOffset = max(state.scrollOffset-5, 0)
 			return currentModel, nil
 		}
