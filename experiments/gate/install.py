@@ -51,7 +51,7 @@ def install(source, destination):
             shutil.copy2(source / relative_path, target)
         (staging_directory / "manifest.json").write_text(json.dumps({"version": version, "files": hashes}, indent=2) + "\n")
         prediction = subprocess.run(
-            [str(destination / "venv/bin/python"), str(pathlib.Path(__file__).resolve().parents[2] / "internal/brain/classifier.py"), str(staging_directory)],
+            [str(destination / "venv/bin/python"), str(pathlib.Path(__file__).with_name("legacy_classifier.py")), str(staging_directory)],
             input=json.dumps({"texts": ["SESSION\nInstallation verification: no new findings."]}),
             text=True, capture_output=True, timeout=90, check=True,
         )

@@ -179,7 +179,6 @@ func (currentModel model) chatInput() brain.ChatInput {
 			input.About += "\nwhat den based it on, quoted from the session:\n- " + strings.Join(state.about.Evidence, "\n- ")
 		}
 	}
-	input.Transcripts = currentModel.chatTranscripts("", "")
 	return input
 }
 
@@ -205,7 +204,9 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 	state.thinking = false
 	actions := brain.ResolveChatActions(answer, input, currentModel.workingDirectory)
 	text := replyText(answer.Reply, actions)
-	if len(answer.Actions) > len(actions) {
+	if brain.InvalidInstructionDraft(answer, actions) {
+		text = "That instruction draft did not pass validation. Nothing was saved. Ask me to revise its format or scope."
+	} else if len(answer.Actions) > len(actions) {
 		text += fmt.Sprintf("\n(%d change I thought of didn't match your folders, sessions or files, so I left it out.)", len(answer.Actions)-len(actions))
 	}
 	state.addMessage(brain.ChatMessage{FromDen: true, Text: text, Actions: actions})
@@ -214,7 +215,9 @@ func (currentModel *model) applyChatAnswer(answer brain.ChatAnswer, input brain.
 
 // applyChatActions makes the changes the user asked for in the chat and confirmed with enter.
 func (currentModel *model) applyChatActions(actions []brain.ChatAction) {
-	currentModel.doChatActions(actions)
+	if len(currentModel.doChatActions(actions)) == 0 {
+		return
+	}
 	currentModel.chat.settlePlan(planDone)
 }
 
@@ -250,6 +253,10 @@ func (currentModel *model) doChatActions(actions []brain.ChatAction) []string {
 	for _, action := range actions {
 		folder, session := repository.FindFolder(action.FolderId), repository.FindSession(action.SessionId)
 		switch action.Kind {
+		case "instructions":
+			if currentModel.reportError(repository.SaveInstructions(action.InstructionsText, action.InstructionVersion)) {
+				continue
+			}
 		case "link":
 			if folder != nil {
 				folder.LinkedPath = action.LinkedPath

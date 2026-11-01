@@ -1,75 +1,35 @@
-# Card review, feedback and discussions
+# Instruction-based card review
 
-DEN preserves information that helps future sessions make better decisions or avoid repeating meaningful work. Sessions are temporary; folders are continuing workspaces. Repo, parent and child context compose from broad knowledge to specific instructions. A nested skill adds a method at the scope where it applies, without repeating its parents.
+The fixed policy is [card_review.md](../internal/brain/card_review.md). It applies saved user instructions, without an additional durable-knowledge eligibility rule. The separate chat prompt manages those instructions and shares the evidence, routing and confirmation principles.
 
-The live Sol policy is [internal/brain/card_review.md](../internal/brain/card_review.md), embedded by `review_policy.go`. Edit that file to change reviewer behavior. The review and card-discussion prompts share its mental model. The [classifier gate](classifier-gate.md) still uses the deployed ModernBERT SetFit encoder, logistic head and 0.625 threshold; this change does not retrain it.
+## Context and routing
 
-## What earns a proposal
+The reviewer starts with active scoped instructions, complete new exchanges, a compact folder index, pending proposals and relevant rejection feedback. Each index entry includes a stable identifier, path, parent, purpose and short contents excerpt. Explicit purpose comes from `## Purpose` or `## Goal`; absent purpose is unspecified. Excerpts are deterministic and cached by content hash, with no model call per exchange.
 
-Sol receives the folder tree with stable identifiers, full destination contexts, source exchanges, waiting proposals and recorded rejection feedback. For each proposal it must identify supported information, its destination, what is missing from inherited context, and a concrete future task where retaining it changes an action or prevents rediscovery. Specific constraints and durable rationale can qualify after implementation. Routine status and temporary test output generally do not.
+Full contexts are staged as `context-<identifier>.md` files. Each contains the destination, ancestors and a `readVersion`. A proposed write must supply that version. The index cannot authorize rewriting or establish novelty. New folders read the parent's snapshot, including repo context for a top-level folder.
 
-For model-proposed keeps, Go requires confidence of at least **0.7**, a reason, a future-use explanation and nonempty evidence. Notes contain at most three related additions. A correction can name one exact existing destination passage to replace. Supporting quotes are retained but are not mechanically verified against the transcript; semantic usefulness, novelty and accuracy remain reviewer judgments. Existing local approved-plan and written-file triggers remain; those cards show their recorded reason when no model-written future-use explanation exists.
+An instruction may also request global coding-agent preferences. These use the existing rule cards, with the current supported global rule files staged in `global-rules.md`. Only an explicit user preference applying across projects qualifies. The proposal contains one exact addition and its affected files, requires acceptance, and is revalidated if those files change. Existing rules are never rewritten by this action. Reusable workflows are preserved in ordinary folder context for future sessions.
 
-Notes can target any existing folder or repo context, including discoveries from Inbox. The source session stays where it is. New-folder cards can move their source sessions only after acceptance. Existing folders with context receive methods through notes proposals; `skill/place: here` is reserved for an empty folder. Global rules require an explicit cross-repository preference, not an inferred preference from one task.
+Folders can serve any purpose. Instructions do not own folders, and observation scope does not choose a destination. Prefer a fitting existing folder, follow explicit placement preferences, and propose a reusable folder only when an actual finding has no suitable destination. New instruction-based folders leave source sessions in place.
 
-## Visible cards and saved backlog
+## Validation and maintenance
 
-At most five cards are visible. Additional valid proposals persist in `den.json` with `deferred: true`. There is no per-session or per-kind proposal limit. Context and link edits for the same destination become visible sequentially to avoid competing rewrites.
+Every proposal names its source instruction and revision, destination, supporting quotes, reason and exact change. Validation rejects unknown/inactive instructions, changed revisions, evidence absent from the supplied exchanges, unsupported confidence, unknown destinations and stale snapshot versions. Notes have no three-line truncation. An exact unique `replacesText` passage allows status corrections, resolutions, disproofs and removal of obsolete text while preserving unrelated content.
 
-Before a queued proposal appears, Sol checks it against current destination and inherited context, recent source exchanges and rejection feedback. The response is discarded if the proposal revision or context/source fingerprint changed while the call ran. Additive notes are rebuilt on the latest context and skip exact inherited duplicates. Whole-context rewrites need a refreshed complete text. If the file changes after display, acceptance refuses a stale rewrite or refreshes an additive proposal and requires a second confirmation.
+Acceptance applies the visible change. Changes to destination or inherited context require revalidation. Pending legacy proposals remain reviewable; the old automatic plan/link/skill proposal rules no longer create new cards. Existing explicit chat actions for agent rules and linked context remain separate from Den instruction management.
 
-Revalidation failures leave proposals queued, with a one-minute retry delay. Invalid proposals are withdrawn and logged. If a proposal has a conversation, it returns with the concern instead; acceptance is blocked until it is revised. Automatic card review also preserves cards being discussed or actively reviewed, with its concern blocking acceptance until revised. Explicit replacements retain the card identity, conversation, draft, position, source sessions and gate-call provenance; matching kind alone never replaces a card.
+Five proposals can be visible. Additional proposals persist in the backlog and are revalidated before promotion. Revalidation must read the current destination snapshot. Per-card discussions, saved drafts, rejection reasons and scoped destination corrections remain available. Pausing an instruction does not automatically withdraw its existing cards.
 
-## Using the card
+## Instructions and chat
 
-The card separates the proposed change and full destination, future usefulness, source, evidence and conversation. Notes show additions and removals. Questions and replies stay attached to the proposal even when another card is open.
+The **Instructions** row opens a list in the existing right panel. Enter edits the selected instruction; `n` creates one. The form separates Title, Instruction, and Examples, with Tab moving between fields. Typing and pasted text save automatically. Incomplete edits persist as drafts while the last valid active instruction remains unchanged. Conflicting edits stay as drafts instead of overwriting external changes; `x` discards a draft after confirmation. Space pauses/resumes an instruction; `d` deletes after confirmation.
 
-| Key | Action |
-| --- | --- |
-| Tab | Open the card dock; leave it when focused |
-| Enter | Send typed text, or accept when the input is empty |
-| Backspace, empty input | Open the required rejection-reason form |
-| Ctrl+D | Choose another destination for the proposal |
-| Ctrl+R | Start a revision request |
-| Ctrl+E | Expand or collapse supporting evidence |
-| Ctrl+J | Jump to the latest conversation and clear its unread marker |
-| PgUp / PgDown, Shift+Up / Shift+Down, touchpad | Scroll the card and discussion |
-| Up / Down, empty input | Switch cards; choose an option inside a form |
-| Escape | Cancel a form or leave the card |
+When leaving a changed instruction with missing or stale examples, Den proposes illustrative examples through the existing chat confirmation flow. Ctrl+G also requests examples, and `c` opens instruction chat. Generated examples never save without approval. The instruction itself remains saved if the model is unavailable. `m` opens the underlying Markdown editor; Alt+O opens an external editor. Built-in file editors autosave; invalid raw Markdown is preserved with a validation message until corrected. External editors retain their own save controls. Instructions remain outside coding-session context.
 
-Moving or revising a proposal does not write context or move its source sessions. It updates the draft proposal, which still needs acceptance. One discussion answer can revise one proposal; unrelated or multiple actions are not applied. Questions, replies, input drafts, evidence expansion and scroll positions persist across navigation and restarts. A stopped answer preserves the question and asks for a retry. New replies remain unread until Ctrl+J opens the latest conversation.
+An empty instruction panel offers four optional starters: issues and their status, explicitly postponed work, reusable workflows, and global coding-agent preferences. Space selects each behavior; Enter enables only the selected instructions together with their displayed illustrative examples. Existing instructions are preserved, and `s` reopens the chooser for missing starters. Starter matching checks stable identifiers, titles, and identical behavior text to avoid duplicates.
 
-## Feedback and future evaluation
+Instruction-panel chats receive no history files. General chat is explicitly forbidden from retrieving historical examples for setup. Changed behavior/scope invalidates old example approval fingerprints and permits direct review until examples are approved again. Instruction revision fingerprints also include title and examples for proposal provenance.
 
-Rejection requires one of these reasons:
+## Evaluation
 
-- Not useful for future work
-- Already covered
-- Incorrect or unsupported
-- Wrong destination
-- Too detailed or poorly written
-- Something else
-
-An additional explanation is optional except for “Something else.” The reason and explanation are saved with the full proposal, conversation, evidence, source sessions, reviewer identifier and triggering gate identifiers. Destination corrections also retain the old proposal and new destination. Rejection logging must succeed before a card is removed.
-
-Exact rejection keys identify information and destination. They no longer include source-session bans; legacy broad session keys are ignored. Every Sol card review requires a short factual outcome reason, including why it returns no new proposals or withdraws a card; this is retained in the calls and decision log. Sol also reads rejection feedback to avoid resurfacing the same rejected information through rewording. Wrong destination or poor writing is not a negative label for underlying usefulness. General lessons remain in `~/.den/lessons.md`, within the review policy rather than overriding it.
-
-| Storage | Contents |
-| --- | --- |
-| `~/.den/repos/<repo>/den.json` | Visible and deferred proposals, per-card discussion state, rejection feedback |
-| `decisions.jsonl` | Proposal snapshots, replacements, withdrawals, moves, revisions, revalidation, acceptance, rejection and discussion outcomes |
-| `calls.jsonl` and `prompts/` | Full model requests and responses, prompt versions, usage and call identifiers |
-
-Follow `gate call → card review → suggestion → decisions/revisions/revalidation`. The existing `den eval export` includes this state and these logs. Do not treat a rejection as an automatic negative gate label: duplication, destination and wording are separate problems. Build new training labels from reviewed evidence, retain conversation-group splits, and keep a fresh held-out set. The old classifier accuracy is not a measurement of this new reviewer/UI behavior.
-
-## Implementation and verification
-
-- `internal/brain/keep.go` validates model proposals and resolves their destinations.
-- `internal/store/suggestions.go` and `proposals.go` handle identity, feedback, persistence, safe context preparation and acceptance.
-- `internal/ui/proposal_backlog.go` schedules and applies revalidation.
-- `internal/ui/card_revision.go` updates proposals without applying them.
-- `internal/ui/dock.go` renders the card, forms and persistent conversation.
-
-Local rollout artifacts are kept in ignored `.local/card-rollout/`: the temporary scenario checks, their results, terminal render fixtures, and synthetic Sol requests/responses. They contain the initial nested-skill mismatch as well as its corrected rerun. The focused checks cover rejection scope, backlog persistence, sequential rebasing, stale-context acceptance, inherited duplicates, cross-folder routing, saved drafts/discussions, late replies, destination moves and narrow/wide rendering. These checks and the synthetic prompt cases establish behavior, not a new accuracy benchmark.
-
-Old context proposals without a context-version fingerprint enter the backlog on load for revalidation. Existing panels keep their loaded binary; restart the DEN panel to use a new build. The repository's existing single-writer state model is unchanged; simultaneous panels writing the same repo are not coordinated by this change.
+See [the feature report](../experiments/instructions/RESULTS.md) for historical relabeling, embedding comparisons, reviewer routing/lifecycle scenarios, chat flow, local safeguards, cost and latency. Synthetic scenario checks establish those behaviors; they are not an estimate of production proposal accuracy. The repository's existing single-writer state model remains: multiple panels writing the same repo are not coordinated by this feature.

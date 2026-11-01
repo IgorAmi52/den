@@ -27,9 +27,10 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 			updated, command = currentModel.updateMouse(typedMessage)
 		}
 	default:
-		if currentModel.contextPane.open && currentModel.contextPane.mode == contextPaneEditing {
-			currentModel.contextPane.editor, command = currentModel.contextPane.editor.Update(message)
-			updated = currentModel
+		if currentModel.contextPane.open && currentModel.contextPane.instructionEditor != nil {
+			updated, command = currentModel.updateInstructionEditor(message)
+		} else if currentModel.contextPane.open && currentModel.contextPane.mode == contextPaneEditing {
+			updated, command = currentModel.updateContextEditor(message)
 		} else if currentModel.contextPane.open && currentModel.contextPane.mode == contextPaneAsking {
 			currentModel.contextPane.prompt, command = currentModel.contextPane.prompt.Update(message)
 			updated = currentModel
@@ -141,6 +142,10 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		currentModel.setStatus("select a folder to add a subfolder to it")
 	case !exists:
 	case keyPress.String() == "right" && hasContextPane(selected):
+		if selected.kind == instructionsRow {
+			currentModel.openInstructionsPane()
+			return currentModel, nil
+		}
 		currentModel.openContextPane(selected.folderId())
 		return currentModel, nil
 	case key.Matches(keyPress, keys.open):
@@ -154,6 +159,9 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 			currentModel.setArchived([]string{selected.session.SessionId}, !selected.session.Archived)
 		}
 	case key.Matches(keyPress, keys.editContext):
+		if selected.kind == instructionsRow {
+			return currentModel, currentModel.editInstructions()
+		}
 		if selected.kind == contextFileRow {
 			return currentModel, currentModel.editContextFile(selected.laptopTool)
 		}
@@ -205,6 +213,8 @@ func (currentModel model) updateFilter(keyPress tea.KeyPressMsg) (tea.Model, tea
 // openRow opens or closes a folder, focuses an open agent, resumes a saved session, or edits a context file.
 func (currentModel *model) openRow(row listRow) tea.Cmd {
 	switch row.kind {
+	case instructionsRow:
+		currentModel.openInstructionsPane()
 	case repositoryRow:
 		currentModel.repositoryExpanded = !currentModel.repositoryExpanded
 	case contextFileRow:

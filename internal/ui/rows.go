@@ -14,6 +14,7 @@ const (
 	// shown as contextFileRow children.
 	repositoryRow rowKind = iota
 	contextFileRow
+	instructionsRow
 	inboxRow
 	folderRow
 	archiveRow
@@ -69,7 +70,7 @@ func (currentModel model) treeRows(expandAll bool) []listRow {
 			rows = append(rows, listRow{kind: contextFileRow, laptopTool: file.Tool, depth: 1})
 		}
 	}
-	rows = append(rows, listRow{kind: inboxRow})
+	rows = append(rows, listRow{kind: instructionsRow}, listRow{kind: inboxRow})
 	if !currentModel.inboxCollapsed || expandAll {
 		rows = append(rows, currentModel.rowsInFolder("", 1, expandAll)...)
 	}

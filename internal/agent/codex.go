@@ -169,9 +169,12 @@ func readCodexTurns(transcriptPath string) ([]Turn, error) {
 		for _, item := range event.Payload.Content {
 			if event.Payload.Role == "assistant" && strings.TrimSpace(item.Text) != "" {
 				agentText = item.Text
+				if len(turns) > 0 {
+					turns[len(turns)-1].Reply += item.Text + "\n\n"
+				}
 			}
 			if event.Payload.Role == "user" && isTypedPrompt(item.Text) {
-				turns = append(turns, Turn{Agent: endOf(agentText, turnTextLength), User: startOf(item.Text, turnTextLength)})
+				turns = append(turns, Turn{Agent: agentText, User: item.Text})
 				agentText = ""
 				break
 			}

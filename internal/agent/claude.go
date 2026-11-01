@@ -244,11 +244,14 @@ func readClaudeTurns(transcriptPath string) ([]Turn, error) {
 			for _, block := range claudeBlocks(event.Message.Content) {
 				if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
 					agentText = block.Text
+					if len(turns) > 0 {
+						turns[len(turns)-1].Reply += block.Text + "\n\n"
+					}
 				}
 			}
 		case "user":
 			if prompt := firstTypedText(event.Message.Content); prompt != "" && !event.IsMeta {
-				turns = append(turns, Turn{Agent: endOf(agentText, turnTextLength), User: startOf(prompt, turnTextLength)})
+				turns = append(turns, Turn{Agent: agentText, User: prompt})
 				agentText = ""
 			}
 		}

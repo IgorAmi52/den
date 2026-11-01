@@ -33,10 +33,13 @@ type ChatMessage struct {
 
 // ChatAction is a change the user asked for in the chat, checked against what exists; it waits for their enter.
 type ChatAction struct {
-	Kind       string
-	FolderId   string
-	SessionId  string
-	LinkedPath string
+	InstructionDraft   *store.Instruction
+	InstructionsText   string
+	InstructionVersion string
+	Kind               string
+	FolderId           string
+	SessionId          string
+	LinkedPath         string
 	// Name is the new name, or for a move into a folder the same answer creates, that folder's name.
 	Name string
 	// Target is folder, repo or laptop, for a rule.
@@ -182,10 +185,83 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 		}
 	}
 	var actions []ChatAction
+	instructionActionAdded := false
 	for _, proposed := range answer.Actions {
 		folder, session := findFolder(proposed.Folder), findSession(proposed.Session)
 		name := strings.TrimSpace(proposed.Name)
 		switch proposed.Type {
+		case "saveInstruction", "pauseInstruction", "resumeInstruction", "deleteInstruction":
+			if instructionActionAdded {
+				break
+			}
+			current, failure := repository.ReadInstructions()
+			if failure != nil {
+				break
+			}
+			instructions, failure := store.ParseInstructions(current)
+			if failure != nil {
+				break
+			}
+			position := slices.IndexFunc(instructions, func(instruction store.Instruction) bool { return instruction.Identifier == proposed.From })
+			if proposed.From != "" && position < 0 {
+				break
+			}
+			var instruction store.Instruction
+			if position >= 0 {
+				instruction = instructions[position]
+			}
+			switch proposed.Type {
+			case "saveInstruction":
+				if strings.TrimSpace(proposed.Text) == "" || name == "" || strings.ContainsAny(name, "\r\n") {
+					continue
+				}
+				scope := "repo"
+				if proposed.Folder != "" && proposed.Folder != "repo" {
+					if folder == nil {
+						continue
+					}
+					scope = folder.Id
+				}
+				instruction.Title, instruction.Text, instruction.Scope = name, strings.TrimSpace(proposed.Text), scope
+				instruction.Examples = proposed.Examples
+				validExamples := true
+				for _, example := range proposed.Examples {
+					if strings.TrimSpace(example) == "" || strings.ContainsAny(example, "\r\n") {
+						validExamples = false
+						break
+					}
+				}
+				if !validExamples {
+					continue
+				}
+				instruction.ExamplesRevision = instruction.BehaviorVersion()
+				if instruction.Identifier == "" {
+					instruction.Identifier = store.ContextVersion(name)[:12]
+				}
+				if position < 0 {
+					instructions = append(instructions, instruction)
+				} else {
+					instructions[position] = instruction
+				}
+			case "pauseInstruction", "resumeInstruction":
+				if position < 0 {
+					continue
+				}
+				instruction.Paused = proposed.Type == "pauseInstruction"
+				instructions[position] = instruction
+			case "deleteInstruction":
+				if position < 0 {
+					continue
+				}
+				instructions = slices.Delete(instructions, position, position+1)
+			}
+			updated := store.FormatInstructions(instructions)
+			if _, failure := store.ParseInstructions(updated); failure != nil {
+				break
+			}
+			actions = append(actions, ChatAction{InstructionDraft: &instruction, Kind: "instructions", InstructionsText: updated, InstructionVersion: store.ContextVersion(current),
+				Text: InstructionPreview(instruction, repository), Description: instructionActionDescription(proposed.Type) + " “" + instruction.Title + "”"})
+			instructionActionAdded = true
 		case "link":
 			files := agent.MarkdownFilesIn(proposed.File, workingDirectory, repository.RepositoryPath)
 			if folder != nil && len(files) > 0 {
@@ -365,4 +441,47 @@ func relativeTo(directory string, filePath string) string {
 		return relativePath
 	}
 	return filePath
+}
+
+func instructionActionDescription(kind string) string {
+	switch kind {
+	case "saveInstruction":
+		return "save instruction and illustrative examples"
+	case "pauseInstruction":
+		return "pause instruction"
+	case "resumeInstruction":
+		return "resume instruction"
+	case "deleteInstruction":
+		return "delete instruction"
+	}
+	return kind
+}
+
+func InstructionPreview(instruction store.Instruction, repository *store.Repository) string {
+	scope := "this repo"
+	if instruction.Scope != "repo" {
+		scope = repository.ContextDestination(instruction.Scope) + " and subfolders"
+	}
+	status := "active"
+	if instruction.Paused {
+		status = "paused"
+	}
+	text := "## " + instruction.Title + "\n\nScope: " + scope + "  \nStatus: " + status + "\n\n" + instruction.Text + "\n"
+	if len(instruction.Examples) > 0 {
+		text += "\n### Trigger examples\n"
+		for _, example := range instruction.Examples {
+			text += "\n- " + example + "\n"
+		}
+		if len(instruction.ApprovedExamples()) == 0 {
+			text += "\nThese examples need review after the instruction changed. Den uses direct review until then.\n"
+		}
+	}
+	return text
+}
+
+func InvalidInstructionDraft(answer ChatAnswer, actions []ChatAction) bool {
+	hasInstructionRequest := slices.ContainsFunc(answer.Actions, func(action ChatProposedAction) bool {
+		return action.Type == "saveInstruction" || action.Type == "pauseInstruction" || action.Type == "resumeInstruction" || action.Type == "deleteInstruction"
+	})
+	return hasInstructionRequest && !slices.ContainsFunc(actions, func(action ChatAction) bool { return action.Kind == "instructions" })
 }

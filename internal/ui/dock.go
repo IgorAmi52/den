@@ -326,7 +326,7 @@ func (currentModel model) spelledOutCard(suggestion store.Suggestion) string {
 	if suggestion.Kind == store.SuggestFolder {
 		destination = suggestion.ParentFolderId
 	}
-	lines := []string{suggestionTag(suggestion) + ": " + store.CardSummary(suggestion), "destination: " + currentModel.repository.ContextDestination(destination), "future use: " + suggestion.FutureUse, "reason: " + suggestion.Reason,
+	lines := []string{suggestionTag(suggestion) + ": " + store.CardSummary(suggestion), "destination: " + currentModel.repository.ContextDestination(destination), "instruction: " + suggestion.InstructionTitle, "reason: " + suggestion.Reason,
 		"source: " + suggestion.Source, "evidence: " + strings.Join(suggestion.Evidence, "\n"), "whole proposed text:\n" + suggestion.ProposedText}
 	if suggestion.LinkedPath != "" {
 		lines = append(lines, "linked file: "+suggestion.LinkedPath, store.ReadText(suggestion.LinkedPath))
@@ -400,7 +400,10 @@ func (currentModel model) cardBody(suggestion store.Suggestion, width int) []str
 	if suggestion.ReviewConcern != "" {
 		body = append(body, "", theme.bold.Render("Needs revision"), suggestion.ReviewConcern)
 	}
-	body = append(body, "", theme.bold.Render("Why this helps a future session"))
+	if suggestion.InstructionTitle != "" {
+		body = append(body, "", theme.bold.Render("Instruction"), suggestion.InstructionTitle)
+	}
+	body = append(body, "", theme.bold.Render("Why Den proposes this"))
 	usefulness := suggestion.FutureUse
 	if usefulness == "" {
 		usefulness = suggestion.Reason

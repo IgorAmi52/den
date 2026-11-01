@@ -42,7 +42,9 @@ func (currentModel model) suggestionBody(suggestion store.Suggestion, width int)
 		} else {
 			lines = append(lines, currentModel.renderedMarkdown(suggestion.ProposedText, width)...)
 		}
-		if suggestion.Skill {
+		if suggestion.InstructionIdentifier != "" {
+			lines = append(lines, "", theme.dim.Render("New sessions there inherit this context. The source session stays where it is."))
+		} else if suggestion.Skill {
 			lines = append(lines, "", theme.dim.Render("Every session you start in it begins with these instructions."))
 		} else {
 			lines = append(lines, "", theme.dim.Render("The session moves into it, and every new session there begins with this context."))

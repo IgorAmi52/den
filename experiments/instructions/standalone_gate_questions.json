@@ -1,0 +1,18 @@
+{
+  "issues": "Does the new exchange describe a problem, bug, failure, or unexpected behavior, or report progress, a fix, or evidence that rules out a previously suspected problem?",
+  "deferred": "Does the new exchange describe work deliberately left for later, or report a change to or completion of previously postponed work?",
+  "architecture": "Does the new exchange state or revise a decision about software architecture, technology choices, or design, or explain why such a decision was made?",
+  "api": "Does the new exchange describe a restriction or required behavior of an external API, a workaround for it, or a change to a previously known restriction or workaround?",
+  "measured_resource_cost_changes": "Does the new exchange report a measured change in computing resource use or operating cost, or a later measurement that revises an earlier finding about resource use or cost?",
+  "accessibility_barriers": "Does the new exchange describe a concrete barrier to a person with a disability using the product, or evidence that confirms, fixes, or rules out such a barrier?",
+  "credentials_personal_data_exposure": "Does the new exchange report confirmed or credibly suspected exposure of credentials or personal data, containment of such exposure, or evidence that confirms or rules it out?",
+  "backward_compatibility_commitments": "Does the new exchange report an accepted commitment to preserve backward compatibility for existing clients, integrations, or data formats, or a change, fulfillment, or withdrawal of such a commitment?",
+  "reproducibility_provenance": "Does the new exchange report an actual attempt to reproduce a specific result that failed because the original input snapshot, code revision, instrument settings, or other required run details are missing?",
+  "release_go_no_go": "Does the new exchange explicitly tie a concrete readiness criterion to a decision or outcome about whether a release goes ahead?",
+  "artifact_retention_commitments": "Does the new exchange report an accepted or implemented commitment to retain or delete non-personal project artifacts, with a stated scope or duration?",
+  "documentation_behavior_conflict": "Does the new exchange report observed product behavior that contradicts a specific claim in user-facing documentation?",
+  "handoff_without_recipient": "Does the new exchange describe a concrete work item or decision left without a responsible recipient after a handoff was expected or attempted?",
+  "contractual_product_use_limits": "Does the new exchange report an applicable, agreed customer or vendor contract term limiting how the product may be used, deployed, or accessed, excluding open-source and dependency licenses?",
+  "end_user_workaround_need": "Does the new exchange describe an observed end-user workaround that manually compensates for a product capability that is still missing?",
+  "implicit_units_time_currency": "Does the new exchange report a result or decision whose interpretation depends on an unstated or inconsistent currency, measurement unit, or time zone?"
+}

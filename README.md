@@ -66,7 +66,7 @@
 
 Install [Homebrew](https://brew.sh) first if it is not already available.
 
-**Release status:** the formula currently installs `v0.2.0`. The local classifier and persistent card discussions described below are newer, unreleased changes. They become available through Homebrew after a new release updates the formula; `--HEAD` follows published `main`, so it does not include unpublished work.
+**Release status:** the formula currently installs `v0.2.0`. User-defined instructions, the experimental local gate and persistent card discussions described below are newer, unreleased changes. They become available through Homebrew after a new release updates the formula; `--HEAD` follows published `main`, so it does not include unpublished work.
 
 ```sh
 brew tap IgorAmi52/den https://github.com/IgorAmi52/den
@@ -96,7 +96,7 @@ command -v den
 
 Add that `PATH` line to `~/.zshrc` to keep it in new terminals. Source installs use `~/.local/bin/den`; Homebrew installs use its own prefix. Check `command -v den` when switching between them. `make install` builds first, creates the destination directory, then safely replaces the binary; a failed build leaves the installed version intact. A custom destination is supported: `make install INSTALL_DIRECTORY="/your/bin"`.
 
-**Local classifier, in the current source.** This is a separate optional installation. Homebrew and a Git clone do not include the trained ModernBERT files. Without them, DEN logs the missing runtime and sends exchanges directly to its model reviewer. Suggestions still work, with more model calls and potentially higher cost; Python is not required in that mode. The classifier runtime has been verified on Apple silicon macOS. Its pinned Python stack is not supported on Intel Macs; direct reviews remain available there. To install it you need `uv`, the separately provided model artifacts and several gigabytes of free space. Follow [classifier installation](docs/classifier-gate.md#install-or-restore). There is no public model download yet.
+**User instructions.** Teach Den what to notice through the Instructions row or repo chat. Choose optional starters for issues, postponed work, reusable workflows, and global coding-agent preferences. Enter edits one instruction; `n` adds one, with separate instruction and example fields and automatic saving. Den suggests missing examples for approval. Context file editors also autosave. Den proposes context changes or requested global-rule additions for your approval; monitoring instructions stay outside coding-session context. The optional trained MiniLM gate runs locally on CPU; without it, Sol reviews directly. It is an interim personal choice with known misses, not a validated general-purpose gate. See [runtime results](experiments/instructions/RUNTIME_INTEGRATION.md) and [installation](docs/classifier-gate.md#experimental-installation).
 
 **Upgrades.** Use `brew update` and `brew upgrade den` for a released version, or rebuild your source checkout. Existing panels keep running their old binary; merely reattaching to tmux does not reload it. Restart DEN after your agents have finished: **`q` closes the entire DEN window, including its agent panes.** Saved context, cards and discussions remain in `~/.den`. Back up that directory before downgrading; older versions may discard state fields they do not understand.
 
@@ -132,6 +132,7 @@ Marks: `●` working · `!` needs you · `✓` your turn · `◆` has context ·
 - **One task, one session.** Let sessions go. They archive themselves 3 days after you last used them, and stay resumable.
 - **Context is what lasts.** A folder's context is a short markdown file every session started in it begins with. Folders nest, and context adds up: `repo → Checkout → Coupons`.
 - **Two kinds of folders.** A piece of work (`Checkout → Coupons`: what's decided, what's open) or a way of working (`Exploration`: *research only, cite file and line*). Folders are den's own labels, not directories.
+- **Teach Den what to notice.** Open **Instructions**, or ask in chat: *"Catch issues mentioned in my sessions and keep their status current."* Review its illustrative examples, then confirm. Pause or revise the behavior whenever needed.
 - **Don't write context, ask for it.** *"make the context from the latest session"*, *"add that we decided X"*, or accept one of den's suggestions.
 
 ## 📖 Features
@@ -160,7 +161,7 @@ A handoff covers where it stands, decisions, what's next and the files involved.
 
 <img src="docs/images/context-change.png" alt="Coupons' context with den's proposed change shown as a diff." width="760">
 
-<kbd>→</kbd> on a folder opens its context. <kbd>↓</kbd> asks den to change it, and you get a diff to confirm. <kbd>↑</kbd> edits it by hand (<kbd>⌥</kbd><kbd>O</kbd> opens `$EDITOR`). To use a file of your own instead, like `docs/PLAN.md`, tell den *"link docs/PLAN.md to Coupons"*. The `◆ context` row at the top is the repo's, and every session starts with it.
+<kbd>→</kbd> on a folder opens its context. <kbd>↓</kbd> asks den to change it, and you get a diff to confirm. <kbd>↑</kbd> edits it by hand; changes save automatically, and <kbd>Esc</kbd> returns to the panel. This also applies to the Instructions editor. <kbd>⌥</kbd><kbd>O</kbd> opens `$EDITOR`, which uses its own save controls. To use a file of your own instead, like `docs/PLAN.md`, tell den *"link docs/PLAN.md to Coupons"*. The `◆ context` row at the top is the repo's, and every session starts with it.
 
 </details>
 
@@ -170,7 +171,7 @@ A handoff covers where it stands, decisions, what's next and the files involved.
 
 <img src="docs/images/suggestion-card.png" alt="A FOLDER card with the context den drafted and the quotes it's based on." width="760">
 
-After a completed reply, a local classifier decides whether Sol should review it for useful context. Plans, markdown writes and pending cards always get a review; there is no hourly review cap. See the [classifier setup and behavior](docs/classifier-gate.md). When something is worth keeping, a card waits at the bottom of den: <kbd>↵</kbd> accept · <kbd>⌫</kbd> reject with a reason · or type a question or revision.
+After a completed reply, Den applies your active saved instructions. Sol reviews applicable exchanges directly unless a local gate is installed; pending cards still receive maintenance review. There is no hourly review cap. See [instruction gate behavior](docs/classifier-gate.md). When an instruction warrants a supported change, a card waits at the bottom of den: <kbd>↵</kbd> accept · <kbd>⌫</kbd> reject with a reason · or type a question or revision.
 
 | Card | Yes does |
 | --- | --- |
@@ -252,7 +253,7 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 
 - **⌥ keys type characters** like `¬`. **Terminal.app:** Settings → Profiles → Keyboard → *Use Option as Meta key*. **iTerm2:** Settings → Profiles → Keys → *Left Option key: Esc+*. **Ghostty:** `macos-option-as-alt = true`, then reload with <kbd>⌘</kbd><kbd>⇧</kbd><kbd>,</kbd>.
 - **Sessions don't get named or chat cannot answer:** check the selected agent's login, model access and network connection. Codex takes precedence when both CLIs are on `PATH`. After 3 consecutive failed calls DEN pauses its model until the panel restarts; queued cards remain saved.
-- **Local classifier unavailable:** missing runtime files allow direct model reviews. If you installed the runtime, check that `DEN_HOME` matches the installer and use [the classifier setup guide](docs/classifier-gate.md#install-or-restore). This message does not mean your sessions or context were lost.
+- **Local gate unavailable:** missing runtime files normally use direct model reviews; damaged installed artifacts show an error and also allow review. If you installed the runtime, check that `DEN_HOME` matches the installer and use [the gate setup guide](docs/classifier-gate.md#experimental-installation). This message does not mean your sessions or context were lost.
 - **An upgrade seems to do nothing:** check `command -v den` for a source/Homebrew conflict, then restart the old panel after your agents finish.
 - **Uninstall:** `brew uninstall den`, or remove the source-installed `~/.local/bin/den`. Your notes and saved cards remain in `~/.den` (or `DEN_HOME`). Delete that directory only if you also want to permanently remove DEN's context, feedback and classifier runtime. Agent transcript storage is separate.
 

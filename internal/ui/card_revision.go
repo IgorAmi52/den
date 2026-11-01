@@ -49,6 +49,7 @@ func (currentModel *model) moveCard(suggestion *store.Suggestion, destination st
 	if currentModel.reportError(currentModel.repository.PrepareSuggestion(&candidate)) {
 		return
 	}
+	candidate.ContextReadVersion = currentModel.repository.SuggestionReadVersion(candidate)
 	candidate.Deferred = !currentModel.repository.CanShow(candidate)
 	candidate.RevalidateAfter = time.Time{}
 	candidate.Revision++
@@ -100,6 +101,7 @@ func (currentModel *model) reviseCard(suggestion *store.Suggestion, action brain
 	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "revise", Action: "proposal revision", Outcome: "superseded", CallId: action.CallId, Suggestion: suggestion}))
 	candidate.Revision++
 	candidate.CallId = action.CallId
+	candidate.ContextReadVersion = currentModel.repository.SuggestionReadVersion(candidate)
 	candidate.Deferred = !currentModel.repository.CanShow(candidate)
 	candidate.RevalidateAfter = time.Time{}
 	*suggestion = candidate

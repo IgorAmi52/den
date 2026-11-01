@@ -153,8 +153,11 @@ func callClaude(deadline context.Context, callDirectory string, request Request)
 		return nil, Usage{}, err
 	}
 	tools := []string{"--tools", ""}
-	if request.ReadsRepository != "" {
-		tools = []string{"--tools", "Read,Glob,Grep", "--add-dir", request.ReadsRepository}
+	if request.ReadsRepository != "" || len(request.Files) > 0 {
+		tools = []string{"--tools", "Read,Glob,Grep"}
+		if request.ReadsRepository != "" {
+			tools = append(tools, "--add-dir", request.ReadsRepository)
+		}
 	}
 	arguments := append([]string{"-p", "--safe-mode", "--model", claudeModels[request.Tier], "--settings", `{"alwaysThinkingEnabled":false}`,
 		"--system-prompt", request.System}, tools...)
@@ -204,7 +207,17 @@ func callCodex(deadline context.Context, callDirectory string, request Request) 
 		if err := os.WriteFile(instructionsPath, []byte(request.System), 0o644); err != nil {
 			return nil, Usage{Model: model.name}, err
 		}
-		arguments := append(slices.Clone(slimCodexArguments), "-c", fmt.Sprintf("model_instructions_file=%q", instructionsPath))
+		arguments := slices.Clone(slimCodexArguments)
+		if len(request.Files) > 0 {
+			arguments = nil
+			for position := 0; position < len(slimCodexArguments); position += 2 {
+				setting := slimCodexArguments[position+1]
+				if setting != "shell_tool" && setting != "unified_exec" {
+					arguments = append(arguments, slimCodexArguments[position:position+2]...)
+				}
+			}
+		}
+		arguments = append(arguments, "-c", fmt.Sprintf("model_instructions_file=%q", instructionsPath))
 		answer, usage, err := runCodex(deadline, callDirectory, model, schemaPath, arguments, request.Prompt)
 		if err == nil || deadline.Err() != nil {
 			return answer, usage, err

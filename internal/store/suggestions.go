@@ -41,20 +41,24 @@ type CardFeedback struct {
 }
 
 type Suggestion struct {
-	RevalidateAfter     time.Time     `json:"revalidateAfter,omitzero"`
-	FutureUse           string        `json:"futureUse,omitempty"`
-	ReviewConcern       string        `json:"reviewConcern,omitempty"`
-	AddedLines          []string      `json:"addedLines,omitempty"`
-	ContextVersion      string        `json:"contextVersion,omitempty"`
-	Deferred            bool          `json:"deferred,omitempty"`
-	Revision            int           `json:"revision,omitempty"`
-	Conversation        []CardMessage `json:"conversation,omitempty"`
-	Draft               string        `json:"draft,omitempty"`
-	ScrollOffset        int           `json:"scrollOffset,omitempty"`
-	EvidenceExpanded    bool          `json:"evidenceExpanded,omitempty"`
-	ReplyPending        bool          `json:"replyPending,omitempty"`
-	UnreadReply         bool          `json:"unreadReply,omitempty"`
-	GateCallIdentifiers []string      `json:"gateCallIdentifiers,omitempty"`
+	InstructionIdentifier string        `json:"instructionIdentifier,omitempty"`
+	InstructionRevision   string        `json:"instructionRevision,omitempty"`
+	InstructionTitle      string        `json:"instructionTitle,omitempty"`
+	ContextReadVersion    string        `json:"contextReadVersion,omitempty"`
+	RevalidateAfter       time.Time     `json:"revalidateAfter,omitzero"`
+	FutureUse             string        `json:"futureUse,omitempty"`
+	ReviewConcern         string        `json:"reviewConcern,omitempty"`
+	AddedLines            []string      `json:"addedLines,omitempty"`
+	ContextVersion        string        `json:"contextVersion,omitempty"`
+	Deferred              bool          `json:"deferred,omitempty"`
+	Revision              int           `json:"revision,omitempty"`
+	Conversation          []CardMessage `json:"conversation,omitempty"`
+	Draft                 string        `json:"draft,omitempty"`
+	ScrollOffset          int           `json:"scrollOffset,omitempty"`
+	EvidenceExpanded      bool          `json:"evidenceExpanded,omitempty"`
+	ReplyPending          bool          `json:"replyPending,omitempty"`
+	UnreadReply           bool          `json:"unreadReply,omitempty"`
+	GateCallIdentifiers   []string      `json:"gateCallIdentifiers,omitempty"`
 
 	Id     string         `json:"id"`
 	Kind   SuggestionKind `json:"kind"`
@@ -293,6 +297,21 @@ func (repository *Repository) Accept(suggestionId string) (string, error) {
 	if found.ReviewConcern != "" {
 		return "", fmt.Errorf("revise this proposal before accepting: %s", found.ReviewConcern)
 	}
+	if found.InstructionIdentifier != "" {
+		instructions, failure := repository.Instructions()
+		if failure != nil {
+			return "", failure
+		}
+		if !slices.ContainsFunc(instructions, func(instruction Instruction) bool {
+			return instruction.Identifier == found.InstructionIdentifier && instruction.Revision() == found.InstructionRevision
+		}) {
+			return "", fmt.Errorf("the source instruction changed or was deleted; revise this proposal before accepting")
+		}
+		if found.ContextReadVersion != repository.SuggestionReadVersion(*found) {
+			found.Deferred = true
+			return "", fmt.Errorf("destination or inherited context changed; proposal queued for revalidation")
+		}
+	}
 	if found.Kind == SuggestContext && found.ContextVersion != ContextVersion(repository.ReadContext(found.FolderId)) {
 		if err := repository.PrepareSuggestion(found); err != nil {
 			return "", err
@@ -325,6 +344,9 @@ func (repository *Repository) Accept(suggestionId string) (string, error) {
 			}
 		}
 		for _, sessionId := range suggestion.SessionIds {
+			if suggestion.InstructionIdentifier != "" {
+				continue
+			}
 			if session := repository.FindSession(sessionId); session != nil {
 				session.FolderId, session.Archived, session.ArchivedAt = folderId, false, time.Time{}
 			}

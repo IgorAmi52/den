@@ -775,7 +775,7 @@ func (currentModel *model) applyObservation(observed observedMessage) {
 		changed = true
 		currentModel.setStatus(fmt.Sprintf("forgot %s archived over %d days ago", countedSessions(forgotten), archiveKeepDays()))
 	}
-	if currentModel.runRules() || changed {
+	if changed {
 		currentModel.saveRepository()
 	}
 }
@@ -786,23 +786,6 @@ func (currentModel model) openSessionIds() map[string]bool {
 		openSessionIds[open.sessionId] = true
 	}
 	return openSessionIds
-}
-
-// runRules offers what the local rules find in the current state; it reads nothing from disk, so it runs after every change.
-// It reports whether the queue changed.
-func (currentModel *model) runRules() bool {
-	observation := brain.Observation{
-		Repository:    &currentModel.repository,
-		Digests:       currentModel.digests,
-		ContextTokens: currentModel.contextTokens,
-	}
-	changed := false
-	for _, suggestion := range brain.Suggest(observation) {
-		if currentModel.repository.Offer(suggestion) {
-			changed = true
-		}
-	}
-	return changed
 }
 
 // refreshContextTokens notes which folders have context, linked or den's notes, and how big each is,
@@ -835,9 +818,7 @@ func (currentModel *model) refreshContextTokens() {
 }
 
 // saveRepository keeps sessions ordered by last activity, newest first, and writes folders and sessions to disk.
-// The rules run first, so suggestions follow every change right away.
 func (currentModel *model) saveRepository() {
-	currentModel.runRules()
 	slices.SortStableFunc(currentModel.repository.Sessions, func(first store.Session, second store.Session) int {
 		return second.LastActivityAt.Compare(first.LastActivityAt)
 	})

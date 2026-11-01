@@ -83,7 +83,7 @@ func Export(outputDirectory string, now time.Time) (exportSummary Summary, expor
 	tarWriter := tar.NewWriter(gzipWriter)
 	packer := packer{tarWriter: tarWriter, root: archiveName}
 
-	if err := packer.addDirectory("data", dataDirectory, filepath.Join(dataDirectory, "tmp"), filepath.Join(dataDirectory, "gate", "venv"), filepath.Join(dataDirectory, "gate", "model", "model")); err != nil {
+	if err := packer.addDirectory("data", dataDirectory, filepath.Join(dataDirectory, "tmp"), filepath.Join(dataDirectory, "gate", "venv"), filepath.Join(dataDirectory, "gate", "model", "model"), filepath.Join(dataDirectory, "instruction-gate", "venv"), filepath.Join(dataDirectory, "instruction-gate", "model")); err != nil {
 		return Summary{}, err
 	}
 	exported := manifest{ExportedAt: now, DenVersion: store.DenVersion(), User: userName,

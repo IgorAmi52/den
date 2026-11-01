@@ -36,6 +36,7 @@ type Adapter interface {
 // Turn is one prompt the user typed, with what the agent said just before, since "nono, not like that"
 // means nothing without it.
 type Turn struct {
+	Reply string
 	Agent string
 	User  string
 }

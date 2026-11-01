@@ -299,6 +299,8 @@ func (currentModel model) rowSegments(row listRow, width int) (left []segment, r
 	case repositoryRow:
 		left = []segment{{text: "◆ ", style: theme.accent}, {text: "context", style: theme.accent}}
 		right = append(proposalMark(), segment{text: folderArrow(!currentModel.repositoryExpanded), style: theme.dim})
+	case instructionsRow:
+		left = []segment{{text: "Instructions", style: theme.accent}}
 	case contextFileRow:
 		name, scope, tokens := currentModel.contextFileDetails(row.laptopTool)
 		left = []segment{{text: name, style: theme.dim}, {text: " " + scope, style: theme.faint}}
@@ -371,8 +373,12 @@ func (currentModel model) footer(width int) []string {
 	}
 	var lines []string
 	switch {
+	case currentModel.contextPane.open && currentModel.confirming != nil:
+		lines = []string{currentModel.confirmationLine(width), theme.dim.Render(truncate(currentModel.confirming.detail, width))}
 	case currentModel.contextPane.open && currentModel.statusMessage != "":
 		lines = []string{theme.dim.Render(truncate(currentModel.statusMessage, width))}
+	case currentModel.contextPane.open && currentModel.contextPane.instructions:
+		lines = []string{theme.dim.Render("editing Den instructions on the right")}
 	case currentModel.contextPane.open:
 		lines = []string{theme.dim.Render(truncate("editing "+currentModel.contextHeading(currentModel.contextPane.folderId)+"'s context on the right", width))}
 	case currentModel.dock.focused:

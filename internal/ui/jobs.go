@@ -26,8 +26,6 @@ const (
 	quietAfter = 10 * time.Minute
 	// replySettledAfter is how long the transcript of an agent den can't read the status of stays unchanged before its reply counts as done.
 	replySettledAfter = time.Minute
-	// minimumCardReviewTurns is how many turns a card review reads at least, so a single new one has what led to it.
-	minimumCardReviewTurns = 2
 	// maximumTitleLength drops titles that ignored the naming rules.
 	maximumTitleLength = 40
 	// maximumHelperFailures turns the model off for the rest of the run, so a broken login doesn't fail every 20 seconds.
@@ -61,16 +59,20 @@ func (kind jobKind) String() string {
 
 // job is one model call. Its input is built when it starts, so it sees the latest state.
 type job struct {
-	kind         jobKind
-	sessionId    string
-	suggestionId string
+	contextGeneration int
+	kind              jobKind
+	sessionId         string
+	suggestionId      string
 	// rejectedCard is the card a lesson job learns from, spelled out with anything said about it.
 	rejectedCard     string
 	proposalRevision int
 }
 
 type jobDoneMessage struct {
-	job job
+	sourceEvidence     string
+	reviewFirstPrompt  int
+	instructionVersion string
+	job                job
 	// promptCount is how many prompts a review covered.
 	promptCount int
 	// cardLabels are the waiting cards a card review saw, by the label it withdraws them with, to their suggestion ids.
@@ -163,6 +165,9 @@ func (currentModel *model) jobCommand(next job) tea.Cmd {
 		next.proposalRevision = suggestion.Revision
 		return run(brain.ProposalReviewRequest(repository, *suggestion, currentModel.proposalSource(*suggestion)), &brain.ProposalReviewAnswer{}, jobDoneMessage{job: next, proposalEnvironment: currentModel.proposalEnvironment(*suggestion)})
 	case contextJob:
+		if !currentModel.contextPane.open || currentModel.contextPane.generation != next.contextGeneration {
+			return nil
+		}
 		input := currentModel.contextPaneInput()
 		input.Lessons = store.ReadLessons()
 		return run(brain.ChatRequest(input), &brain.ChatAnswer{}, jobDoneMessage{job: next, chatInput: input})
@@ -193,7 +198,7 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 	done.chatInput.CallId = callId
 	if answer, classified := done.answer.(*brain.ClassifierAnswer); classified {
 		if answer.InferenceError != "" {
-			currentModel.setError("Local classifier unavailable; sending exchanges to the card reviewer: " + answer.InferenceError)
+			currentModel.setError("Local instruction gate unavailable; sending exchanges to the card reviewer: " + answer.InferenceError)
 		}
 		currentModel.applyGate(done, answer.GateAnswer, callId)
 		return currentModel.startNextJob()
@@ -217,6 +222,9 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 				currentModel.reportError(currentModel.repository.Save())
 			}
 		case contextJob:
+			if currentModel.contextPane.generation != done.job.contextGeneration {
+				break
+			}
 			currentModel.contextPane.thinking = false
 			currentModel.contextPane.reply = &brain.ChatMessage{FromDen: true, Text: "I couldn't think that through: " + done.err.Error()}
 		}
@@ -258,7 +266,9 @@ func (currentModel *model) finishJob(done jobDoneMessage) tea.Cmd {
 		if done.job.kind == reviseJob {
 			currentModel.applyReviseAnswer(done, *answer, done.chatInput)
 		} else if done.job.kind == contextJob {
-			currentModel.applyContextPaneAnswer(*answer, done.chatInput)
+			if currentModel.contextPane.open && currentModel.contextPane.generation == done.job.contextGeneration {
+				currentModel.applyContextPaneAnswer(*answer, done.chatInput)
+			}
 		} else {
 			currentModel.applyChatAnswer(*answer, done.chatInput)
 		}
@@ -331,15 +341,9 @@ func checkedUpTo(session *store.Session, digest agent.Digest) {
 }
 
 func (currentModel *model) checkReply(session *store.Session, digest agent.Digest) {
-	editedFiles := digest.TouchedFiles[min(session.CheckedFileCount, len(digest.TouchedFiles)):]
-	verdict, rule := brain.CheckReply(brain.ReplyCheck{
-		PlanApproved:    digest.Plan != "" && planHash(digest.Plan) != session.CheckedPlan,
-		MarkdownWritten: brain.WroteMarkdown(digest.WorkingDirectory, editedFiles),
-	})
+	rule := "match active Den instructions"
 	session.CheckedAtPrompt, session.CheckedFileCount, session.CheckedPlan = digest.PromptCount, len(digest.TouchedFiles), planHash(digest.Plan)
-	if verdict == brain.ReviewNow {
-		session.GateReviewReason = rule
-	}
+	session.GateReviewReason = ""
 	currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
 	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "check", SessionId: session.SessionId, FolderId: session.FolderId,
 		Action: "reply", Detail: fmt.Sprintf("prompt %d · %s", digest.PromptCount, rule), Outcome: "classifier"}))
@@ -378,15 +382,10 @@ func (currentModel *model) reviewInput(session store.Session, turns []agent.Turn
 
 // gateCommand asks the gate check about the finished replies no gate check read yet.
 func (currentModel *model) gateCommand(next job, session store.Session, turns []agent.Turn) tea.Cmd {
-	digest := currentModel.digests[session.SessionId]
-	checkedPrompts := min(session.CheckedAtPrompt, len(turns))
+	checkedPrompts := min(session.CheckedAtPrompt, len(turns), session.GatedAtPrompt+reviewTurns)
 	var exchanges []brain.Exchange
 	for index := session.GatedAtPrompt; index < checkedPrompts; index++ {
-		reply := digest.LastAgentMessage
-		if index+1 < len(turns) {
-			reply = turns[index+1].Agent
-		}
-		exchanges = append(exchanges, brain.Exchange{Number: index + 1, Prompt: turns[index].User, Reply: reply})
+		exchanges = append(exchanges, brain.Exchange{Number: index + 1, Prompt: turns[index].User, Reply: turns[index].Reply})
 	}
 	if len(exchanges) == 0 {
 		return nil
@@ -395,11 +394,16 @@ func (currentModel *model) gateCommand(next job, session store.Session, turns []
 	for _, waiting := range currentModel.repository.WaitingFor(session.SessionId) {
 		waitingCards = append(waitingCards, store.CardSummary(waiting))
 	}
-	input := brain.GateInput{Session: session, FolderName: currentModel.repository.FolderName(session.FolderId), Exchanges: exchanges, WaitingCards: waitingCards}
+	instructions, failure := currentModel.repository.ApplicableInstructions(session.FolderId)
+	if currentModel.reportError(failure) {
+		return nil
+	}
+	input := brain.GateInput{Instructions: instructions, Session: session, FolderName: currentModel.repository.FolderName(session.FolderId), Exchanges: exchanges, WaitingCards: waitingCards}
 	request := brain.ClassifierRequest(input, turns[0].User, session.GateReviewReason)
+	instructionVersion := currentModel.instructionsVersion()
 	return func() tea.Msg {
 		answer, usage := brain.Classify(request)
-		return jobDoneMessage{job: next, promptCount: checkedPrompts, request: request, answer: &answer, usage: usage}
+		return jobDoneMessage{reviewFirstPrompt: session.GatedAtPrompt, instructionVersion: instructionVersion, job: next, promptCount: checkedPrompts, request: request, answer: &answer, usage: usage}
 	}
 }
 
@@ -413,12 +417,28 @@ func (currentModel *model) cardReviewCommand(next job, session store.Session, tu
 	if checkedPrompts == 0 {
 		return nil
 	}
-	firstTurn := max(min(max(session.CardReviewedAtPrompt, checkedPrompts-reviewTurns), checkedPrompts-minimumCardReviewTurns), 0)
-	input := currentModel.reviewInput(session, turns[:checkedPrompts], firstTurn, session.CardReviewedAtPrompt)
+	firstTurn := max(checkedPrompts-reviewTurns, 0)
+	newFromTurn := firstTurn
+	if len(session.GateCallIdentifiers) > 0 {
+		newFromTurn = session.CardReviewFromPrompt
+		firstTurn = max(newFromTurn-1, 0)
+	}
+	input := currentModel.reviewInput(session, turns[:checkedPrompts], firstTurn, newFromTurn)
 	if checkedPrompts < len(turns) {
 		input.Digest.LastAgentMessage = turns[checkedPrompts].Agent
 	}
 	input.CardReview, input.PastCards = true, session.Cards
+	instructions, failure := currentModel.repository.ApplicableInstructions(session.FolderId)
+	if currentModel.reportError(failure) {
+		return nil
+	}
+	if len(instructions) == 0 && len(currentModel.repository.WaitingFor(session.SessionId)) == 0 {
+		if current := currentModel.repository.FindSession(session.SessionId); current != nil {
+			current.CardReviewDue = false
+			current.CardReviewedAtPrompt = checkedPrompts
+		}
+		return nil
+	}
 	for _, turn := range turns[:checkedPrompts] {
 		input.AllPrompts = append(input.AllPrompts, turn.User)
 	}
@@ -432,7 +452,11 @@ func (currentModel *model) cardReviewCommand(next job, session store.Session, tu
 		}
 		input.WaitingCards = append(input.WaitingCards, brain.LabeledCard{Label: label, Kind: kind, Summary: currentModel.repository.ContextDestination(waiting.FolderId) + ": " + store.CardSummary(waiting), Content: waiting.ProposedText})
 	}
-	return run(brain.ReviewRequest(input), &brain.ReviewAnswer{}, jobDoneMessage{job: next, promptCount: checkedPrompts, cardLabels: cardLabels, gateCallIdentifiers: slices.Clone(session.GateCallIdentifiers)})
+	sourceEvidence := ""
+	for _, turn := range input.Turns {
+		sourceEvidence += turn.User + "\n" + turn.Reply + "\n"
+	}
+	return run(brain.ReviewRequest(input), &brain.ReviewAnswer{}, jobDoneMessage{sourceEvidence: sourceEvidence, instructionVersion: currentModel.instructionsVersion(), job: next, promptCount: checkedPrompts, cardLabels: cardLabels, gateCallIdentifiers: slices.Clone(session.GateCallIdentifiers)})
 }
 
 // applyGate notes what the gate check read, and starts the card review when it found something.
@@ -441,12 +465,19 @@ func (currentModel *model) applyGate(done jobDoneMessage, answer brain.GateAnswe
 	if session == nil {
 		return
 	}
+	if done.instructionVersion != currentModel.instructionsVersion() {
+		currentModel.queueJob(job{kind: gateJob, sessionId: session.SessionId})
+		return
+	}
 	session.GatedAtPrompt = max(session.GatedAtPrompt, done.promptCount)
 	if done.promptCount >= session.CheckedAtPrompt {
 		session.GateReviewReason = ""
 	}
 	outcome := "no"
 	if answer.WorthReview {
+		if !session.CardReviewDue {
+			session.CardReviewFromPrompt = done.reviewFirstPrompt
+		}
 		session.CardReviewDue, outcome = true, "card review"
 		session.GateCallIdentifiers = append(session.GateCallIdentifiers, callId)
 	}
@@ -466,6 +497,10 @@ func (currentModel *model) applyReview(done jobDoneMessage, answer brain.ReviewA
 		return
 	}
 	if done.job.kind == cardReviewJob {
+		if done.instructionVersion != currentModel.instructionsVersion() {
+			currentModel.queueJob(job{kind: cardReviewJob, sessionId: session.SessionId})
+			return
+		}
 		session.CardReviewedAtPrompt = done.promptCount
 		session.GatedAtPrompt = max(session.GatedAtPrompt, done.promptCount)
 		session.CardReviewDue = false
@@ -477,7 +512,7 @@ func (currentModel *model) applyReview(done jobDoneMessage, answer brain.ReviewA
 		}
 		currentModel.withdrawCards(session, answer.Withdraw, done.cardLabels, callId, answer.Reason)
 		currentModel.logReviewDecision(session, callId, "review outcome", answer.Reason, "reviewed")
-		currentModel.offerCards(session, answer, callId, done.cardLabels, done.gateCallIdentifiers)
+		currentModel.offerCards(session, answer, callId, done.cardLabels, done.gateCallIdentifiers, done.sourceEvidence)
 	} else {
 		currentModel.applyProgress(session, done.promptCount, answer, callId)
 	}
@@ -536,14 +571,14 @@ func (currentModel *model) applyProgress(session *store.Session, promptCount int
 }
 
 // offerCards preserves separate proposals unless the reviewer explicitly identifies a replacement.
-func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer, callId string, cardLabels map[string]string, gateCalls []string) {
+func (currentModel *model) offerCards(session *store.Session, answer brain.ReviewAnswer, callId string, cardLabels map[string]string, gateCalls []string, sourceEvidence string) {
 	proposed := false
 	for _, keep := range answer.Keeps {
 		if keep.Kind == "" || keep.Kind == "none" {
 			continue
 		}
 		proposed = true
-		suggestion, outcome := brain.KeepSuggestion(keep, *session, currentModel.digests[session.SessionId], &currentModel.repository)
+		suggestion, outcome := brain.KeepSuggestion(keep, *session, &currentModel.repository, sourceEvidence)
 		if outcome == "proposed" {
 			suggestion.CallId, suggestion.KeepKind = callId, keep.Kind
 			suggestion.GateCallIdentifiers = slices.Clone(gateCalls)
@@ -565,15 +600,7 @@ func (currentModel *model) offerCards(session *store.Session, answer brain.Revie
 	if !proposed {
 		currentModel.logReviewDecision(session, callId, "keep none", answer.Reason, "nothing to keep")
 	}
-	if strings.TrimSpace(answer.Rule.Rule) != "" {
-		suggestion, outcome := brain.RuleSuggestion(answer.Rule, *session, currentModel.laptopTexts())
-		if outcome == "proposed" {
-			suggestion.CallId, suggestion.KeepKind = callId, "rule"
-			suggestion.GateCallIdentifiers = slices.Clone(gateCalls)
-			outcome = currentModel.offerInPlace(session, suggestion)
-		}
-		currentModel.logReviewDecision(session, callId, "rule", fmt.Sprintf("%s (%.2f)", answer.Rule.Rule, answer.Rule.Confidence), outcome)
-	}
+
 }
 
 // offerInPlace saves a valid proposal, deferring it when no visible slot is available.
@@ -687,4 +714,9 @@ func (currentModel *model) applyCompactedLessons(compacted string) {
 	}
 	currentModel.reportError(currentModel.repository.LogDecision(store.Decision{Job: "lesson", Action: "compact",
 		Detail: fmt.Sprintf("%d → %d characters", len(lessons), len(compacted)), Outcome: outcome}))
+}
+
+func (currentModel model) instructionsVersion() string {
+	text, failure := currentModel.repository.ReadInstructions()
+	return store.ContextVersion(fmt.Sprintf("%s:%v", text, failure))
 }

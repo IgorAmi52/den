@@ -21,6 +21,15 @@ func (currentModel *model) queueDeferredProposal() {
 
 func (currentModel model) proposalEnvironment(suggestion store.Suggestion) string {
 	text := brain.ReviewContexts(&currentModel.repository)
+	instructions, _ := currentModel.repository.ReadInstructions()
+	text += instructions
+	for _, folder := range currentModel.repository.Folders {
+		text += currentModel.repository.ContextSnapshot(folder.Id)
+	}
+	text += currentModel.repository.ContextSnapshot("")
+	if suggestion.Kind == store.SuggestRule {
+		text += store.RuleFilesSnapshot(suggestion.FilePaths)
+	}
 	for _, identifier := range suggestion.SessionIds {
 		if session := currentModel.repository.FindSession(identifier); session != nil {
 			text += fmt.Sprintf("%s:%d:%s", identifier, session.CheckedAtPrompt, session.LastActivityAt)
@@ -41,7 +50,7 @@ func (currentModel model) proposalSource(suggestion store.Suggestion) string {
 		if adapter, found := agent.ByName(session.Tool); found {
 			if turns, err := adapter.Turns(identifier); err == nil {
 				for _, turn := range turns[max(len(turns)-reviewTurns, 0):] {
-					fmt.Fprintf(&source, "user: %s\nagent preceding user: %s\n", turn.User, turn.Agent)
+					fmt.Fprintf(&source, "user: %s\nagent reply: %s\n", turn.User, turn.Reply)
 				}
 			} else {
 				fmt.Fprintf(&source, "Latest transcript unavailable: %s. Judge preserved evidence and the latest available reply.\n", err)
@@ -60,6 +69,11 @@ func (currentModel *model) applyProposalReview(done jobDoneMessage, answer brain
 	suggestion.RevalidateAfter = time.Now().Add(time.Minute)
 	outcome := "withdrawn after revalidation"
 	if answer.Valid {
+		if answer.ReadVersion != currentModel.repository.SuggestionReadVersion(*suggestion) {
+			currentModel.setError("Revalidation did not read the current destination and ancestors")
+			return
+		}
+		suggestion.ContextReadVersion = answer.ReadVersion
 		if suggestion.Kind == store.SuggestContext && len(suggestion.AddedLines) == 0 {
 			if strings.TrimSpace(answer.Text) == "" {
 				currentModel.setError("Proposal revalidation returned no refreshed context")

@@ -1,38 +1,10 @@
 package brain
 
 import (
-	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/IgorAmi52/den/internal/store"
 )
-
-// ReplyVerdict is what den's local check decides about an agent's reply, with no model call.
-type ReplyVerdict int
-
-const (
-	// AskGate leaves it to the gate check.
-	AskGate ReplyVerdict = iota
-	ReviewNow
-)
-
-// ReplyCheck is the exchange that just ended: the user's prompt, the end of the agent's reply, and what the agent did in between.
-type ReplyCheck struct {
-	PlanApproved    bool
-	MarkdownWritten bool
-}
-
-// CheckReply is the local check every agent reply gets. The first rule that matches decides; rule names what decided, for the log.
-func CheckReply(check ReplyCheck) (verdict ReplyVerdict, rule string) {
-	switch {
-	case check.PlanApproved:
-		return ReviewNow, "plan approved"
-	case check.MarkdownWritten:
-		return ReviewNow, "markdown written"
-	}
-	return AskGate, "for the gate check"
-}
 
 // Exchange is one prompt and the agent's reply to it, numbered from the start of the session.
 type Exchange struct {
@@ -43,9 +15,10 @@ type Exchange struct {
 
 // GateInput is what the gate check reads: the exchanges since the last check, and what the session already has.
 type GateInput struct {
-	Session    store.Session
-	FolderName string
-	Exchanges  []Exchange
+	Instructions []store.Instruction
+	Session      store.Session
+	FolderName   string
+	Exchanges    []Exchange
 	// WaitingCards are the session's cards still waiting for the user, one line each.
 	WaitingCards []string
 }
@@ -82,22 +55,4 @@ func endOfText(text string, length int) string {
 		return string(runes)
 	}
 	return "…" + string(runes[len(runes)-length+1:])
-}
-
-// WroteMarkdown tells whether a reply wrote a markdown file of the user's: not den's own notes, an agent's memories or its plan,
-// which plan approval already covers. Edited files are as the transcript names them, relative to workingDirectory or absolute.
-func WroteMarkdown(workingDirectory string, editedFiles []string) bool {
-	dataDirectory, _ := store.DataDirectory()
-	for _, editedFile := range editedFiles {
-		filePath := absoluteIn(workingDirectory, editedFile)
-		directories := strings.Split(filepath.Dir(filePath), string(filepath.Separator))
-		switch {
-		case !strings.EqualFold(filepath.Ext(filePath), ".md"):
-		case slices.Contains(directories, "memory"), slices.Contains(directories, "plans"):
-		case dataDirectory != "" && strings.HasPrefix(filePath, dataDirectory):
-		default:
-			return true
-		}
-	}
-	return false
 }

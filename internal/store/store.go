@@ -45,7 +45,8 @@ type Session struct {
 	GateReviewReason    string   `json:"gateReviewReason,omitempty"`
 	GateCallIdentifiers []string `json:"gateCallIdentifiers,omitempty"`
 	// CardReviewDue is set once a check found something worth a card review, and cleared when the card review runs.
-	CardReviewDue bool `json:"cardReviewDue,omitempty"`
+	CardReviewDue        bool `json:"cardReviewDue,omitempty"`
+	CardReviewFromPrompt int  `json:"cardReviewFromPrompt,omitempty"`
 	// CardReviewedAtPrompt is the prompt count when the card review last looked at the session.
 	CardReviewedAtPrompt int `json:"cardReviewedAtPrompt,omitempty"`
 	// Cards are the cards den proposed from this session and what became of them, newest last.

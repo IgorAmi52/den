@@ -1,0 +1,16 @@
+{
+  "kind": "cross-encoder",
+  "model": "den/trained-minilm-new-epoch-3",
+  "revision": "trained-new-epoch-3",
+  "threshold": 0.005811875686049461,
+  "prefix": "",
+  "files": {
+    "config.json": "db0c02d5ad2dc84ac6c890d5273dba1991d8cd9c9d62d35f8d427b54f6c5e18b",
+    "model.safetensors": "aa1526415da818eeb21a43a80431b9bf1968a14f74ea555cff3d0c00d4f53241",
+    "special_tokens_map.json": "5d5b662e421ea9fac075174bb0688ee0d9431699900b90662acd44b2a350503a",
+    "tokenizer.json": "5d0ddc7130d64c2374bc9c387e2015c56e63446a0213bbbe574c357a190cf3ca",
+    "tokenizer_config.json": "7b082b48a08a0b5c5939d99472e33addce3d96202155e33f7928cecd171186a0",
+    "training.json": "2fd692a5f76e103ed5300069f26b40d9a927feff8596cb0b9ca2aadf6a5647ad",
+    "vocab.txt": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+  }
+}

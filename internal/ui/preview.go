@@ -55,6 +55,15 @@ func (currentModel model) rowPreview(width int) (string, []string) {
 	switch row.kind {
 	case repositoryRow:
 		return "CONTEXT", append(proposal, currentModel.repositoryPreview(width)...)
+	case instructionsRow:
+		text, failure := currentModel.repository.ReadInstructions()
+		if failure != nil {
+			text = failure.Error()
+		}
+		if text == "" {
+			text = "Open Instructions to choose starter behaviors: track issues, remember postponed work, preserve reusable workflows, and propose global coding-agent rules. You can also ask Den to draft your own instruction and examples."
+		}
+		return "INSTRUCTIONS", wrapAll(strings.Split(text, "\n"), width)
 	case contextFileRow:
 		return "FILE", append(proposal, currentModel.contextFilePreview(row.laptopTool, width)...)
 	case folderRow:

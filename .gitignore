@@ -3,3 +3,4 @@ dist/
 /den
 PLAN.md
 /.local/
+__pycache__/
