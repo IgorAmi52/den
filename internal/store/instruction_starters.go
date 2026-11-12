@@ -8,15 +8,6 @@ import (
 func StarterInstructions() []Instruction {
 	instructions := []Instruction{
 		{
-			Identifier: "starter-issues", Title: "Track issues",
-			Text: "Catch reported or suspected problems mentioned in my sessions and keep their status current. Merge repeated reports and update existing findings when a problem is fixed or ruled out. Choose a folder whose purpose fits the issue; do not assume it belongs in shared repo context.",
-			Examples: []string{
-				"Concurrent writes sometimes overwrite each other and lose updates.",
-				"The previously reported overwrite issue is now fixed.",
-				"The suspected memory leak was a false alarm; the measurements included the cache.",
-			},
-		},
-		{
 			Identifier: "starter-deferred-work", Title: "Track postponed work",
 			Text: "Keep track of work we explicitly decide to leave for later, and update it when we finish, cancel, or change it. Distinguish an agreed postponement from an ordinary next step or an unaccepted suggestion.",
 			Examples: []string{
@@ -26,8 +17,9 @@ func StarterInstructions() []Instruction {
 		},
 		{
 			Identifier: "starter-workflows", Title: "Preserve reusable workflows",
-			Text: "Notice workflows I may want to repeat and propose preserving their agreed steps, inputs, constraints, and checks in a reusable folder. Check existing context, omit duplicates, and update saved workflows when we change them. Keep the workflow usable by a future session, without performing the work or moving the current session.",
+			Text: "Notice workflows I may want to repeat, including skills or instruction files an agent creates in my sessions, and propose preserving them in a reusable folder. When the workflow lives in a file, link that file as the folder's context instead of copying its steps; otherwise save the agreed steps, inputs, constraints, and checks. Check existing context, omit duplicates, and update saved workflows when we change them. Keep the workflow usable by a future session, without performing the work or moving the current session.",
 			Examples: []string{
+				"I added the `weekly-digest` skill and it's ready: `.agents/skills/weekly-digest/SKILL.md`. Run `/weekly-digest` to turn new group messages into a Notion brief.",
 				"When I ask for the weekly customer review, collect new feedback, group repeated problems, and prepare a summary with source links.",
 				"We changed our vendor-comparison workflow: include a security review before shortlisting candidates.",
 			},

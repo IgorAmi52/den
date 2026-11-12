@@ -74,6 +74,13 @@ func (currentModel *model) applyProposalReview(done jobDoneMessage, answer brain
 			return
 		}
 		suggestion.ContextReadVersion = answer.ReadVersion
+		if instructions, failure := currentModel.repository.Instructions(); failure == nil {
+			for _, instruction := range instructions {
+				if instruction.Identifier == suggestion.InstructionIdentifier {
+					suggestion.InstructionRevision = instruction.Revision()
+				}
+			}
+		}
 		if suggestion.Kind == store.SuggestContext && len(suggestion.AddedLines) == 0 {
 			if strings.TrimSpace(answer.Text) == "" {
 				currentModel.setError("Proposal revalidation returned no refreshed context")

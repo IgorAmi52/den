@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/IgorAmi52/den/internal/agent"
 	"github.com/IgorAmi52/den/internal/store"
 )
 
@@ -26,6 +27,7 @@ type Keep struct {
 	Name       string   `json:"name"`
 	Lines      []string `json:"lines"`
 	Context    string   `json:"context"`
+	File       string   `json:"file"`
 	Confidence float64  `json:"confidence"`
 	Reason     string   `json:"reason"`
 	Evidence   []string `json:"evidence"`
@@ -39,10 +41,11 @@ func keepSchema() map[string]any {
 		"readVersion":           stringSchema(),
 		"replaces":              stringSchema(),
 		"replacesText":          stringSchema(),
-		"kind":                  enumSchema("none", "notes", "folder", "rule"),
+		"kind":                  enumSchema("none", "notes", "folder", "link", "rule"),
 		"name":                  stringSchema(),
 		"lines":                 arraySchema(stringSchema()),
 		"context":               stringSchema(),
+		"file":                  stringSchema(),
 		"confidence":            map[string]any{"type": "number"},
 		"reason":                stringSchema(),
 		"evidence":              arraySchema(stringSchema()),
@@ -103,7 +106,7 @@ func KeepSuggestion(keep Keep, session store.Session, repository *store.Reposito
 		}
 		return suggestion, "proposed"
 	}
-	if keep.Kind != "notes" && keep.Kind != "folder" {
+	if keep.Kind != "notes" && keep.Kind != "folder" && keep.Kind != "link" {
 		return store.Suggestion{}, "dropped: unknown proposal kind"
 	}
 	destination := strings.TrimSpace(keep.Destination)
@@ -119,6 +122,13 @@ func KeepSuggestion(keep Keep, session store.Session, repository *store.Reposito
 	if keep.Kind == "notes" {
 		return notesSuggestion(base, keep, repository)
 	}
+	linkedPath := linkedFile(keep, session, repository)
+	if strings.TrimSpace(keep.File) != "" && linkedPath == "" {
+		return store.Suggestion{}, "dropped: no markdown file to link"
+	}
+	if keep.Kind == "link" {
+		return linkSuggestion(base, linkedPath, repository)
+	}
 	name := strings.Trim(strings.TrimSpace(keep.Name), "\"'.")
 	context := strings.TrimSpace(keep.Context)
 	parentFolderId := destination
@@ -127,11 +137,36 @@ func KeepSuggestion(keep Keep, session store.Session, repository *store.Reposito
 		return store.Suggestion{}, "dropped: no usable name"
 	case siblingNamed(repository, parentFolderId, name):
 		return store.Suggestion{}, "dropped: a folder named " + name + " exists"
-	case context == "":
+	case context == "" && linkedPath == "":
 		return store.Suggestion{}, "dropped: no context"
 	}
-	base.Kind, base.FolderName, base.ParentFolderId = store.SuggestFolder, name, parentFolderId
-	base.ProposedText = context + "\n"
+	base.Kind, base.FolderName, base.ParentFolderId, base.LinkedPath = store.SuggestFolder, name, parentFolderId, linkedPath
+	if linkedPath == "" {
+		base.ProposedText = context + "\n"
+	}
+	return base, "proposed"
+}
+
+// linkedFile finds the markdown file a keep names, like a skill the session wrote.
+func linkedFile(keep Keep, session store.Session, repository *store.Repository) string {
+	files := agent.MarkdownFilesIn(keep.File, session.WorkingDirectory, repository.RepositoryPath)
+	if len(files) == 0 {
+		return ""
+	}
+	return files[0]
+}
+
+// linkSuggestion makes a file the context of an existing folder, only when the folder has no context it would replace.
+func linkSuggestion(base store.Suggestion, linkedPath string, repository *store.Repository) (store.Suggestion, string) {
+	switch {
+	case base.FolderId == "":
+		return store.Suggestion{}, "dropped: only a folder can link a file as its context"
+	case linkedPath == "":
+		return store.Suggestion{}, "dropped: no markdown file to link"
+	case strings.TrimSpace(repository.ReadContext(base.FolderId)) != "":
+		return store.Suggestion{}, "dropped: linking would replace the folder's existing context"
+	}
+	base.Kind, base.LinkedPath = store.SuggestLink, linkedPath
 	return base, "proposed"
 }
 

@@ -146,6 +146,7 @@ func (currentModel *model) followDockItem() {
 }
 
 func (currentModel model) updateDock(press tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	currentModel.clearStatus()
 	command := currentModel.handleDockKey(press)
 	currentModel.persistDock()
 	return currentModel, command

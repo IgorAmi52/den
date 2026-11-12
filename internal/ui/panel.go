@@ -371,6 +371,13 @@ func (currentModel model) footer(width int) []string {
 	hints := func(bindings ...key.Binding) []string {
 		return currentModel.hintLines(bindings, width, currentModel.footerKeyLines())
 	}
+	statusLine := func() string {
+		style := theme.dim
+		if currentModel.statusIsError {
+			style = theme.errorText
+		}
+		return style.Render(truncate(currentModel.statusMessage, width))
+	}
 	var lines []string
 	switch {
 	case currentModel.contextPane.open && currentModel.confirming != nil:
@@ -381,6 +388,8 @@ func (currentModel model) footer(width int) []string {
 		lines = []string{theme.dim.Render("editing Den instructions on the right")}
 	case currentModel.contextPane.open:
 		lines = []string{theme.dim.Render(truncate("editing "+currentModel.contextHeading(currentModel.contextPane.folderId)+"'s context on the right", width))}
+	case currentModel.dock.focused && currentModel.statusMessage != "":
+		lines = append([]string{statusLine()}, currentModel.hintLines(currentModel.dockHints(), width, currentModel.footerKeyLines()-1)...)
 	case currentModel.dock.focused:
 		lines = hints(currentModel.dockHints()...)
 	case currentModel.filtering:
@@ -396,11 +405,7 @@ func (currentModel model) footer(width int) []string {
 	case currentModel.picker != nil:
 		lines = hints(relabeled(keys.down, "folder"), relabeled(keys.open, "move here"), relabeled(keys.back, "cancel"))
 	case currentModel.statusMessage != "":
-		style := theme.dim
-		if currentModel.statusIsError {
-			style = theme.errorText
-		}
-		lines = append([]string{style.Render(truncate(currentModel.statusMessage, width))}, currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, currentModel.footerKeyLines()-1)...)
+		lines = append([]string{statusLine()}, currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, currentModel.footerKeyLines()-1)...)
 	default:
 		lines = currentModel.hintLinesEndingWith(currentModel.rowHints(), keys.help, width, currentModel.footerKeyLines())
 	}

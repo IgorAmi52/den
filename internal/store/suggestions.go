@@ -302,10 +302,15 @@ func (repository *Repository) Accept(suggestionId string) (string, error) {
 		if failure != nil {
 			return "", failure
 		}
-		if !slices.ContainsFunc(instructions, func(instruction Instruction) bool {
-			return instruction.Identifier == found.InstructionIdentifier && instruction.Revision() == found.InstructionRevision
-		}) {
-			return "", fmt.Errorf("the source instruction changed or was deleted; revise this proposal before accepting")
+		position := slices.IndexFunc(instructions, func(instruction Instruction) bool {
+			return instruction.Identifier == found.InstructionIdentifier
+		})
+		if position < 0 {
+			return "", fmt.Errorf("the source instruction was deleted; reject this proposal")
+		}
+		if instructions[position].Revision() != found.InstructionRevision {
+			found.Deferred = true
+			return "", fmt.Errorf("the source instruction changed; proposal queued for revalidation")
 		}
 		if found.ContextReadVersion != repository.SuggestionReadVersion(*found) {
 			found.Deferred = true
