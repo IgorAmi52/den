@@ -232,7 +232,7 @@ func Run() error {
 	if err := tmux.SetPaneOption(panelPaneId, PanelMarkerOption, "1"); err != nil {
 		return err
 	}
-	if err := tmux.HideStatusLineOfDenSession(windowId); err != nil {
+	if err := tmux.SetUpDenSession(windowId); err != nil {
 		return err
 	}
 	executable, err := os.Executable()

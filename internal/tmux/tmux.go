@@ -78,14 +78,18 @@ func KillWindow(windowId string) error {
 	return err
 }
 
-// HideStatusLineOfDenSession turns tmux's status line off when the window is in a session den made for itself,
-// named den-<repo>, so the panel gets that row. In a session of the user's, the status line stays.
-func HideStatusLineOfDenSession(windowId string) error {
+// SetUpDenSession turns tmux's status line off when the window is in a session den made for itself,
+// named den-<repo>, so the panel gets that row, and turns the mouse on, which tmux only does by default from 3.8.
+// A session of the user's keeps its own settings.
+func SetUpDenSession(windowId string) error {
 	sessionName, err := run("display-message", "-p", "-t", windowId, "#{session_name}")
 	if err != nil || !strings.HasPrefix(strings.TrimSpace(sessionName), "den-") {
 		return err
 	}
-	_, err = run("set-option", "-t", strings.TrimSpace(sessionName), "status", "off")
+	if _, err := run("set-option", "-t", strings.TrimSpace(sessionName), "status", "off"); err != nil {
+		return err
+	}
+	_, err = run("set-option", "-t", strings.TrimSpace(sessionName), "mouse", "on")
 	return err
 }
 
@@ -142,6 +146,7 @@ func AsPaneTitle(format string) string {
 // BindPaneDrags makes dragging a pane's title onto another pane swap the two, and dragging a border resize the panes.
 // In windows carrying windowMarkerOption, a border drag sets resizingOption until it ends, then runs recordCommand,
 // and a double click on a border runs resetCommand. Panes carrying fixedPaneOption never move.
+// tmux 3.6 and older have no Control mouse keys, so there a title drag doesn't swap panes; everything else still works.
 func BindPaneDrags(windowMarkerOption string, fixedPaneOption string, resizingOption string, recordCommand string, resetCommand string) error {
 	insideMarkedWindow := "#{" + windowMarkerOption + "}"
 	movablePane := "#{&&:" + insideMarkedWindow + ",#{!:#{" + fixedPaneOption + "}}}"
@@ -152,19 +157,29 @@ func BindPaneDrags(windowMarkerOption string, fixedPaneOption string, resizingOp
 		// Not a title drag: pass the release on, so apps with their own mouse handling (like the panel) see the drop.
 		"if-shell -F '" + insideMarkedWindow + "' 'select-pane -M' ; send-keys -M -t =",
 	}
-	bindings := map[string][]string{
+	titleBindings := map[string][]string{
 		"MouseDown1Control0":    {"if-shell", "-F", "-t", "=", movablePane, "select-pane -t = ; select-pane -M ; select-pane -m -t =", "select-pane -t ="},
 		"MouseUp1Control0":      {"if-shell", "-F", insideMarkedWindow, "select-pane -M"},
 		"MouseDragEnd1Control0": swapOntoTarget,
-		"MouseDown1Border":      {"select-pane", "-t", "="},
-		"MouseDrag1Border":      {"if-shell", "-F", insideMarkedWindow, "set-option -w " + resizingOption + " 1 ; resize-pane -M", "resize-pane -M"},
-		"MouseUp1Border":        {"if-shell", "-F", insideMarkedWindow, "select-pane -M"},
-		"DoubleClick1Border":    {"if-shell", "-F", insideMarkedWindow, resetCommand},
-		"MouseDragEnd1Border":   swapOntoTarget,
-		"MouseDragEnd1Pane":     swapOntoTarget,
+	}
+	bindings := map[string][]string{
+		"MouseDown1Border":    {"select-pane", "-t", "="},
+		"MouseDrag1Border":    {"if-shell", "-F", insideMarkedWindow, "set-option -w " + resizingOption + " 1 ; resize-pane -M", "resize-pane -M"},
+		"MouseUp1Border":      {"if-shell", "-F", insideMarkedWindow, "select-pane -M"},
+		"DoubleClick1Border":  {"if-shell", "-F", insideMarkedWindow, resetCommand},
+		"MouseDragEnd1Border": swapOntoTarget,
+		"MouseDragEnd1Pane":   swapOntoTarget,
 	}
 	for key, command := range bindings {
 		if _, err := run(append([]string{"bind-key", "-n", key}, command...)...); err != nil {
+			return err
+		}
+	}
+	for key, command := range titleBindings {
+		if _, err := run(append([]string{"bind-key", "-n", key}, command...)...); err != nil {
+			if strings.Contains(err.Error(), "unknown key") {
+				return nil
+			}
 			return err
 		}
 	}
