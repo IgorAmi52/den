@@ -8,6 +8,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/IgorAmi52/den/internal/helper"
 	"github.com/IgorAmi52/den/internal/store"
 	"github.com/IgorAmi52/den/internal/tmux"
 )
@@ -23,7 +24,7 @@ func (currentModel model) updateWork(message tea.Msg) (tea.Model, tea.Cmd) {
 		currentModel.scrollByWheel(typedMessage.Mouse().Button)
 		updated = currentModel
 	case tea.MouseMsg:
-		if currentModel.prompt == nil && currentModel.confirming == nil && !currentModel.picking && currentModel.picker == nil {
+		if currentModel.prompt == nil && currentModel.confirming == nil && !currentModel.picking && currentModel.helperChoices == nil && currentModel.picker == nil {
 			updated, command = currentModel.updateMouse(typedMessage)
 		}
 	default:
@@ -87,6 +88,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 		return currentModel.updateConfirmation(keyPress)
 	case currentModel.picking:
 		return currentModel.updatePicker(keyPress)
+	case currentModel.helperChoices != nil:
+		return currentModel.updateHelperPicker(keyPress)
 	case currentModel.picker != nil:
 		return currentModel.updateFolderPicker(keyPress)
 	case currentModel.contextPane.open:
@@ -140,6 +143,8 @@ func (currentModel model) updateWorkKey(keyPress tea.KeyPressMsg) (tea.Model, te
 			return currentModel, currentModel.askForNewFolder(parentId)
 		}
 		currentModel.setStatus("select a folder to add a subfolder to it")
+	case key.Matches(keyPress, keys.pickHelper):
+		currentModel.pickHelper()
 	case !exists:
 	case keyPress.String() == "right" && hasContextPane(selected):
 		if selected.kind == instructionsRow {
@@ -295,6 +300,50 @@ func (currentModel model) updatePicker(keyPress tea.KeyPressMsg) (tea.Model, tea
 		currentModel.pickingPlace = false
 	}
 	return currentModel, nil
+}
+
+// pickHelper asks which installed CLI den makes its own model calls through, starting on the one it uses now.
+func (currentModel *model) pickHelper() {
+	installed := helper.Installed()
+	if len(installed) == 0 {
+		currentModel.setStatus("no agent CLI can make den's model calls")
+		return
+	}
+	currentModel.helperChoices = installed
+	currentModel.pickerCursor = 0
+	if currentModel.helperCaller != nil {
+		currentModel.pickerCursor = max(slices.Index(installed, currentModel.helperCaller.Tool), 0)
+	}
+}
+
+func (currentModel model) updateHelperPicker(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	keys := currentModel.keys
+	switch {
+	case key.Matches(keyPress, keys.pickPrevious):
+		currentModel.pickerCursor = max(currentModel.pickerCursor-1, 0)
+	case key.Matches(keyPress, keys.pickNext):
+		currentModel.pickerCursor = min(currentModel.pickerCursor+1, len(currentModel.helperChoices)-1)
+	case key.Matches(keyPress, keys.open):
+		tool := currentModel.helperChoices[currentModel.pickerCursor]
+		currentModel.helperChoices = nil
+		currentModel.useHelper(tool)
+	case key.Matches(keyPress, keys.back), key.Matches(keyPress, keys.quit):
+		currentModel.helperChoices = nil
+	}
+	return currentModel, nil
+}
+
+// useHelper makes den's model calls through the tool from now on, in every repo, and calls again after repeated failures.
+func (currentModel *model) useHelper(tool string) {
+	settings, _ := store.LoadSettings()
+	settings.HelperTool = tool
+	if currentModel.reportError(settings.Save()) {
+		return
+	}
+	caller := helper.Caller{Tool: tool}
+	currentModel.helperCaller = &caller
+	currentModel.helperFailures = 0
+	currentModel.setStatus("den's model calls now go through " + tool)
 }
 
 func (currentModel model) updateConfirmation(keyPress tea.KeyPressMsg) (tea.Model, tea.Cmd) {

@@ -26,7 +26,7 @@ func StarterInstructions() []Instruction {
 		},
 		{
 			Identifier: "starter-global-agent-rules", Title: "Remember global agent preferences",
-			Text: "When I explicitly state a coding-agent preference that should apply across projects, propose adding it to my global CLAUDE.md and AGENTS.md files. Check the existing rules for duplicates and conflicts. Keep project-specific instructions in their appropriate repo or folder. Show the exact addition and affected files for approval before writing.",
+			Text: "When I explicitly state a coding-agent preference that should apply across projects, propose adding it to my global CLAUDE.md, AGENTS.md and copilot-instructions.md files. Check the existing rules for duplicates and conflicts. Keep project-specific instructions in their appropriate repo or folder. Show the exact addition and affected files for approval before writing.",
 			Examples: []string{
 				"Across all my projects, do not create a git commit unless I explicitly ask for one.",
 				"Whenever an agent changes code in any repo, I want it to explain how the change was verified.",

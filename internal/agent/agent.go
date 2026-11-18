@@ -96,7 +96,7 @@ type LaptopFile struct {
 	Path string
 }
 
-var supportedAdapters = []Adapter{Claude{}, Codex{}}
+var supportedAdapters = []Adapter{Claude{}, Codex{}, Copilot{}}
 
 var (
 	issueKeyPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9]+)-\d+\b`)

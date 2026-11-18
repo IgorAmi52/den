@@ -402,6 +402,8 @@ func (currentModel model) footer(width int) []string {
 		lines = []string{currentModel.confirmationLine(width), theme.dim.Render(truncate(currentModel.confirming.detail, width))}
 	case currentModel.picking:
 		lines = append([]string{currentModel.pickerLine(width)}, hints(relabeled(keys.open, "start"), relabeled(keys.back, "cancel"))...)
+	case currentModel.helperChoices != nil:
+		lines = append([]string{currentModel.choiceLine("den's model ", currentModel.helperChoices, width)}, hints(relabeled(keys.open, "use"), relabeled(keys.back, "cancel"))...)
 	case currentModel.picker != nil:
 		lines = hints(relabeled(keys.down, "folder"), relabeled(keys.open, "move here"), relabeled(keys.back, "cancel"))
 	case currentModel.statusMessage != "":
@@ -452,7 +454,7 @@ func (currentModel model) rowHints() []key.Binding {
 		case folderRow:
 			bindings = append(bindings, relabeled(keys.open, "open"), hint("→", "context"), relabeled(keys.newSession, "new here"), keys.move, keys.rename, keys.newSubfolder, keys.delete)
 		case repositoryRow:
-			bindings = append(bindings, hint("→", "repo context"), relabeled(keys.open, "show files"))
+			bindings = append(bindings, hint("→", "repo context"), relabeled(keys.open, "show files"), keys.pickHelper)
 		case contextFileRow:
 			bindings = append(bindings, relabeled(keys.open, "edit"))
 		case inboxRow, archiveRow:
@@ -489,8 +491,13 @@ func (currentModel model) pickerLine(width int) string {
 	if currentModel.pickingPlace {
 		question = "start in "
 	}
+	return currentModel.choiceLine(question, currentModel.pickerChoices(), width)
+}
+
+// choiceLine asks the question with the choices on one line, the one under the picker's cursor marked.
+func (currentModel model) choiceLine(question string, choices []string, width int) string {
 	segments := []segment{{text: question, style: currentModel.theme.dim}}
-	for choiceIndex, choice := range currentModel.pickerChoices() {
+	for choiceIndex, choice := range choices {
 		if choiceIndex == currentModel.pickerCursor {
 			segments = append(segments, segment{text: "▸" + choice + " ", style: currentModel.theme.accentBold})
 		} else {

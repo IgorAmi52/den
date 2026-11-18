@@ -115,7 +115,7 @@ func (currentModel model) repositoryPreview(width int) []string {
 		}
 		lines = append(lines, theme.dim.Render(usage))
 	}
-	return append(lines, "", theme.dim.Render("↵ shows the files in the tree, where ↵ on one opens it in $EDITOR."))
+	return append(lines, "", theme.dim.Render("↵ shows the files in the tree, where ↵ on one opens it in $EDITOR. M picks which CLI makes den's model calls."))
 }
 
 func (currentModel model) folderContextPreview(folder *store.Folder, width int) []string {

@@ -24,6 +24,9 @@ const callTimeout = 3 * time.Minute
 // which follows den's instructions on what not to do, which matters most where den acts without asking. Neither thinks.
 var claudeModels = map[Tier]string{Light: "haiku", Reasoning: "sonnet"}
 
+// copilotModels are what copilot runs for a tier, picked like claude's: a fast model for routine calls, sonnet for the rest.
+var copilotModels = map[Tier]string{Light: "claude-haiku-4.5", Reasoning: "claude-sonnet-5.5"}
+
 // Tier says how much thinking a call needs.
 type Tier int
 
@@ -95,19 +98,39 @@ func (caller Caller) Name() string {
 	if caller.Tool == "claude" {
 		return "claude " + claudeModels[Light] + " · " + claudeModels[Reasoning]
 	}
+	if caller.Tool == "copilot" {
+		return "copilot " + copilotModels[Light] + " · " + copilotModels[Reasoning]
+	}
 	if codexModels[Light].name == codexModels[Reasoning].name {
 		return "codex " + codexModels[Reasoning].name
 	}
 	return "codex " + codexModels[Light].name + " · " + codexModels[Reasoning].name
 }
 
-func Find() (Caller, bool) {
-	for _, tool := range []string{"codex", "claude"} {
+// tools are the CLIs den can make its calls through, in the order it picks one when the user chose none.
+var tools = []string{"codex", "claude", "copilot"}
+
+// Installed lists the CLIs on the PATH that den can make its calls through.
+func Installed() []string {
+	var installed []string
+	for _, tool := range tools {
 		if _, err := exec.LookPath(tool); err == nil {
-			return Caller{Tool: tool}, true
+			installed = append(installed, tool)
 		}
 	}
-	return Caller{}, false
+	return installed
+}
+
+// Find returns a caller for the preferred tool when it's installed, otherwise for the first installed one.
+func Find(preferredTool string) (Caller, bool) {
+	installed := Installed()
+	if slices.Contains(installed, preferredTool) {
+		return Caller{Tool: preferredTool}, true
+	}
+	if len(installed) == 0 {
+		return Caller{}, false
+	}
+	return Caller{Tool: installed[0]}, true
 }
 
 // Call runs the request and decodes the answer into answer. Each call runs in its own directory inside den's,
@@ -132,9 +155,12 @@ func (caller Caller) Call(request Request, answer any) (Usage, error) {
 	started := time.Now()
 	var raw []byte
 	var usage Usage
-	if caller.Tool == "codex" {
+	switch caller.Tool {
+	case "codex":
 		raw, usage, err = callCodex(deadline, callDirectory, request)
-	} else {
+	case "copilot":
+		raw, usage, err = callCopilot(deadline, callDirectory, request)
+	default:
 		raw, usage, err = callClaude(deadline, callDirectory, request)
 	}
 	usage.Duration = time.Since(started)
@@ -187,6 +213,40 @@ func callClaude(deadline context.Context, callDirectory string, request Request)
 		return nil, usage, fmt.Errorf("claude failed: %s", firstLine(result.Result))
 	}
 	return result.StructuredOutput, usage, nil
+}
+
+// callCopilot runs a call through copilot, which has no switch for a system prompt or an answer schema:
+// den's instructions and the schema go around the input, and the answer is the JSON object in the reply.
+// Copilot saves every call as a session, in den's tmp directory, so none shows up as the repo's.
+// It always has one tool, since an empty list may mean all of them; view can't reach outside the empty call directory.
+func callCopilot(deadline context.Context, callDirectory string, request Request) ([]byte, Usage, error) {
+	usage := Usage{Model: copilotModels[request.Tier]}
+	schema, err := json.Marshal(request.Schema)
+	if err != nil {
+		return nil, usage, err
+	}
+	prompt := request.System + "\n\n" + request.Prompt + "\n\nAnswer with only a JSON object that follows this JSON schema, with no other text:\n" + string(schema)
+	tools := "view"
+	if request.ReadsRepository != "" || len(request.Files) > 0 {
+		tools = "view,glob,grep"
+	}
+	arguments := []string{"-p", prompt, "-s", "--model", usage.Model, "--no-custom-instructions", "--no-ask-user",
+		"--allow-all-tools", "--available-tools=" + tools}
+	if request.ReadsRepository != "" {
+		arguments = append(arguments, "--add-dir="+request.ReadsRepository)
+	}
+	command := exec.CommandContext(deadline, "copilot", arguments...)
+	command.Dir = callDirectory
+	output, err := runCommand(command)
+	if err != nil {
+		return nil, usage, err
+	}
+	reply := string(output)
+	start, end := strings.Index(reply, "{"), strings.LastIndex(reply, "}")
+	if start < 0 || end < start {
+		return nil, usage, fmt.Errorf("copilot answered without JSON: %s", firstLine(reply))
+	}
+	return []byte(reply[start : end+1]), usage, nil
 }
 
 // callCodex runs a call through codex. One that reads no files runs slim, with den's instructions in place of codex's;

@@ -123,7 +123,7 @@ const chatSystem = instructionChatPolicy + "You are den. You preserve useful con
 	"- renameFolder: (folder, name)\n" +
 	"- createFolder: a new folder (name; folder is its parent, or empty for the top level; text is its notes, or empty)\n" +
 	"- archive: (session)\n" +
-	"- addRule: a rule for agents (target folder, repo or laptop, where laptop is the user's CLAUDE.md and AGENTS.md for every repo; " +
+	"- addRule: a rule for agents (target folder, repo or laptop, where laptop is the user's global CLAUDE.md, AGENTS.md and copilot-instructions.md for every repo; " +
 	"folder when the target is folder; rule). When the user says a rule den suggested belongs in a folder or the repo instead, use this with that target.\n" +
 	"- moveNotes: move one folder's context into another (from, folder)\n" +
 	"- replaceText: change one passage of a folder's context, or the repo's with folder \"repo\" (folder, from: the exact current passage, " +

@@ -182,6 +182,8 @@ type model struct {
 	prompt                   *textPrompt
 	statusMessage            string
 	statusIsError            bool
+	// helperChoices are the CLIs offered for den's own model calls while the user picks one, or nil.
+	helperChoices []string
 	// newSessionHandoff is the brief the next new session starts with, when the chat proposed picking up earlier work.
 	newSessionHandoff string
 	// dragging matches the session held with the mouse, dropTargetRow the row under the mouse, or -1.
@@ -269,8 +271,9 @@ func Run() error {
 		}
 	}
 	colorProfile := colorprofile.Detect(os.Stdout, os.Environ())
+	settings, _ := store.LoadSettings()
 	var helperCaller *helper.Caller
-	if caller, found := helper.Find(); found {
+	if caller, found := helper.Find(settings.HelperTool); found {
 		helperCaller = &caller
 	}
 	initialModel := model{

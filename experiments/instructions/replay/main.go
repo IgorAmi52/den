@@ -136,7 +136,7 @@ func runScenario(directory string, specification scenario, instructions []store.
 		must(json.Unmarshal(cached, &result))
 		result.Failures, result.Suggestions = nil, nil
 	} else {
-		caller, available := helper.Find()
+		caller, available := helper.Find("")
 		if !available {
 			panic("No model CLI available")
 		}

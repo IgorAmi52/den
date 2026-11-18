@@ -17,7 +17,7 @@ func chatChecks(directory string) {
 	current, failure := repository.ReadInstructions()
 	must(failure)
 	must(repository.SaveInstructions(store.InstructionsTemplate, store.ContextVersion(current)))
-	caller, available := helper.Find()
+	caller, available := helper.Find("")
 	if !available {
 		panic("model CLI unavailable")
 	}

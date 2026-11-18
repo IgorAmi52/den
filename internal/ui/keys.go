@@ -26,6 +26,7 @@ type keyMap struct {
 	pickPrevious, pickNext     key.Binding
 	confirmYes, confirmNo      key.Binding
 	save                       key.Binding
+	pickHelper                 key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -67,6 +68,7 @@ func newKeyMap() keyMap {
 		confirmYes:    binding([]string{"enter"}, "↵", "yes"),
 		confirmNo:     binding([]string{"esc"}, "esc", "no"),
 		save:          binding([]string{"enter"}, "↵", "save"),
+		pickHelper:    binding([]string{"M"}, "M", "den's model"),
 	}
 }
 

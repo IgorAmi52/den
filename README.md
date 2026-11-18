@@ -2,11 +2,11 @@
 
 <img src="docs/images/banner.svg" alt="den: an agent for your agent sessions" width="100%" />
 
-### 🛖 Run *Claude Code* & *Codex* side by side, ask where you left off, start every session with the right context 🛖
+### 🛖 Run *Claude Code*, *Codex* & *Copilot* side by side, ask where you left off, start every session with the right context 🛖
 
 [![platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#-quickstart)
 [![install](https://img.shields.io/badge/install-brew-orange)](#-quickstart)
-[![agents](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex-8A63D2)](#-quickstart)
+[![agents](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20Copilot-8A63D2)](#-quickstart)
 [![status](https://img.shields.io/badge/status-early-yellow)](#-features)
 
 </div>
@@ -76,8 +76,8 @@ cd your-repo
 den
 ```
 
-- **Needs:** macOS, Git, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and/or [Codex](https://github.com/openai/codex) on your `PATH`. Homebrew installs tmux and the Go build dependency. If Git is missing, run `xcode-select --install`.
-- **Login:** open your installed agent CLI once and finish its login before starting DEN. DEN prefers Codex when both CLIs are installed; an installed but logged-out Codex does not automatically fall back to Claude. The current source uses `gpt-6-luna` and `gpt-6.1-sol`, so your Codex account must have access to them. Claude-only installations use Haiku and Sonnet.
+- **Needs:** macOS, Git, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) [Codex](https://github.com/openai/codex) or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) on your `PATH`. Homebrew installs tmux and the Go build dependency. If Git is missing, run `xcode-select --install`.
+- **Login:** open your installed agent CLI once and finish its login before starting DEN. DEN makes its own model calls through Codex, then Claude, then Copilot, whichever is installed first; press <kbd>M</kbd> to pick another, which DEN remembers for every repo. An installed but logged-out CLI does not automatically fall back to the next one. Codex uses `gpt-6-luna` and `gpt-6.1-sol`, so your Codex account must have access to them. Claude uses Haiku and Sonnet, and Copilot uses `claude-haiku-4.5` and `claude-sonnet-5.5`.
 - **First run:** press <kbd>⌥</kbd><kbd>L</kbd> so den can check your Option key (it fixes Terminal.app and Ghostty for you) · tick which of your 10 newest past sessions to bring in
 - **Coming back:** run `den` in the repo again. Closing the terminal doesn't stop your agents.
 
@@ -123,6 +123,7 @@ Add that `PATH` line to `~/.zshrc` to keep it in new terminals. Source installs 
 | <kbd>→</kbd> | a folder's context: <kbd>↓</kbd> ask den to change it · <kbd>↑</kbd> edit by hand |
 | <kbd>z</kbd> | wide view with a preview |
 | <kbd>f</kbd> <kbd>F</kbd> · <kbd>m</kbd> <kbd>r</kbd> <kbd>a</kbd> <kbd>d</kbd> | folder, subfolder · move, rename, archive, delete |
+| <kbd>M</kbd> | which CLI makes den's own model calls |
 | <kbd>/</kbd> · <kbd>?</kbd> · <kbd>q</kbd> | filter · all keys · quit |
 
 Marks: `●` working · `!` needs you · `✓` your turn · `◆` has context · `✦` den has a suggestion
@@ -179,7 +180,7 @@ After a completed reply, Den applies your active saved instructions. Sol reviews
 | **FOLDER** | new folder for work that will go on, with drafted context; moves the session in |
 | **SKILL** | new folder for a way of working you'll want again |
 | **LINK** | uses a markdown file an agent wrote (like a plan) as a folder's context |
-| **RULE** | adds a rule you stated to your global `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` |
+| **RULE** | adds a rule you stated to your global `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` and `~/.copilot/copilot-instructions.md` |
 
 Up to five cards are visible. Additional proposals stay in a saved backlog and receive a fresh Sol review before appearing. A session can produce several cards, including cards for other folders. Children inherit repo and parent context, so proposals add what is missing at the right scope.
 
@@ -215,8 +216,8 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 
 - **DEN's model never edits your code or executes workflows.** Background reviews have no tools; chat can read repository files when asked. DEN itself uses Git and tmux to manage agent sessions and worktrees.
 - **Writes only with a yes:** a context file you linked, your global `CLAUDE.md`/`AGENTS.md` (RULE cards), your terminal's Option key (first run). Everything else lives in `~/.den`.
-- **Leaves your Claude and Codex settings alone.** Context and a status hook go on each agent's command line.
-- **Sends session excerpts and relevant context** to the model behind `codex` (OpenAI) or `claude` (Anthropic), for titles, reviews and chat. The local classifier runs offline; it does not replace those model calls. Local logs retain prompts, responses and feedback, which may include code.
+- **Leaves your Claude, Codex and Copilot settings alone.** Context and a status hook go on each agent's command line. Copilot gets its context from an instructions file in `~/.den/copilot-context`, and has no way to add a hook from the command line, so its panes show no status.
+- **Sends session excerpts and relevant context** to the model behind `codex` (OpenAI), `claude` (Anthropic) or `copilot` (GitHub), for titles, reviews and chat. The local classifier runs offline; it does not replace those model calls. Local logs retain prompts, responses and feedback, which may include code.
 - **Cost:** about 0.2¢ per progress review, about 4¢ per card review, chat answer or context change. The whole demo above came to under 30¢.
 
 </details>
@@ -252,7 +253,7 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 <br>
 
 - **⌥ keys type characters** like `¬`. **Terminal.app:** Settings → Profiles → Keyboard → *Use Option as Meta key*. **iTerm2:** Settings → Profiles → Keys → *Left Option key: Esc+*. **Ghostty:** `macos-option-as-alt = true`, then reload with <kbd>⌘</kbd><kbd>⇧</kbd><kbd>,</kbd>.
-- **Sessions don't get named or chat cannot answer:** check the selected agent's login, model access and network connection. Codex takes precedence when both CLIs are on `PATH`. After 3 consecutive failed calls DEN pauses its model until the panel restarts; queued cards remain saved.
+- **Sessions don't get named or chat cannot answer:** check the selected agent's login, model access and network connection. <kbd>M</kbd> shows which CLI makes the calls and switches it. After 3 consecutive failed calls DEN pauses its model until the panel restarts; queued cards remain saved.
 - **Local gate unavailable:** missing runtime files normally use direct model reviews; damaged installed artifacts show an error and also allow review. If you installed the runtime, check that `DEN_HOME` matches the installer and use [the gate setup guide](docs/classifier-gate.md#experimental-installation). This message does not mean your sessions or context were lost.
 - **An upgrade seems to do nothing:** check `command -v den` for a source/Homebrew conflict, then restart the old panel after your agents finish.
 - **Uninstall:** `brew uninstall den`, or remove the source-installed `~/.local/bin/den`. Your notes and saved cards remain in `~/.den` (or `DEN_HOME`). Delete that directory only if you also want to permanently remove DEN's context, feedback and classifier runtime. Agent transcript storage is separate.

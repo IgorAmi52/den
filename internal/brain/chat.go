@@ -340,7 +340,7 @@ func ResolveChatActions(answer ChatAnswer, input ChatInput, workingDirectory str
 			switch {
 			case rule == "":
 			case proposed.Target == "laptop":
-				actions = append(actions, ChatAction{Kind: "addRule", Target: "laptop", Rule: rule, Description: "add to your CLAUDE.md and AGENTS.md: " + rule})
+				actions = append(actions, ChatAction{Kind: "addRule", Target: "laptop", Rule: rule, Description: "add to your global agent rules: " + rule})
 			case proposed.Target == "folder" && folder != nil:
 				actions = append(actions, ChatAction{Kind: "addRule", Target: "folder", FolderId: folder.Id, Rule: rule, Description: "add to " + folder.Name + "'s notes: " + rule})
 			default:

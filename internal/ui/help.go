@@ -36,7 +36,7 @@ func (currentModel model) helpGroups() []helpGroup {
 		{title: "FOLDERS AND DEN", bindings: []key.Binding{
 			keys.newFolder, relabeled(keys.newSubfolder, "subfolder of the selected folder"), relabeled(keys.editContext, "edit context"),
 			relabeled(keys.wide, "wide, with a preview"), keys.scrollPreview,
-			relabeled(keys.chat, "ask den"), keys.quit,
+			relabeled(keys.chat, "ask den"), relabeled(keys.pickHelper, "which CLI makes den's model calls"), keys.quit,
 		}},
 		{title: "MARKS", bindings: []key.Binding{
 			optionKey("1●", "agent 1 is working"), optionKey("1!", "agent 1 waits for you"),

@@ -120,7 +120,7 @@ func checkDependencies() error {
 		return errors.New("tmux not found. Install it with: brew install tmux")
 	}
 	if len(agent.Installed()) == 0 {
-		return errors.New("no agent CLI found. Install one with: brew install --cask claude-code (or: brew install --cask codex)")
+		return errors.New("no agent CLI found. Install one with: brew install --cask claude-code (or: brew install --cask codex, or: npm install -g @github/copilot)")
 	}
 	return nil
 }
