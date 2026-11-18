@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -113,14 +114,20 @@ func hookEvent(extraArguments []string) []byte {
 }
 
 func checkDependencies() error {
+	gitInstall, tmuxInstall := "xcode-select --install (or: brew install git)", "brew install tmux"
+	agentInstall := "brew install --cask claude-code (or: brew install --cask codex, or: npm install -g @github/copilot)"
+	if runtime.GOOS != "darwin" {
+		gitInstall, tmuxInstall = "sudo apt install git", "sudo apt install tmux"
+		agentInstall = "npm install -g @github/copilot (or: npm install -g @anthropic-ai/claude-code, or: npm install -g @openai/codex)"
+	}
 	if _, err := exec.LookPath("git"); err != nil {
-		return errors.New("git not found. Install it with: xcode-select --install (or: brew install git)")
+		return errors.New("git not found. Install it with: " + gitInstall)
 	}
 	if _, err := exec.LookPath("tmux"); err != nil {
-		return errors.New("tmux not found. Install it with: brew install tmux")
+		return errors.New("tmux not found. Install it with: " + tmuxInstall)
 	}
 	if len(agent.Installed()) == 0 {
-		return errors.New("no agent CLI found. Install one with: brew install --cask claude-code (or: brew install --cask codex, or: npm install -g @github/copilot)")
+		return errors.New("no agent CLI found. Install one with: " + agentInstall)
 	}
 	return nil
 }

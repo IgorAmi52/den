@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -43,7 +44,7 @@ func (currentModel *model) editLaptopFile(tool string) tea.Cmd {
 }
 
 // editFile runs $VISUAL or $EDITOR in a tmux popup and waits for it to exit. Without either, the file opens
-// in the default text editor instead, and den waits until that editor quits. starter is written first when the file doesn't exist,
+// in the default text editor on macOS, and den waits until that editor quits; elsewhere nano or vi runs in the popup. starter is written first when the file doesn't exist,
 // and the file is removed again if it is left unchanged.
 func (currentModel *model) editFile(title string, filePath string, starter string, onSaved func(currentModel *model, text string)) tea.Cmd {
 	isStarter := false
@@ -56,6 +57,12 @@ func (currentModel *model) editFile(title string, filePath string, starter strin
 	editor := os.Getenv("VISUAL")
 	if editor == "" {
 		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" && runtime.GOOS != "darwin" {
+		editor = "vi"
+		if _, err := exec.LookPath("nano"); err == nil {
+			editor = "nano"
+		}
 	}
 	workingDirectory := currentModel.workingDirectory
 	before := store.ReadText(filePath)

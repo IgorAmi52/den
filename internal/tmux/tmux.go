@@ -244,7 +244,7 @@ func DisplayPopup(title string, workingDirectory string, command []string) error
 
 // BindDenKeys binds Option keys, with no prefix, in den windows: ⌥1–⌥4 select that agent, the panel being the top-left
 // pane and the agents following it in pane order; ⌥0 selects the panel, or from the panel goes back to the last agent;
-// ⌥Tab moves to the next pane, wrapping from the last agent back to the panel; ⌥N asks the panel for a new agent;
+// ⌥Tab moves to the next pane, wrapping from the last agent back to the panel, and so does ⌥`, for Windows, which keeps Alt+Tab; ⌥N asks the panel for a new agent;
 // ⌥= runs resetCommand, which puts the panes back at their default sizes.
 // Outside den windows each key reaches the program as usual.
 // They replace Ctrl+Space, which an earlier den bound and macOS keeps for switching keyboard layouts.
@@ -254,6 +254,7 @@ func BindDenKeys(windowMarkerOption string, panelMarkerOption string, resetComma
 		"M-0":   "if-shell -F '#{" + panelMarkerOption + "}' 'select-pane -l' \"select-pane -t '{top-left}'\"",
 		"M-n":   "send-keys -t '{top-left}' M-n",
 		"M-Tab": "select-pane -t ':.+'",
+		"M-`":   "select-pane -t ':.+'",
 		"M-=":   resetCommand,
 	}
 	for agentNumber := 1; agentNumber <= 4; agentNumber++ {

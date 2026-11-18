@@ -4,7 +4,7 @@
 
 ### 🛖 Run *Claude Code*, *Codex* & *Copilot* side by side, ask where you left off, start every session with the right context 🛖
 
-[![platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#-quickstart)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20WSL-lightgrey)](#-quickstart)
 [![install](https://img.shields.io/badge/install-brew-orange)](#-quickstart)
 [![agents](https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20Copilot-8A63D2)](#-quickstart)
 [![status](https://img.shields.io/badge/status-early-yellow)](#-features)
@@ -76,10 +76,11 @@ cd your-repo
 den
 ```
 
-- **Needs:** macOS, Git, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code) [Codex](https://github.com/openai/codex) or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) on your `PATH`. Homebrew installs tmux and the Go build dependency. If Git is missing, run `xcode-select --install`.
+- **Needs:** macOS, Git, and [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex) or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) on your `PATH`. Homebrew installs tmux and the Go build dependency. If Git is missing, run `xcode-select --install`.
 - **Login:** open your installed agent CLI once and finish its login before starting DEN. DEN makes its own model calls through Codex, then Claude, then Copilot, whichever is installed first; press <kbd>M</kbd> to pick another, which DEN remembers for every repo. An installed but logged-out CLI does not automatically fall back to the next one. Codex uses `gpt-6-luna` and `gpt-6.1-sol`, so your Codex account must have access to them. Claude uses Haiku and Sonnet, and Copilot uses `claude-haiku-4.5` and `claude-sonnet-5.5`.
 - **First run:** press <kbd>⌥</kbd><kbd>L</kbd> so den can check your Option key (it fixes Terminal.app and Ghostty for you) · tick which of your 10 newest past sessions to bring in
 - **Coming back:** run `den` in the repo again. Closing the terminal doesn't stop your agents.
+- **Windows:** den runs inside WSL, since tmux doesn't run on Windows itself. In PowerShell, run `wsl --install` and restart. Then, inside Ubuntu, run `curl -fsSL https://raw.githubusercontent.com/IgorAmi52/den/main/scripts/install-wsl.sh | bash`, which installs Git, tmux, Go, Node, the Copilot CLI and den. Your Windows drives are under `/mnt/c`, but repos cloned into your WSL home are much faster. Use <kbd>Alt</kbd><kbd>`</kbd> for the next pane, since Windows keeps <kbd>Alt</kbd><kbd>Tab</kbd>.
 
 <details>
 <summary><b>Build from source, install the classifier, or upgrade</b></summary>
@@ -108,7 +109,7 @@ Add that `PATH` line to `~/.zshrc` to keep it in new terminals. Source installs 
 
 | Anywhere in den's window | |
 | --- | --- |
-| <kbd>⌥</kbd><kbd>⇥</kbd> | **next pane** · den → agent 1 → … → den |
+| <kbd>⌥</kbd><kbd>⇥</kbd> or <kbd>⌥</kbd><kbd>`</kbd> | **next pane** · den → agent 1 → … → den |
 | <kbd>⌥</kbd><kbd>1</kbd>–<kbd>4</kbd> | jump to an agent |
 | <kbd>⌥</kbd><kbd>0</kbd> | jump to den, and back |
 | <kbd>⌥</kbd><kbd>N</kbd> | new agent |
@@ -215,7 +216,7 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 <br>
 
 - **DEN's model never edits your code or executes workflows.** Background reviews have no tools; chat can read repository files when asked. DEN itself uses Git and tmux to manage agent sessions and worktrees.
-- **Writes only with a yes:** a context file you linked, your global `CLAUDE.md`/`AGENTS.md` (RULE cards), your terminal's Option key (first run). Everything else lives in `~/.den`.
+- **Writes only with a yes:** a context file you linked, your global `CLAUDE.md`/`AGENTS.md`/`copilot-instructions.md` (RULE cards), your terminal's Option key (first run). Everything else lives in `~/.den`.
 - **Leaves your Claude, Codex and Copilot settings alone.** Context and a status hook go on each agent's command line. Copilot gets its context from an instructions file in `~/.den/copilot-context`. It has no way to add a hook from the command line, so den reads the status of its panes from its transcript.
 - **Sends session excerpts and relevant context** to the model behind `codex` (OpenAI), `claude` (Anthropic) or `copilot` (GitHub), for titles, reviews and chat. The local classifier runs offline; it does not replace those model calls. Local logs retain prompts, responses and feedback, which may include code.
 - **Cost:** about 0.2¢ per progress review, about 4¢ per card review, chat answer or context change. The whole demo above came to under 30¢.
@@ -226,7 +227,7 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 <summary><b>💡 Good to know</b></summary>
 <br>
 
-- **Status:** early · macOS only.
+- **Status:** early · macOS, or Windows through WSL.
 - **Agents share one checkout:** they run where you started den. To give agents their own checkout, run den from a git worktree. All of a repo's worktrees share one tree.
 - **Your tmux setup is untouched:** den runs in its own tmux session, and its <kbd>⌥</kbd> keys only act in den's window.
 - **Old sessions:** den drops a session from the Archive 25 days after archiving it, before Claude Code deletes transcripts at 30 days. What it found stays in its folder.
