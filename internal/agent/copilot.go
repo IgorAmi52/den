@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +17,10 @@ var copilotEditingTools = map[string]bool{"edit": true, "create": true}
 // copilotInstructionsVariable lists directories Copilot loads extra instructions from. Copilot ignores an AGENTS.md there,
 // so den's context goes in a .github/instructions file that applies to every file.
 const copilotInstructionsVariable = "COPILOT_CUSTOM_INSTRUCTIONS_DIRS"
+
+// copilotStatusTail is how much of a transcript's end den reads every second for an open agent's state.
+// The state only depends on the latest events; a line cut off at the start of the tail is skipped.
+const copilotStatusTail = 256 << 10
 
 type Copilot struct{}
 
@@ -32,11 +38,12 @@ type copilotEvent struct {
 		} `json:"context"`
 		Content string `json:"content"`
 		// Source is set on prompts Copilot injects, like a skill's, and IsAutopilotContinuation on its own follow-ups.
-		Source                  string          `json:"source"`
-		IsAutopilotContinuation bool            `json:"isAutopilotContinuation"`
-		Title                   string          `json:"title"`
-		ToolName                string          `json:"toolName"`
-		Arguments               json.RawMessage `json:"arguments"`
+		Source                  string            `json:"source"`
+		IsAutopilotContinuation bool              `json:"isAutopilotContinuation"`
+		Title                   string            `json:"title"`
+		ToolRequests            []json.RawMessage `json:"toolRequests"`
+		ToolName                string            `json:"toolName"`
+		Arguments               json.RawMessage   `json:"arguments"`
 	} `json:"data"`
 }
 
@@ -54,7 +61,7 @@ func (Copilot) ResumeCommand(sessionId string, launch Launch) []string {
 }
 
 // copilotCommand passes the context through an instructions file of the session's, since Copilot has no switch for it.
-// Copilot has no switch for hooks either, so the pane gets no status and den goes by the transcript, as for agents started elsewhere.
+// Copilot has no switch for hooks either, so den reads the pane's status from the transcript with TranscriptStatus.
 func copilotCommand(sessionId string, launch Launch, sessionArguments ...string) []string {
 	command := append([]string{"copilot"}, sessionArguments...)
 	if launch.Context == "" {
@@ -144,6 +151,52 @@ func (Copilot) PastSessions(directories []string) ([]Digest, error) {
 		}
 	}
 	return digests, nil
+}
+
+// TranscriptStatus reads the agent's state from its latest events: working from a prompt or tool call on,
+// waiting on a permission it asked for, and once a reply comes with no more tool calls, waiting on its question or done.
+// Copilot may leave permission and abort events out of the file, so the state can stay running through them.
+func (Copilot) TranscriptStatus(sessionId string) (string, string, bool) {
+	transcriptPath, found, err := Copilot{}.TranscriptPath(sessionId)
+	if err != nil || !found {
+		return "", "", false
+	}
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return "", "", false
+	}
+	defer file.Close()
+	information, err := file.Stat()
+	if err != nil {
+		return "", "", false
+	}
+	if _, err := file.Seek(max(information.Size()-copilotStatusTail, 0), io.SeekStart); err != nil {
+		return "", "", false
+	}
+	tail, err := io.ReadAll(file)
+	if err != nil {
+		return "", "", false
+	}
+	state, reason := "", ""
+	for _, line := range bytes.Split(tail, []byte("\n")) {
+		var event copilotEvent
+		if json.Unmarshal(line, &event) != nil || event.AgentId != "" {
+			continue
+		}
+		switch event.Type {
+		case "user.message", "assistant.turn_start", "tool.execution_start", "permission.completed":
+			state, reason = "running", ""
+		case "permission.requested":
+			state, reason = StateWaiting, "permission"
+		case "assistant.message":
+			if len(event.Data.ToolRequests) == 0 && strings.TrimSpace(event.Data.Content) != "" {
+				state, reason = ReplyState(event.Data.Content)
+			}
+		case "abort":
+			state, reason = StateDone, "stopped"
+		}
+	}
+	return state, reason, state != ""
 }
 
 func (Copilot) LaptopFilePath() (string, error) {

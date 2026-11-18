@@ -200,6 +200,8 @@ type model struct {
 	contextTokens map[string]int
 	laptopFiles   []laptopFile
 	lastObserved  time.Time
+	// transcriptStatuses are the last states read from transcripts, by pane id, for agents with no status hooks.
+	transcriptStatuses map[string]string
 	// retitles animates the sessions den just renamed, by session id.
 	retitles  map[string]retitleAnimation
 	animating bool
@@ -299,6 +301,7 @@ func Run() error {
 		contextPane:      newContextPaneState(),
 	}
 	initialModel.shownSuggestionCount = -1
+	initialModel.transcriptStatuses = map[string]string{}
 	if err := initialModel.refreshAgents(); err != nil {
 		return err
 	}
@@ -348,6 +351,7 @@ func (currentModel model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		currentModel.keepingSelection(func() {
 			currentModel.reportError(currentModel.refreshAgents())
 			currentModel.reportError(currentModel.trackNewSessions())
+			currentModel.reportError(currentModel.followTranscriptStatuses())
 		})
 		currentModel.refreshContextTokens()
 		currentModel.showSuggestionCount()
@@ -600,6 +604,31 @@ func (currentModel *model) refreshAgents() error {
 			launchedAt:       time.UnixMilli(launchedAtMilliseconds),
 			workingDirectory: workingDirectory,
 		})
+	}
+	return nil
+}
+
+// followTranscriptStatuses sets the status of agents that have no status hooks from their transcripts. It acts only when
+// the transcript's state changes, like a hook would, so a question the user has seen stays done until the agent goes on.
+func (currentModel *model) followTranscriptStatuses() error {
+	for _, open := range currentModel.openAgents {
+		adapter, known := agent.ByName(open.tool)
+		if !known || open.sessionId == "" {
+			continue
+		}
+		reader, readsTranscript := adapter.(agent.TranscriptStatusReader)
+		if !readsTranscript {
+			continue
+		}
+		state, reason, found := reader.TranscriptStatus(open.sessionId)
+		status := state + "\n" + reason
+		if !found || currentModel.transcriptStatuses[open.paneId] == status {
+			continue
+		}
+		currentModel.transcriptStatuses[open.paneId] = status
+		if err := tmux.SetPaneStatus(open.paneId, state, reason); err != nil {
+			return err
+		}
 	}
 	return nil
 }

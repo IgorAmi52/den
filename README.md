@@ -216,7 +216,7 @@ Each pane's border shows its key, status, folder and title. den names sessions w
 
 - **DEN's model never edits your code or executes workflows.** Background reviews have no tools; chat can read repository files when asked. DEN itself uses Git and tmux to manage agent sessions and worktrees.
 - **Writes only with a yes:** a context file you linked, your global `CLAUDE.md`/`AGENTS.md` (RULE cards), your terminal's Option key (first run). Everything else lives in `~/.den`.
-- **Leaves your Claude, Codex and Copilot settings alone.** Context and a status hook go on each agent's command line. Copilot gets its context from an instructions file in `~/.den/copilot-context`, and has no way to add a hook from the command line, so its panes show no status.
+- **Leaves your Claude, Codex and Copilot settings alone.** Context and a status hook go on each agent's command line. Copilot gets its context from an instructions file in `~/.den/copilot-context`. It has no way to add a hook from the command line, so den reads the status of its panes from its transcript.
 - **Sends session excerpts and relevant context** to the model behind `codex` (OpenAI), `claude` (Anthropic) or `copilot` (GitHub), for titles, reviews and chat. The local classifier runs offline; it does not replace those model calls. Local logs retain prompts, responses and feedback, which may include code.
 - **Cost:** about 0.2¢ per progress review, about 4¢ per card review, chat answer or context change. The whole demo above came to under 30¢.
 

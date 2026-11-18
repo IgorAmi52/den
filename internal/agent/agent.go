@@ -33,6 +33,12 @@ type Adapter interface {
 	TranscriptPath(sessionId string) (transcriptPath string, found bool, err error)
 }
 
+// TranscriptStatusReader is an adapter for a tool den can't add status hooks to, which reads an open session's state
+// from the end of its transcript instead. found is false while the transcript says nothing about it yet.
+type TranscriptStatusReader interface {
+	TranscriptStatus(sessionId string) (state string, reason string, found bool)
+}
+
 // Turn is one prompt the user typed, with what the agent said just before, since "nono, not like that"
 // means nothing without it.
 type Turn struct {
@@ -140,6 +146,11 @@ func StopState(event []byte) (state string, reason string) {
 	if reply == "" {
 		reply = parsed.CodexLastAssistantMessage
 	}
+	return ReplyState(reply)
+}
+
+// ReplyState says what an agent's finished reply leaves it at: waiting on the question it ends on, or done with what it did.
+func ReplyState(reply string) (state string, reason string) {
 	if question := closingQuestion(reply); question != "" {
 		return StateWaiting, startOf(QuestionReasonPrefix+question, maximumReasonLength)
 	}
